@@ -142,7 +142,10 @@ class InspectionWorkflow:
         self.generation += 1
         self.queue.clear()
         self.pending = None
-        self.confirmed_angle = None
+        # A failed probe stroke doesn't move the rover or erase the detector arc.
+        # Driving, recalibration, or a stop request still invalidates the target.
+        if not (error and self.phase == 'PROBING'):
+            self.confirmed_angle = None
         self.phase, self.message = ('ERROR' if error else 'STOPPED'), message
         if active:
             self.cancel_io()

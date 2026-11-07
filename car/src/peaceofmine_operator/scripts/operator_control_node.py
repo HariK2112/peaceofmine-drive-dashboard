@@ -284,7 +284,9 @@ class OperatorControl(Node):
             self._inspection.stop(reason, error=True)
             return
         if self._inspection.phase == 'PROBING' and (now-self._probe_state_at >= .5 or not self._probe_state.get('connected')):
-            self._inspection.stop('Probe disconnected during inspection', error=True)
+            reason = ('Probe telemetry timed out' if now-self._probe_state_at >= .5
+                      else self._probe_state.get('reason') or 'Probe driver disconnected')
+            self._inspection.stop(reason, error=True)
             return
         detector = self._inspection_detector
         if self._inspection.phase == 'CONFIRMING' and (now-self._inspection_detector_at >= .5 or not detector.get('fresh')):

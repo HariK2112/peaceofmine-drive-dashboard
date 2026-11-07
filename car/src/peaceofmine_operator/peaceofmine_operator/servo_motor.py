@@ -9,6 +9,10 @@ def limits(minimum, center, maximum, low=0, high=4095):
     return dict(minimum=minimum, center=center, maximum=maximum)
 
 
+class MotionRejected(ValueError):
+    """The motor reported valid telemetry but cannot execute this move."""
+
+
 class ServoMotor:
     def __init__(self, bus, ident, calibration=None, speed=20):
         if type(ident) is not int or not 0 <= ident <= 252:
@@ -167,9 +171,15 @@ class ServoMotor:
         if self._home is not None and not self._check_home():
             return
         low, high = self.jog_limits or (self.calibration['minimum'], self.calibration['maximum'])
-        if not low <= self.position <= high:
+        # A released probe can settle just past its saved zero. For a position
+        # move, start at the nearest legal goal and keep the usual lead limit.
+        initial_goal = max(low, min(high, self.position))
+        outside_by = abs(initial_goal - self.position)
+        if (not self.cw <= self.position <= self.ccw or outside_by > self.max_step
+                or (outside_by and self.sweep_profile is not None)):
             self.stop()
-            raise ValueError('Present position outside calibration; reposition with torque off')
+            raise MotionRejected(f'Servo {self.ident}: encoder at {self.position} ticks, '
+                                 f'outside movement range {low} to {high}. Check position and calibration.')
         if self.sweep_profile is not None:
             if not self.bus.run_sweep(self.ident, *self.sweep_profile, allowed):
                 self.stop()
@@ -188,15 +198,15 @@ class ServoMotor:
         if not self.torque:
             if self.bus.read(self.ident, 34) == 0:
                 self.stop()
-                raise ValueError('Servo torque limit is 0%; resolve servo shutdown/configuration before moving')
-            for address, value, size in ((30, self.position, 2), (32, self.speed, 2), (24, 1, 1)):
+                raise MotionRejected(f'Servo {self.ident}: torque limit is 0%. Check servo status before moving.')
+            for address, value, size in ((30, initial_goal, 2), (32, self.speed, 2), (24, 1, 1)):
                 if not allowed():
                     self.stop()
                     return
                 self.bus.write(self.ident, address, value, size)
             self.torque = True
             self._applied_speed = self.speed
-            self.goal = self.position
+            self.goal = initial_goal
         if self._applied_speed != self.speed:
             if not allowed():
                 self.stop()

@@ -243,6 +243,11 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(self.flow.phase,'ERROR')
         self.assertEqual(self.flow.points,[])
         self.assertEqual(self.flow.message,'Contact input lost')
+        self.assertEqual(self.flow.confirmed_angle,45.)
+        self.flow.probe(-10.,10.,80.)  # Explicit retry uses the confirmed bearing.
+        self.assertEqual(self.flow.completed,0)
+        self.flow.stop('Vehicle moved')
+        self.assertIsNone(self.flow.confirmed_angle)
 
     def test_invalid_contact_depth_fails(self):
         self.flow.confirmed_angle=45.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick()

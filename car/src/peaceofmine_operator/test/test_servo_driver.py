@@ -1,5 +1,6 @@
 """Driver safety invariants independent of controller or browser behavior."""
 import unittest
+from unittest.mock import patch
 from peaceofmine_interfaces.msg import ServoCommand
 from peaceofmine_operator.servo_runtime import ServoRuntime
 from peaceofmine_operator.simulated_servo_bus import SimulatedServoBus
@@ -75,6 +76,29 @@ class DriverTest(unittest.TestCase):
         self.now+=.3
         self.runtime.enforce()
         self.assertIsNone(self.runtime.active)
+
+    def test_probe_can_move_inward_from_just_beyond_home(self):
+        bus = self.runtime.bus
+        bus.positions[2] = -198  # Released two ticks past the calibrated top.
+        self.runtime.submit(self.command(servo_id=2, target=-1000, minimum=-1500, maximum=-200))
+        with patch.object(bus, 'write', wraps=bus.write) as writes:
+            self.runtime.tick()
+        goals = [call.args[2] for call in writes.call_args_list if call.args[:2] == (2, 30)]
+        self.assertEqual(goals[0], -200)
+        self.assertTrue(all(-312 <= goal <= -200 for goal in goals))
+        self.assertEqual(self.runtime.outcomes[2][1], 'running')
+        self.assertTrue(bus.values[2][24])
+
+    def test_unreachable_range_aborts_only_that_operation(self):
+        self.runtime.submit(self.command(servo_id=2, target=-1000, minimum=-1500, maximum=-500))
+        self.runtime.tick()
+        operation, outcome, reason = self.runtime.outcomes[2]
+        self.assertEqual((operation, outcome), ('one', 'aborted'))
+        self.assertIn('encoder at -200 ticks', reason)
+        self.assertFalse(self.runtime.bus.values[2][24])
+        self.runtime.submit(self.command(operation_id='next'))
+        self.runtime.tick()
+        self.assertTrue(self.runtime.bus.values[1][24])
 
     def test_invalid_bounds_rejected_before_torque(self):
         for changes in (dict(target=5000),dict(minimum=-1),dict(maximum=5000),dict(load_stop_percent=float('nan'))):

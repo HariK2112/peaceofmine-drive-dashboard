@@ -981,7 +981,7 @@ function inspectionBlock(action) {
   if (action === 'confirm') return state.detector.fresh === true ? '' : 'Wait for fresh detector readings before confirming.';
   const probeBlocked = probeActionBlock();
   if (probeBlocked) return probeBlocked;
-  if (!['CONFIRMED', 'COMPLETE'].includes(state.inspection?.phase) || !Number.isFinite(state.inspection?.confirmed_angle_deg)) return 'Confirm the location first.';
+  if (!Number.isFinite(state.inspection?.confirmed_angle_deg)) return 'Confirm the location first.';
   if (state.inspection?.probe_reachable === false) return 'Confirmed target is outside probe reach. Reposition the rover and confirm again.';
   const contact = state.probe.adc_contact_state;
   if (!contact?.enabled || !contact.fresh) return 'Save a contact limit and wait for a fresh reading.';

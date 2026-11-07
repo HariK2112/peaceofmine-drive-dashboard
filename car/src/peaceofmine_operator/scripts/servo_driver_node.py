@@ -167,7 +167,9 @@ class ServoDriver(Node):
                 if active and active.operation_id == message.operation_id and active.owner == message.owner:
                     self.runtime.stop('aborted', str(exc))
                 elif not active or active.servo_id != message.servo_id:
-                    self.runtime.outcomes[message.servo_id] = message.operation_id, 'rejected', str(exc)
+                    # Renewals already in flight must not replace the original fault.
+                    if self.runtime.outcomes[message.servo_id][0] != message.operation_id:
+                        self.runtime.outcomes[message.servo_id] = message.operation_id, 'rejected', str(exc)
         except Exception as exc:
             self.disconnect(exc)
 

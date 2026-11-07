@@ -1,7 +1,7 @@
 """Single-owner motor execution. ROS callbacks supply whole commands, never registers."""
 import math
 import time
-from .servo_motor import ServoMotor
+from .servo_motor import MotionRejected, ServoMotor
 
 
 class ServoRuntime:
@@ -89,7 +89,10 @@ class ServoRuntime:
                 if command.load_stop_percent and abs(sample['load_percent']) >= command.load_stop_percent:
                     self.stop('load_stop', 'Protective load threshold reached')
                 else:
-                    motor.step(self.motion_allowed)
+                    try:
+                        motor.step(self.motion_allowed)
+                    except MotionRejected as exc:
+                        self.stop('aborted', str(exc))
                     self.enforce()
 
     def close(self):

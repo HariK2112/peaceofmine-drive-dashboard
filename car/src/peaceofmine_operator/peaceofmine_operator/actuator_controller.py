@@ -122,8 +122,9 @@ class ActuatorController(Node):
 
     def driver_cb(self, msg):
         was_connected=self.connected()
-        if self.driver and (self.driver.session != msg.session or not msg.connected):
-            self.stop('Driver disconnected or restarted', success=False)
+        if self.driver and self.driver.connected and (self.driver.session != msg.session or not msg.connected):
+            reason = 'Servo driver session changed' if msg.connected else msg.error or 'Servo driver disconnected'
+            self.stop(reason, success=False)
             self.on_disconnect()
         self.driver, self.driver_at = msg, time.monotonic()
         self.telemetry = next((s for s in msg.servos if s.servo_id == self.ident), None)
