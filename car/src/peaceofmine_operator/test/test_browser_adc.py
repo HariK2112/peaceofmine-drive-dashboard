@@ -82,29 +82,36 @@ assert(sent.at(-1).settings.config.rate===64, 'settings sent');
 assert(sent.at(-1).settings.routes[6]==='detector' && sent.at(-1).settings.routes[4]==='probe', 'A2 detector and A0 probe routing');
 operatorADCResult({ok:true});
 document.querySelectorAll('[data-dock-pane]').forEach(pane => { pane.hidden = false; }); // charts live in dock tabs
-drawPressureHistory(); drawDetectorDiagnostics(1000);
-assert(probePressureChart.data.datasets.at(-1).label.includes('A0'), 'A0 probe trace');
-assert(probePressureChart.data.datasets.at(-1).data[0].y===.2 && probePressureChart.data.datasets.at(-1).label.includes('(V)'), 'probe overlay uses volts regardless of legacy scaling');
-const routedAxis=probePressureChart.scales.ads1115;
-assert(routedAxis.min>.15 && routedAxis.max<.25 && routedAxis.max-routedAxis.min>.03,'routed voltage axis fits its measured signal with a noise floor');
+state.probe.history_time_s=100;
+state.probe.contact_samples=[{x:-1.5,depth_mm:2},{x:-.1,depth_mm:11},{x:-.05,depth_mm:null},{x:0,depth_mm:13}];
+drawManualProbeHistory(); drawPressureHistory(); drawDetectorDiagnostics(1000);
+const [voltageTrace, savedLimit, measuredDepth] = manualProbeChart.data.datasets;
+assert(voltageTrace.label.includes('A0') && voltageTrace.data[0].y===.2,'Manual probe plots selected filtered physical volts');
+assert(manualProbeChart.options.scales.volts.title.text.includes('(V)') && manualProbeChart.options.scales.depth.title.text.includes('(mm)') && manualProbeChart.data.datasets.length===3,'Manual probe has one voltage axis and one depth axis');
+assert(probePressureChart.data.datasets.length===2,'optional motor chart contains only load and current');
+assert(savedLimit.data[0].y===1 && savedLimit.label.includes('off'),'saved disabled threshold remains identified and visible');
+assert(measuredDepth.data.some((p,i,a)=>i && i+1<a.length && p.y===null) && measuredDepth.data.at(-1).y===13,'measured encoder history includes gaps and never uses requested depth');
+assert(Math.abs(measuredDepth.data.find(p=>p.y===11).x-voltageTrace.data[0].x)<.015,'ADC and encoder points with the same car Unix time align on the chart');
+const routedAxis=manualProbeChart.scales.volts;
+assert(routedAxis.min<=.2 && routedAxis.max>=1,'physical voltage axis includes the saved threshold');
 adcResponse={...adcResponse,revision:2,applied:2,routes:['none','none','none','none','both','none','none','none'],sequence:3,
  samples:[{seq:3,time:100,mux:4,raw:300,volts:.3,scaled:7,filtered_scaled:7,filtered_volts:.3,clipped:true}]};
-await window.nextPoll(); drawPressureHistory(); drawDetectorDiagnostics(2000);
-assert(probePressureChart.data.datasets.length===3, 'old routing removed');
-assert(probePressureChart.data.datasets.at(-1).data.length===1, 'revision clears old samples');
-assert(probePressureChart.data.datasets.at(-1).data[0].y===.3, 'new voltage samples arrive');
+await window.nextPoll(); drawManualProbeHistory(); drawDetectorDiagnostics(2000);
+assert(manualProbeChart.data.datasets.length===3, 'old routing removed');
+assert(voltageTrace.data.length===1, 'revision clears old samples');
+assert(voltageTrace.data[0].y===.3, 'new voltage samples arrive');
 assert($('adc-readings').textContent.includes('CLIPPED'), 'clipping shown');
 adcResponse={...adcResponse,probe_trigger:{enabled:true,mux:4,level:6,direction:'above'},
  probe_contact:{enabled:true,fresh:true,detected:true,mux:4,value:7,level:6,direction:'above'},samples:[]};
-await window.nextPoll(); drawPressureHistory();
-assert(probePressureChart.data.datasets.at(-1).label.includes('Contact limit'), 'probe threshold plotted');
-assert(probePressureChart.data.datasets.at(-1).data[0].y===6, 'threshold uses voltage axis with unit scaling');
+await window.nextPoll(); drawManualProbeHistory();
+assert(savedLimit.label==='Saved limit', 'probe threshold plotted');
+assert(savedLimit.data[0].y===6, 'threshold uses voltage axis with unit scaling');
 assert($('probe-adc-contact').textContent.includes('CONTACT'), 'contact indication');
 adcResponse={...adcResponse,probe_contact:{...adcResponse.probe_contact,fresh:false,detected:null}};
 await window.nextPoll();
 assert($('probe-adc-contact').textContent.includes('Waiting for contact') && !$('probe-adc-contact').textContent.includes('CONTACT'),'stale sensor never reports contact');
 adcResponse={...adcResponse,now:100.02,sequence:4,samples:[{seq:4,time:100.02,mux:4,raw:400,volts:.4,scaled:9,filtered_scaled:7.42,filtered_volts:.321,clipped:false}]};
-await window.nextPoll();drawPressureHistory();drawDetectorDiagnostics(2100);
+await window.nextPoll();drawManualProbeHistory();drawDetectorDiagnostics(2100);
 const filteredExpected=.321;
 const filterField=document.querySelector('[data-adc-field="filter_ms"]');
 filterField.value='250';filterField.dispatchEvent(new Event('input'));
@@ -140,7 +147,7 @@ document.querySelector('[data-settings-tab="adc"]').click();
 filterField.value='250';filterField.dispatchEvent(new Event('input'));
 assert($('adc-filter-status').textContent.includes('Unsaved preview: 250 ms'),'draft and applied filters are identified');
 filterField.value='100';filterField.dispatchEvent(new Event('input'));
-assert(probePressureChart.data.datasets.find(d=>d.label.includes('ADS A0')).data.at(-1).y===filteredExpected, 'probe plot uses filtered physical voltage independently of scale');
+assert(voltageTrace.data.at(-1).y===filteredExpected, 'probe plot uses filtered physical voltage independently of scale');
 const adcRow=$('adc-readings').rows[0];
 assert(adcRow.cells[1].textContent==='0.321000' && adcRow.cells.length===4 && !adcRow.textContent.includes('0.400000'), 'default table displays filtered volts and filtered statistics');
 assert([...$('adc-quantity').options].map(o=>o.value).join(',')==='filtered_volts,comparison', 'unfiltered voltage is an explicit comparison');
@@ -150,8 +157,8 @@ assert(boardChart.options.scales.ads1115.title.text==='Voltage (V)','board chart
 $('adc-quantity').value='comparison';boardChart.$frameBucket=null;operatorADCFrame();
 assert(boardChart.data.datasets.some(d=>d.label.includes('unfiltered (V)') && d.data.at(-1)?.y===.4), 'explicit comparison includes the unfiltered voltage');
 adcResponse={...adcResponse,now:101,sequence:5,samples:[{seq:5,time:101,mux:4,raw:500,volts:.5,scaled:4,filtered_scaled:4,filtered_volts:.5,clipped:false}]};
-await window.nextPoll();drawPressureHistory();
-assert(probePressureChart.data.datasets[2].data.at(-1).y===.5,'filtered probe volts recover after sensor gap');
+await window.nextPoll();drawManualProbeHistory();
+assert(voltageTrace.data.at(-1).y===.5,'filtered probe volts recover after sensor gap');
 const updateChart = Chart.prototype.update;
 let failContactChart = true;
 Chart.prototype.update = function(...args) {
@@ -179,6 +186,7 @@ assert(contactChart.data.datasets.at(-1).data.at(-1).y === 6, 'calibration chart
 $('probe-contact-volts').value='0.22';$('probe-contact-volts').dispatchEvent(new Event('input'));
 $('probe-contact-direction').value='below';$('probe-contact-direction').dispatchEvent(new Event('change'));
 await window.nextPoll();
+drawManualProbeHistory(); assert(savedLimit.data[0].y===6,'main chart ignores unsaved Setup contact limit');
 assert($('probe-contact-volts').value==='0.22' && operatorContactBlock().includes('Save'),'contact voltage draft survives telemetry');
 state.probe={ready:true,fault:false,depth_mm:0,max_depth_mm:120,active:false,holding:false,cycle_active:false,adc_contact_state:{enabled:true,fresh:true,detected:false}};
 state.drive.armed=true;state.drive.calibrating=false;state.safety={servo_allowed:true,allowed:true};state.detector.sweep_enabled=false;
@@ -194,9 +202,8 @@ assert(!$('probe-contact-volts').disabled && Number($('probe-contact-volts').val
 const negativeConfig=structuredClone(adcResponse.config);negativeConfig.channels[4].multiplier=-2;negativeConfig.channels[4].offset=1;
 adcResponse={...adcResponse,revision:4,applied:4,config:negativeConfig,probe_trigger:{...adcResponse.probe_trigger,level:.56,direction:'above',hysteresis:.04},samples:[]};
 await window.nextPoll();
-drawPressureHistory();
-const negativeLimit=probePressureChart.data.datasets.at(-1);
-assert(Math.abs(negativeLimit.data[0].y-.22)<1e-9 && negativeLimit.label.includes('(V)'),'negative scale and offset convert legacy threshold to physical volts');
+drawManualProbeHistory();
+assert(Math.abs(savedLimit.data[0].y-.22)<1e-9 && savedLimit.yAxisID==='volts','negative scale and offset convert legacy threshold to physical volts');
 adcResponse={...adcResponse,probe_contact:{enabled:true, fresh:true, detected:false, mux:4, value:.5, filtered_volts:.0912}};
 await window.nextPoll();assert($('probe-adc-contact').textContent.includes('0.0912 V') && $('probe-map-sensor').textContent.includes('0.0912 V'),'live labels prefer explicit filtered voltage');
 adcResponse={...adcResponse,probe_contact:{...adcResponse.probe_contact,filtered_volts:null}};
@@ -265,6 +272,9 @@ assert($('metal-smoothing').value==='175' && filterField.value==='175' && $('met
 assert(operatorDetectorFilterPreview(30)===null,'draft preview disappears after save');
 window.fetch=async()=>{throw Error('offline');}; await window.nextPoll();
 assert($('adc-status').textContent==='DISCONNECTED', 'network failure surfaced');
+state.connected=false;drawManualProbeHistory();
+assert($('manual-probe-status').textContent.includes('offline') && $('manual-probe-status').textContent.includes('Depth unavailable') && measuredDepth.data.length===0,'mission chart identifies offline voltage and missing depth');
+assert(document.querySelector('.probe-diagnostics-panel').contains($('manual-probe-history')) && !$('probe-diagnostics').contains($('manual-probe-history')), 'chart sits directly beneath Manual probe outside motor diagnostics');
 document.body.textContent='ADC BROWSER TESTS PASSED';
 '''
         html = re.sub(r'<script src="/?assets/[^"]+"></script>', '', (DASHBOARD/'index.html').read_text())
@@ -275,6 +285,6 @@ document.body.textContent='ADC BROWSER TESTS PASSED';
         with tempfile.TemporaryDirectory() as tmp:
             page=Path(tmp)/'test.html'; page.write_text(html)
             result=subprocess.run(['chromium','--headless','--no-sandbox','--disable-gpu',
-                                   '--user-data-dir='+tmp+'/profile','--dump-dom',page.as_uri()],
+                                   '--user-data-dir='+tmp+'/profile','--virtual-time-budget=1000','--dump-dom',page.as_uri()],
                                   capture_output=True,text=True,timeout=60)
         self.assertIn('ADC BROWSER TESTS PASSED</body>',re.sub(r'<head>.*?</head>', '', result.stdout, flags=re.S),re.sub(r'<head>.*?</head>', '', result.stdout, flags=re.S)+result.stderr[-2000:])

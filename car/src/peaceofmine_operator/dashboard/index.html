@@ -127,6 +127,10 @@
             <div class="button-row">
               <button id="start-probing" type="button">Probe once</button>
             </div>
+            <div class="section-head probe-trace-heading"><h3>Contact and depth</h3><span class="head-note">Last 30 s</span></div>
+            <div class="chart-box manual-probe-chart"><canvas id="manual-probe-history" role="img" aria-label="Filtered probe contact voltage and saved threshold in volts, with measured encoder depth in millimetres over the last 30 seconds"></canvas></div>
+            <p id="manual-probe-chart-error" class="error-line" role="status" hidden></p>
+            <p id="manual-probe-status" class="note">Waiting for probe readings.</p>
           </section>
           <section class="pane-section probe-load" aria-labelledby="probe-map-heading">
             <div class="section-head"><h2 id="probe-map-heading">Probe scan map <span class="tip" data-tip="Each marker represents a planned probe position. Read its bearing and depth on the fan or in the grid below. A dash means depth is unknown. The dashed line marks the target bearing. Increasing bearings turn left from it."></span></h2><span id="probe-map-depth" class="head-note"></span></div>
@@ -477,18 +481,19 @@
             <input id="arm-position-slider" type="range" min="0" max="4095" step="1" value="0" disabled>
           </section>
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">3</span>Record the limits <span class="tip" data-tip="Move to each limit, let go, then press Record. Recording never moves the arm. “Go” moves there while you hold it."></span></h4></header>
+            <header class="card-head"><h4><span class="step">3</span>Record the limits <span class="tip" data-tip="Left is the higher encoder angle. Release the jog button and record each position. Saving updates the captured positions. Unrecorded rows keep their saved positions. Hold Go to move to the saved position in that row."></span></h4></header>
             <div class="table-wrap">
               <table class="set-table arm-points-table">
-                <thead><tr><th scope="col">Limit</th><th scope="col">Saved</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+                <thead><tr><th scope="col">Limit</th><th scope="col">Captured</th><th scope="col">Saved</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                 <tbody>
-                  <tr><th scope="row">Left</th><td><output id="arm-recorded-minimum">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-minimum">Record</button><button type="button" id="arm-move-minimum" class="quiet" data-tip="Hold to move the arm to this limit.">Go</button></td></tr>
-                  <tr><th scope="row">Centre</th><td><output id="arm-recorded-center">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-center">Record</button><button type="button" id="arm-move-center" class="quiet" data-tip="Hold to move the arm to this point.">Go</button></td></tr>
-                  <tr><th scope="row">Right</th><td><output id="arm-recorded-maximum">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-maximum">Record</button><button type="button" id="arm-move-maximum" class="quiet" data-tip="Hold to move the arm to this limit.">Go</button></td></tr>
+                  <tr><th scope="row">Left</th><td><output id="arm-recorded-maximum">—</output></td><td><output id="arm-saved-maximum">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-maximum" aria-label="Record left limit">Record</button><button type="button" id="arm-move-maximum" class="quiet" aria-label="Go to saved left limit">Go</button></td></tr>
+                  <tr><th scope="row">Centre</th><td><output id="arm-recorded-center">—</output></td><td><output id="arm-saved-center">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-center" aria-label="Record centre">Record</button><button type="button" id="arm-move-center" class="quiet" aria-label="Go to saved centre">Go</button></td></tr>
+                  <tr><th scope="row">Right</th><td><output id="arm-recorded-minimum">—</output></td><td><output id="arm-saved-minimum">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-minimum" aria-label="Record right limit">Record</button><button type="button" id="arm-move-minimum" class="quiet" aria-label="Go to saved right limit">Go</button></td></tr>
                 </tbody>
               </table>
             </div>
-            <div class="card-actions"><button type="button" id="arm-apply-limits" class="primary">Save limits</button></div>
+            <div class="card-actions"><button type="button" id="arm-apply-limits" class="primary" aria-describedby="arm-limits-validation">Save limits</button></div>
+            <p id="arm-limits-validation" class="status-msg" role="status"></p>
           </section>
           <section class="set-card">
             <header class="card-head"><h4>Probe alignment</h4></header>

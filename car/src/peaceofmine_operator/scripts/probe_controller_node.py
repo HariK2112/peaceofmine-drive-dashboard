@@ -30,6 +30,8 @@ class ProbeController(ActuatorController):
         self.started = 0.
         self.fault = False
         self.history = []
+        self.encoder_stamp_ns = None
+        self.encoder_at = None
         self.cycle_timeout = 60.
         self.action_probe_cycle = False
         self.cycle_active = False
@@ -114,6 +116,16 @@ class ProbeController(ActuatorController):
 
     def driver_cb(self, msg):
         super().driver_cb(msg)
+        stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        # Convert the driver's sampling-batch stamp to the history's monotonic clock.
+        # Keep the same stamp when a controller tick reuses the encoder packet.
+        if not stamp_ns:
+            # Legacy motor telemetry can still be shown at arrival time.
+            self.encoder_stamp_ns, self.encoder_at = None, self.driver_at
+        elif stamp_ns != self.encoder_stamp_ns:
+            self.encoder_stamp_ns = stamp_ns
+            age = (self.get_clock().now().nanoseconds - stamp_ns) / 1e9
+            self.encoder_at = time.monotonic()-age if 0 <= age < .3 else None
         if self.connected():
             sample = self.telemetry
             bounds = (sample.minimum, sample.maximum)
@@ -386,7 +398,7 @@ class ProbeController(ActuatorController):
                 self.set_home(position, 'Zero set at upper encoder limit')
 
     def behavior_state(self):
-        now = time.monotonic()
+        now, wall_now = time.monotonic(), time.time()
         ready = bool(self.connected() and self.extension and self.extension['servo_id']==self.ident and self.home_position is not None)
         depth = self.extension_sign*(self.telemetry.position-self.home_position)*self.extension['max_extension_mm']/self.extension['travel_ticks'] if ready else None
         if depth is not None:
@@ -405,7 +417,9 @@ class ProbeController(ActuatorController):
         msg.header.stamp = self.get_clock().now().to_msg()
         self.contact_pub.publish(msg)
         self.load_contact.update(dict(connected=self.connected(), active_role='probe',
-            sample_time=self.driver_at, serial_port=self.driver.device if self.driver else '',servo_id=self.ident,
+            sample_time=self.encoder_stamp_ns or self.driver_at, sample_at=self.encoder_at,
+            depth_mm=depth if self.encoder_stamp_ns else None, session=self.driver.session if self.driver else None,
+            serial_port=self.driver.device if self.driver else '', servo_id=self.ident,
             load_percent=self.telemetry.load_percent if self.telemetry else None, current_a=self.telemetry.current_a if self.telemetry else None,
             position=self.telemetry.position if self.telemetry else None, goal_position=self.telemetry.goal if self.telemetry else None,
             torque=bool(self.telemetry and self.telemetry.torque), probe=dict(holding=self.lifecycle=='HOLDING')), now)
@@ -418,7 +432,7 @@ class ProbeController(ActuatorController):
                                if self.cycle_active and self.action_probe_cycle and self.action_handle else None),
                 cycle_started_at=self.started if self.cycle_active else None,
                 contact_detected=self.contact_detected, contact_depth_mm=self.contact_depth_mm, contact_volts=self.contact_volts, last_result=self.last_probe_result,
-                reason=self.reason, fault=self.fault, pressure_ratio=ratio, pressure_window_s=30,
+                reason=self.reason, fault=self.fault, pressure_ratio=ratio, pressure_window_s=30, history_time_s=wall_now,
                 pressure_samples=[dict(x=t-now,y=v*100) for t,v in self.history],
                 **self.load_contact.snapshot(now), adc_contact=contact['detected'], adc_contact_fresh=contact['fresh'], adc_contact_state=contact))
 

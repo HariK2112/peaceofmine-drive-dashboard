@@ -14,27 +14,30 @@ class ProbeContact:
 
     def update(self, state, now):
         values = [state.get(k) for k in ('sample_time', 'load_percent', 'current_a', 'position', 'goal_position')]
-        valid = (state.get('connected') and state.get('active_role') == 'probe'
+        sample_at = state.get('sample_at', now)
+        valid = (type(sample_at) in (int, float) and 0 <= now-sample_at < .3 and state.get('connected') and state.get('active_role') == 'probe'
                  and all(type(v) in (int, float) and math.isfinite(v) for v in values))
         if not valid:
             self.__init__()
             return
         stamp, load, current, position, goal = values
-        key = (state.get('serial_port'), state.get('servo_id'), stamp)
-        if self.key and (key[:2] != self.key[:2] or stamp < self.key[2]):
+        key = (state.get('serial_port'), state.get('servo_id'), state.get('session'), stamp)
+        if self.key and key[:-1] != self.key[:-1]:
             self.__init__()
         self.valid = True
         self.holding = bool(state.get('torque') and state.get('probe', {}).get('holding'))
-        if key == self.key:
+        if self.key and stamp <= self.key[-1]:
             return
         self.key = key
         base_load, base_current = self.baseline or (0, 0)
         magnitude = (abs(load - base_load), abs(current - base_current) * 1000)
-        if self.filtered is None or (self.samples and now - self.samples[-1][0] > .3):
+        if self.filtered is None or (self.samples and sample_at - self.samples[-1][0] > .3):
             self.filtered = magnitude
         else:
             self.filtered = tuple(.5 * v + .5 * old for v, old in zip(magnitude, self.filtered))
-        self.samples.append((now, load, current, goal - position, self.holding, *self.filtered))
+        depth = state.get('depth_mm')
+        depth = round(depth, 3) if type(depth) in (int, float) and math.isfinite(depth) else None
+        self.samples.append((sample_at, load, current, goal - position, self.holding, *self.filtered, depth))
 
     def can_zero(self, now):
         recent = [s for s in self.samples if now - s[0] <= .6]
@@ -65,4 +68,4 @@ class ProbeContact:
                     position_error_ticks=latest[3] if latest else None,
                     contact_peak_percent=max((abs(s[1] - base_load) for s in recent), default=None) if fresh else None,
                     current_peak_ma=max((abs(s[2] - base_current) * 1000 for s in recent), default=None) if fresh else None,
-                    contact_samples=[dict(x=s[0] - now, load=s[5], current=s[6]) for s in self.samples if now - s[0] <= 30])
+                    contact_samples=[dict(x=round(s[0] - now, 4), load=s[5], current=s[6], depth_mm=s[7]) for s in self.samples if now - s[0] <= 30])

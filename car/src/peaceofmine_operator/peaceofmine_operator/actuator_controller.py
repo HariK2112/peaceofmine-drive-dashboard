@@ -18,7 +18,7 @@ from peaceofmine_interfaces.action import ActuatorOperation
 from . import configuration
 from .rc_safety import RcSafety
 from .settings_client import SettingsClient
-from .servo_motor import limits
+from .servo_motor import recorded_arm_limits
 from .actuator_protocol import command_dict
 from peaceofmine_interfaces.msg import ActuatorCommand, ActuatorStatus
 
@@ -81,6 +81,7 @@ class ActuatorController(Node):
                 if self.get_parameter('servo_id').value == -1:
                     self.ident=saved.get(self.role,{}).get('servo_id',self.ident)
                 if previous!=self.ident:
+                    self.captured.clear()
                     self.telemetry=None
                     self.on_disconnect()
                 self.apply_saved_settings()
@@ -230,6 +231,8 @@ class ActuatorController(Node):
                 other = 'probe' if self.role == 'arm' else 'arm'
                 if ident == self.saved.get(other, {}).get('servo_id', 2 if other=='probe' else 1):
                     raise ValueError('Servo belongs to the other actuator')
+                if self.ident != ident:
+                    self.captured.clear()
                 self.ident = ident
                 self.telemetry = None
                 self.on_disconnect()
@@ -244,8 +247,19 @@ class ActuatorController(Node):
                 self.captured[point] = self.telemetry.position
                 self.reason = 'Position captured'
             elif action == 'configure' and self.role == 'arm':
-                value = limits(**{k:command.get(k) for k in ('minimum','center','maximum')}, low=self.telemetry.minimum, high=self.telemetry.maximum)
-                self.save(command, 'arm', dict(servo_id=self.ident, **value), lambda: None)
+                value = recorded_arm_limits(command.get('minimum'), command.get('center'), command.get('maximum'),
+                                            low=self.telemetry.minimum, high=self.telemetry.maximum)
+                submitted = self.captured.copy()
+                ident = self.ident
+
+                def saved_limits():
+                    # Keep any positions recorded after this asynchronous save began.
+                    if self.ident == ident:
+                        for key, position in submitted.items():
+                            if self.captured.get(key) == position:
+                                del self.captured[key]
+
+                self.save(command, 'arm', dict(servo_id=ident, **value), saved_limits)
                 return
             elif action in ('move','jog','position'):
                 if command.get('held') is not True:

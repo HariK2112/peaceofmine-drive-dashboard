@@ -6,7 +6,8 @@
   const RealWebSocket = window.WebSocket;
   const started = performance.now();
   const detectorHistory = [];
-  const pressureHistory = Array(150).fill(0.05);
+  const probeHistory = [];
+  let lastProbeHistoryAt = -Infinity;
   const mock = {owner: false, armed: false, sweep: false, linear: 0, angular: 0, pose: {x: 0, y: 0, yaw: 0},
     inspection: {phase: 'IDLE', active: false, message: '', completed: 0, total: 0, confirmed_angle_deg: null, points: []},
     phaseAt: 0, armAngle: 0, depth: 0, cycle: false, calibrating: false, homing: 0, homed: true};
@@ -99,8 +100,11 @@
     const ratio = Math.max(0, Math.min(1, (filtered - 40) / 120));
     stepInspection(t);
     if (!mock.owner || pump.mode === 'idle' || performance.now() >= pump.until) stopPump();
-    pressureHistory.push(mock.cycle ? 0.08 + mock.depth / 150 + 0.02 * Math.random() : 0.05 + 0.01 * Math.random());
-    while (pressureHistory.length > 150) pressureHistory.shift();
+    const load = 100 * (mock.cycle ? 0.08 + mock.depth / 150 + 0.02 * Math.random() : 0.05 + 0.01 * Math.random());
+    probeHistory.push({at:t, load, depth_mm:mock.homed ? mock.depth : null});
+    while (probeHistory.length && t - probeHistory[0].at > 30) probeHistory.shift();
+    const includeProbeHistory = t-lastProbeHistoryAt >= .2;
+    if (includeProbeHistory) lastProbeHistoryAt = t;
     return {
       type: 'state',
       marking:{settings:{...mock.settings.marking},mode:pump.mode,output_percent:pump.output,last_shot_request:pump.lastRequest},
@@ -120,7 +124,8 @@
           reference_voltage: 3.3, input_range_volts:[6.144,4.096,2.048,1.024,.512,.256][adcConfig.pga], baseline_adc: 40, packet: {filtered_adc: filtered, precise_adc: raw, amplitude_adc: Math.round(raw)}, full_response_adc: 160, port: '/dev/ttyMOCK',
           history_age_s: 0, history: detectorHistory.map(p => ({age_s: +(t - p.at).toFixed(3), adc: p.adc, filtered_adc: p.filtered_adc, angle_deg: p.angle_deg, timestamp_s: p.timestamp_s}))}},
       probe: {depth_mm: mock.depth, target_mm: mock.cycle ? 60 : 0, max_depth_mm: 110, pressure_ratio: mock.cycle ? 0.1 + mock.depth / 200 : 0.05,
-        pressure_history: pressureHistory.slice(), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, cycle_goal_id: mock.inspection.probe_goal_id,
+        ...(includeProbeHistory ? {contact_samples:probeHistory.map(p => ({x:p.at-t, load:p.load, current:null, depth_mm:p.depth_mm})),
+          history_time_s:(performance.timeOrigin+started)/1000+t, history_age_s:0} : {}), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, cycle_goal_id: mock.inspection.probe_goal_id,
         contact_detected: mock.cycle && mock.pointResult?.status === 'CONTACT',
         contact_depth_mm: mock.cycle ? mock.pointResult?.contact_depth_mm : null, contact_volts: mock.cycle ? mock.pointResult?.contact_volts : null, holding: false,
         adc_contact_state: mockContact()},
@@ -290,13 +295,13 @@
         const filtered = old == null || !adcConfig.filter_ms ? value : old - Math.expm1(-20 / adcConfig.filter_ms) * (value-old);
         adcFiltered.set(ch.mux, filtered);
         if (ch.mux === probeTrigger.mux) sampleContact(filtered*ch.multiplier+ch.offset, t);
-        samples.push({seq:++adcSeq, time:t, mux:ch.mux, raw:Math.round(value*8000), volts:value, scaled:value*ch.multiplier+ch.offset,
+        samples.push({seq:++adcSeq, time:performance.timeOrigin/1000+t, mux:ch.mux, raw:Math.round(value*8000), volts:value, scaled:value*ch.multiplier+ch.offset,
           filtered_volts:filtered, filtered_scaled:filtered*ch.multiplier+ch.offset, clipped:false});
       }
       adcLast = t;
     }
     const body = {session: 'mock', revision: adcRevision, applied: adcRevision, running: true, connected: true, demo: true, error: null,
-      registers: {config: 0x8583}, now, sequence: adcSeq, config: adcConfig,
+      registers: {config: 0x8583}, now:performance.timeOrigin/1000+now, sequence: adcSeq, config: adcConfig,
       routes,
       probe_trigger: probeTrigger,
       probe_contact: mockContact(),

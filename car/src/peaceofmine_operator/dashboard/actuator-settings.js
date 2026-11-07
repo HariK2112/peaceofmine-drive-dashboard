@@ -81,6 +81,24 @@ function createServoSettings(role) {
   function armAngle(position) {
     return Number.isFinite(position) ? `${(position * 360 / 4096).toFixed(1)}°` : '—';
   }
+  function reversedArmCaptures(captured) {
+    // Earlier dashboards recorded the physical left stop under "minimum".
+    return Number.isFinite(captured?.minimum) && Number.isFinite(captured?.maximum) && captured.minimum > captured.maximum;
+  }
+  function armLimits(servo) {
+    const captured = {...servo.captured};
+    if (reversedArmCaptures(captured)) {
+      [captured.minimum, captured.maximum] = [captured.maximum, captured.minimum];
+    }
+    const values = {};
+    for (const point of ['minimum', 'center', 'maximum']) values[point] = captured[point] ?? servo.calibration?.[point];
+    let error = '';
+    if (!Object.values(values).every(Number.isFinite)) error = 'Record the missing positions before saving.';
+    else if (values.minimum >= values.maximum) error = 'Record both endpoints. Left must have a higher encoder angle than Right.';
+    else if (values.center <= values.minimum || values.center >= values.maximum)
+      error = `Centre must be between Right (${armAngle(values.minimum)}) and Left (${armAngle(values.maximum)}). Check the captured positions.`;
+    return {captured, values, error};
+  }
   function stopArmMove(acceptHome = false) {
     armSliderMoving = false;
     if (armHoldTimer !== null) {
@@ -137,7 +155,11 @@ function createServoSettings(role) {
     $('arm-position-label').textContent = servo.connected ? armAngle(Number(slider.value)) : '—';
     $('arm-jog-speed').disabled = armHoldTimer !== null && !armSliderMoving;
 
-    $('arm-servo-status').textContent = servo.reason || 'Servo driver not running';
+    if (role === 'arm') {
+      $('arm-servo-status').textContent = !state.connected ? 'Dashboard disconnected' : servo.connected
+        ? `Connected${Number.isInteger(servo.servo_id) ? ' · ID ' + servo.servo_id : ''}`
+        : servo.serial_connected ? 'Adapter connected · motor offline' : 'Disconnected';
+    } else $('arm-servo-status').textContent = servo.reason || 'Servo driver not running';
     $('arm-servo-position').textContent = servo.connected ? `${armAngle(servo.position)} (${servo.position ?? '—'} ticks)` : servo.serial_connected ? 'Adapter connected · no servo selected' : 'Disconnected';
     $('arm-servo-details').textContent = servo.connected ? `Servo ${servo.servo_id} · ${servo.serial_port || 'serial adapter'}` : servo.serial_connected ? `Select the ID of the ${role} servo, then click Select servo.` : servo.serial_port ? `Servo bus: ${servo.serial_port}` : 'Servo bus unavailable. Check the hardware connection.';
     const number = (value, digits = 1, unit = '') => Number.isFinite(value) ? `${value.toFixed(digits)}${unit}` : '—';
@@ -209,7 +231,6 @@ function createServoSettings(role) {
         $('arm-apply-motion').dataset.profile = motionSignature;
       }
     }
-    if (role === 'arm') $('arm-apply-limits').disabled = !canRecord || !['minimum', 'center', 'maximum'].every(point => Number.isFinite(servo.captured?.[point] ?? servo.calibration?.[point]));
     $('arm-jog-left').disabled = $('arm-jog-right').disabled = !ready;
     const jogReason = !state.connected ? 'Dashboard disconnected'
       : !owner ? 'Take control first'
@@ -220,10 +241,19 @@ function createServoSettings(role) {
     $('arm-jog-status').textContent = jogReason;
     $('arm-jog-status').dataset.ready = String(Boolean(ready));
     $('arm-jog-left').title = $('arm-jog-right').title = jogReason;
-    for (const point of role === 'arm' ? ['minimum', 'center', 'maximum'] : []) {
-      $(`arm-capture-${point}`).disabled = !canRecord;
-      $(`arm-move-${point}`).disabled = !ready || !servo.calibration;
-      $(`arm-recorded-${point}`).textContent = armAngle(servo.captured?.[point] ?? servo.calibration?.[point]);
+    if (role === 'arm') {
+      const {captured, error} = armLimits(servo);
+      $('arm-limits-validation').textContent = error;
+      $('arm-apply-limits').disabled = !canRecord || Boolean(error) || armPending?.action === 'capture' || armPending?.action === 'configure';
+      for (const point of ['minimum', 'center', 'maximum']) {
+        const saved = servo.calibration?.[point];
+        $(`arm-capture-${point}`).disabled = !canRecord;
+        const move = $(`arm-move-${point}`);
+        move.disabled = !ready || !Number.isFinite(saved);
+        move.title = Number.isFinite(saved) ? `Hold to move to saved ${armAngle(saved)}.` : 'Save this limit first.';
+        $(`arm-recorded-${point}`).textContent = armAngle(captured[point]);
+        $(`arm-saved-${point}`).textContent = armAngle(saved);
+      }
     }
     if (!ready) stopArmMove();
     if (role === 'probe') return;
@@ -288,8 +318,9 @@ function createServoSettings(role) {
       button.onblur = stopArmMove;
     }
     const jogOptions = () => ({speed_deg_s: Number($('arm-jog-speed').value)});
-    bindHold($('arm-jog-left'), 'jog', () => ({direction: -1, ...jogOptions()}));
-    bindHold($('arm-jog-right'), 'jog', () => ({direction: 1, ...jogOptions()}));
+    const leftDirection = role === 'arm' ? 1 : -1;
+    bindHold($('arm-jog-left'), 'jog', () => ({direction:leftDirection, ...jogOptions()}));
+    bindHold($('arm-jog-right'), 'jog', () => ({direction:-leftDirection, ...jogOptions()}));
     const homeValues = () => ({
       hold_id: `${Date.now()}-${++servoRequestSequence}`,
       load_percent: Number($('arm-home-load').value),
@@ -330,13 +361,21 @@ function createServoSettings(role) {
       updateArmSettings();
     };
     for (const point of role === 'arm' ? ['minimum', 'center', 'maximum'] : []) {
-      $(`arm-capture-${point}`).onclick = () => armCommand('capture', {point});
+      const legacySlot = {minimum:'maximum', center:'center', maximum:'minimum'}[point];
+      $(`arm-capture-${point}`).onclick = () => {
+        const servo = state.actuators?.arm || state.arm_servo || {};
+        // Keep the other capture intact on a running controller with old slots.
+        armCommand('capture', {point:reversedArmCaptures(servo.captured) ? legacySlot : point});
+        updateArmSettings();
+      };
       bindHold($(`arm-move-${point}`), 'move', {point});
     }
     if (role === 'arm') $('arm-apply-limits').onclick = () => {
       const servo = state.actuators?.[role] || state.arm_servo || {};
-      const calibration = Object.fromEntries(['minimum', 'center', 'maximum'].map(point => [point, servo.captured?.[point] ?? servo.calibration?.[point]]));
-      armCommand('configure', calibration);
+      const {values, error} = armLimits(servo);
+      if (error || $('arm-apply-limits').disabled) return;
+      armCommand('configure', values);
+      updateArmSettings();
     };
     const releaseArmSettings = () => {
       stopArmMove();

@@ -249,7 +249,7 @@ class OperatorWebBridge(Node):
                 if role == 'probe' and 'probe' in source:
                     # Plot samples travel once in the top-level probe, not in every actuator copy.
                     source = {**source, 'probe': {k: v for k, v in source['probe'].items()
-                                                if k not in ('contact_samples', 'pressure_samples', 'pressure_history')}}
+                                                if k not in ('contact_samples', 'pressure_samples', 'pressure_history', 'history_time_s')}}
                 actuators[role] = copy.deepcopy(source)
             value['actuators'] = actuators
             value['arm_servo'] = {**actuators[selected], 'active_role': selected,
@@ -259,7 +259,7 @@ class OperatorWebBridge(Node):
             if 'probe' in actuators['probe']:
                 probe = self._actuators['probe']['probe']
                 value['probe'] = copy.deepcopy({k: v for k, v in probe.items()
-                    if (k != 'contact_samples' or include_history)
+                    if (k not in ('contact_samples', 'history_time_s') or include_history)
                     and (k not in ('pressure_samples', 'pressure_history') or 'contact_samples' not in probe)})
                 if include_history:
                     value['probe']['history_age_s'] = max(0., time.monotonic()-self._actuator_times['probe'])

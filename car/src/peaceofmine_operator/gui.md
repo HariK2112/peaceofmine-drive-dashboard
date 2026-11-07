@@ -269,6 +269,8 @@ disconnect stops the arm. Settings jogging does not require saved limits;
 sweeping requires minimum, center and maximum calibration. The input toolbar shows RC channels in physical override and when **RC through ROS** is selected. In the ROS switch position, the latter sends drive commands while fresh transmitter samples and owner presence continue. The default channels are steering CH1 and throttle CH2; adjust `rc_steering_channel` and `rc_throttle_channel` in launch XML
 to match your transmitter. PWM visualization assumes 1000/1500/2000 endpoints.
 
+In Setup → Arm, record the physical Left, Centre and Right positions, then choose **Save limits**. The endpoints define the numeric minimum and maximum in either recording order. Centre sets the zero for the detector angle. An outer probe position beyond a saved endpoint is clipped to that endpoint, and the scan map identifies the limiting side.
+
 Settings calibration jog/position controls use the full EEPROM joint range,
 not the saved sweep endpoints. Check mechanical clearance before extending the
 calibration range. Normal sweeps still enforce saved minimum/maximum bounds.
@@ -375,7 +377,8 @@ position. Simulation stores its direction separately from the car.
 
 Probe contact polling targets 20 Hz; voltage and temperature refresh at 1 Hz.
 Actual rate depends on serial response time; watchdog deadlines remain unchanged.
-The main Chart.js plot autoscales load (%) and current (mA) independently,
+Below Manual probe, the live chart plots filtered contact sensor voltage and the saved contact threshold in volts, alongside measured encoder depth in millimetres.
+The motor diagnostics chart autoscales load (%) and current (mA) independently,
 expanding immediately and shrinking gradually. Values retain their units.
 Traces use light smoothing; the two-second peak uses unfiltered samples.
 Hold clear of the ground and select **Zero contact** to capture the recent

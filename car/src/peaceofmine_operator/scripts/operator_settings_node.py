@@ -5,7 +5,7 @@ import json
 import math
 from peaceofmine_interfaces.srv import SaveSettings
 from peaceofmine_operator.adc_acquisition import OperatorADC
-from peaceofmine_operator.servo_motor import limits
+from peaceofmine_operator.servo_motor import recorded_arm_limits
 from peaceofmine_operator.probe_calibration import validate as validate_probe, validate_direction
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -58,7 +58,7 @@ class OperatorSettings(Node):
                 ident = value.get('servo_id')
                 if type(ident) is not int or not 0 <= ident <= 252:
                     raise ValueError('Invalid servo ID')
-                value = dict(servo_id=ident, **limits(**{k:value[k] for k in ('minimum','center','maximum')}))
+                value = dict(servo_id=ident, **recorded_arm_limits(value.get('minimum'), value.get('center'), value.get('maximum')))
             elif section in ('arm_motion', 'probe_motion'):
                 speed, acceleration = value.get('max_speed_deg_s'), value.get('acceleration_deg_s2')
                 if not all(type(v) in (int,float) and math.isfinite(v) for v in (speed,acceleration)) or not .684 <= speed <= 699.732 or not 8.583 <= acceleration <= 2180.082:

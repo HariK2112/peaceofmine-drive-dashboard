@@ -102,6 +102,11 @@ class ActuatorTest(unittest.TestCase):
                 self.spin(.02)
                 deepest=max(deepest,self.probe.home_position-self.probe.telemetry.position)
             self.assertGreater(deepest,0,'A shallow probe cycle must actually descend')
+            chart = self.probe.state['probe']
+            measured = [p for p in chart['contact_samples'] if p['depth_mm'] is not None]
+            self.assertGreater(max(p['depth_mm'] for p in measured), 0)
+            self.assertAlmostEqual(chart['history_time_s'] + measured[-1]['x'],
+                                   self.probe.encoder_stamp_ns / 1e9, delta=.2)
             self.assertFalse(self.probe.cycle_active)
             self.assertEqual(self.probe.last_probe_result['status'], 'CLEAR', self.probe.reason)
             self.assertIsNone(self.probe.operation)
@@ -126,6 +131,19 @@ class ActuatorTest(unittest.TestCase):
             self.assertEqual(restored.extension_sign,1)
         finally:
             restored.destroy_node()
+
+    def test_saved_arm_limits_order_endpoints_without_changing_centre(self):
+        captured = dict(minimum=2426, center=1415, maximum=367)
+        self.arm.captured.update(captured)
+        self.command(self.arm, action='configure', **captured)
+        self.spin(.4)
+        self.assertTrue(self.arm.last_command['success'], self.arm.last_command)
+        self.assertEqual(self.arm.calibration(), dict(minimum=367, center=1415, maximum=2426))
+        self.assertEqual(self.arm.captured, {})
+        result = self.command(self.arm, action='configure', **dict(captured, center=2600))
+        self.assertFalse(result['success'])
+        self.assertIn('centre between', result['message'])
+        self.assertEqual(configuration.load(self.path)['arm_simulation']['center'], 1415)
 
     def test_configured_speed_limit_survives_typed_status(self):
         from peaceofmine_interfaces.msg import ActuatorStatus

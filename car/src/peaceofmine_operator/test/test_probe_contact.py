@@ -46,6 +46,18 @@ class ProbeContactTest(unittest.TestCase):
         contact.update(dict(connected=False), 1.1)
         self.assertFalse(contact.snapshot(1.1)['contact_fresh'])
 
+    def test_depth_uses_the_encoder_stamp_once_and_preserves_unavailable_depth(self):
+        contact = ProbeContact()
+        contact.update(self.sample(100, sample_at=9.955, depth_mm=12.34567), 10.01)
+        contact.update(self.sample(100, sample_at=9.955, depth_mm=12.34567), 10.06)
+        contact.update(self.sample(101, sample_at=10.04, depth_mm=None), 10.09)
+        points = contact.snapshot(10.15)['contact_samples']
+        self.assertEqual([p['depth_mm'] for p in points], [12.346, None])
+        self.assertEqual([p['x'] for p in points], [-.195, -.11])
+        contact.update(self.sample(102, sample_at=10.05, depth_mm=10.), 10.5)
+        self.assertFalse(contact.snapshot(10.5)['contact_fresh'])
+        self.assertEqual(contact.snapshot(10.5)['contact_samples'], [])
+
     def test_30_second_history_at_20_hz(self):
         contact = ProbeContact()
         for i in range(800):

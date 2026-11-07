@@ -150,7 +150,7 @@ class ArmController(ActuatorController):
                                               position=[math.radians(angle)]))
         self.sweep_pub.publish(Bool(data=self.sweeping))
         self.speed_pub.publish(Float32(data=self.sweep_speed))
-        return dict(sweeping=self.sweeping, sweep_acceleration_deg_s2=self.acceleration*8.583,
+        return dict(fixture_angle_offset_deg=self.offset, sweeping=self.sweeping, sweep_acceleration_deg_s2=self.acceleration*8.583,
                     sweep_endpoint_tolerance_deg=self.tolerance_deg, arm_calibration=calibration)
 
 

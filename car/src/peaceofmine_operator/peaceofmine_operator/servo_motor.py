@@ -9,6 +9,18 @@ def limits(minimum, center, maximum, low=0, high=4095):
     return dict(minimum=minimum, center=center, maximum=maximum)
 
 
+def recorded_arm_limits(minimum, center, maximum, low=0, high=4095):
+    """Accept the two physical endpoints in either order, preserving the chosen centre."""
+    if any(type(v) is not int for v in (minimum, center, maximum)):
+        raise ValueError('Record both arm endpoints and the centre before saving')
+    minimum, maximum = sorted((minimum, maximum))
+    if not minimum < center < maximum:
+        raise ValueError('Record the centre between two distinct arm endpoints')
+    if minimum < low or maximum > high:
+        raise ValueError(f'Recorded arm endpoints exceed the servo range of {low} to {high} ticks')
+    return limits(minimum, center, maximum, low, high)
+
+
 class MotionRejected(ValueError):
     """The motor reported valid telemetry but cannot execute this move."""
 

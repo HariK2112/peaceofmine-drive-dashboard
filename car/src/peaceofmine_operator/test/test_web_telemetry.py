@@ -85,18 +85,20 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(len(self.bridge._detector['detector']['sensor']['history']),1)
 
     def test_probe_plot_has_one_copy_only_on_history_ticks(self):
-        samples=[dict(x=-.1,load=2.,current=3.)]
+        samples=[dict(x=-.1,load=2.,current=3.,depth_mm=14.5)]
         self.bridge._actuators={'probe':dict(connected=True,probe=dict(
-            ready=True,contact_samples=samples,pressure_samples=[dict(x=-.1,y=2.)]))}
+            ready=True,history_time_s=1234567890.,contact_samples=samples,pressure_samples=[dict(x=-.1,y=2.)]))}
         self.bridge._actuator_times={'probe':self.now-.05}
         full=self.bridge.snapshot(True)
         self.assertEqual(full['probe']['contact_samples'],samples)
+        self.assertEqual(full['probe']['history_time_s'],1234567890.)
         self.assertNotIn('pressure_samples',full['probe'])
         self.assertAlmostEqual(full['probe']['history_age_s'],.05)
         for state in (full,self.bridge.snapshot(False)):
             self.assertNotIn('contact_samples',state['actuators']['probe']['probe'])
             self.assertNotIn('contact_samples',state['arm_servo']['probe'])
         self.assertNotIn('contact_samples',self.bridge.snapshot(False)['probe'])
+        self.assertNotIn('history_time_s', self.bridge.snapshot(False)['probe'])
         self.assertEqual(self.bridge._actuators['probe']['probe']['contact_samples'],samples)
         self.now+=1
         self.bridge._state_at=self.now

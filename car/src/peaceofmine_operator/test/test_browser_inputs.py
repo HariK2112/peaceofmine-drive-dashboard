@@ -511,6 +511,41 @@ assert(selection.request_id && $('arm-feedback').textContent.includes('Selecting
 state.arm_servo.last_command = {request_id: selection.request_id, success: true, message: 'Servo 2 selected'};
 updateArmSettings();
 assert($('arm-feedback').textContent === 'Servo 2 selected', 'driver acknowledgement shown');
+const armCalibrationRows = [...document.querySelectorAll('#settings-arm .arm-points-table tbody tr')];
+const [leftRow, centreRow, rightRow] = armCalibrationRows;
+const byIdIn = (row, id) => row.contains($(id));
+assert(byIdIn(leftRow,'arm-capture-maximum') && byIdIn(leftRow,'arm-move-maximum') && byIdIn(centreRow,'arm-capture-center') && byIdIn(rightRow,'arm-capture-minimum') && byIdIn(rightRow,'arm-move-minimum'), 'physical left maps to the high encoder endpoint and right to the low endpoint');
+state.arm_servo.captured = {minimum:2426,center:1415,maximum:367};
+updateArmSettings();
+assert($('arm-recorded-maximum').textContent==='213.2°' && $('arm-recorded-center').textContent==='124.4°' && $('arm-recorded-minimum').textContent==='32.3°', 'legacy reverse captures display in their physical rows');
+assert($('arm-saved-maximum').textContent==='—' && $('arm-move-maximum').disabled && !$('arm-apply-limits').disabled, 'captured limits are savable before Go is available');
+state.arm_servo.calibration={minimum:511,center:1514,maximum:2555};updateArmSettings();
+$('arm-apply-limits').click();
+const calibrationSave=sent.at(-1);
+assert(calibrationSave.action==='configure' && calibrationSave.minimum===367 && calibrationSave.center===1415 && calibrationSave.maximum===2426, 'Save sends ordered endpoint ticks and preserves the exact centre');
+state.arm_servo.reason='Rejected test calibration';
+state.arm_servo.last_command={request_id:calibrationSave.request_id,success:false,message:state.arm_servo.reason};
+updateArmSettings();
+assert($('arm-servo-status').textContent.includes('Connected') && !$('arm-servo-status').textContent.includes('Rejected') && $('arm-feedback').textContent===state.arm_servo.reason,'command rejection is distinct from live motor connectivity');
+updateArmSettings();
+assert($('arm-recorded-maximum').textContent==='213.2°' && $('arm-saved-maximum').textContent==='224.6°' && $('arm-move-maximum').title.includes('224.6°'), 'Go identifies the applied position even when a different capture is pending');
+$('arm-capture-maximum').click();
+assert(sent.at(-1).point==='minimum','old backend keeps using the legacy left capture slot until the pair is cleared');
+state.arm_servo.captured[sent.at(-1).point]=2430;state.arm_servo.last_command={request_id:sent.at(-1).request_id,success:true,message:'Position captured'};updateArmSettings();
+assert($('arm-recorded-minimum').textContent==='32.3°' && $('arm-recorded-maximum').textContent==='213.6°','re-recording left preserves the right endpoint on the old controller');
+$('arm-capture-minimum').click();assert(sent.at(-1).point==='maximum','legacy right capture keeps its old slot');
+state.arm_servo.captured={};updateArmSettings();
+for(const point of ['maximum','center','minimum']) {
+  updateArmSettings();$('arm-capture-'+point).click();assert(sent.at(-1).action==='capture' && sent.at(-1).point===point,'capture sends the correct encoder point');
+  $('arm-move-'+point).onkeydown({key:' ',repeat:false,preventDefault(){}});
+  assert(sent.at(-1).action==='move' && sent.at(-1).point===point && sent.at(-1).held,'Go holds the matching applied point');$('arm-move-'+point).onkeyup({key:' '});
+}
+state.arm_servo.captured={minimum:367,center:2600,maximum:2426};updateArmSettings();const beforeBadLimits=sent.length;$('arm-apply-limits').click();
+assert(sent.length===beforeBadLimits && $('arm-apply-limits').disabled && $('arm-limits-validation').textContent.includes('Centre must be between') && $('arm-recorded-center').textContent==='228.5°', 'out-of-range centre is explained and never sorted into an endpoint');
+state.arm_servo.captured={maximum:2426};updateArmSettings();$('arm-apply-limits').click();
+assert(sent.at(-1).minimum===511 && sent.at(-1).center===1514 && sent.at(-1).maximum===2426,'single capture uses saved values for the other two points');
+state.arm_servo.last_command={request_id:sent.at(-1).request_id,success:true,message:'Saved'};
+state.arm_servo.captured={};state.arm_servo.calibration=null;updateArmSettings();
 const savedServo = state.arm_servo;
 state.arm_servo = {active_role: 'probe', role_ids: {arm: 1, probe: 2}, discovered_servos: [1],
   serial_connected: true, connected: false, reason: 'Probe servo ID 2 is not connected'};
@@ -561,6 +596,12 @@ assert(reverseControl.checked && reverseControl.disabled,'pending direction pres
 state.arm_servo={...state.arm_servo,reverse:true,home_position:2000,position:2100,last_command:{request_id:directionRequest.request_id,success:true,message:'Saved'}};
 updateArmSettings(); updateArmSettings();
 assert(reverseControl.checked && !$('probe-servo-save-extension').disabled && $('probe-servo-home-travel').textContent.includes('8.8°'),'reversed travel and calibration stay positive');
+for (const [id,direction] of [['probe-servo-jog-left',-1],['probe-servo-jog-right',1]]) {
+  $(id).onkeydown({key:' ',repeat:false,preventDefault(){}});
+  assert(sent.at(-1).action==='jog' && sent.at(-1).role==='probe' && sent.at(-1).direction===direction,'probe jog directions stay unchanged');
+  $(id).onkeyup({key:' '});
+}
+
 reverseControl.checked=false; reverseControl.dispatchEvent(new Event('change'));
 state.arm_servo.last_command={request_id:sent.at(-1).request_id,success:false,message:'Save failed'};
 updateArmSettings(); updateArmSettings();
@@ -574,9 +615,12 @@ state.arm_servo = savedServo;
 updateArmSettings();
 assert(!$('arm-jog-left').disabled && !$('arm-jog-right').disabled, 'uncalibrated jog enabled in RC override');
 $('arm-jog-left').onkeydown({key: ' ', repeat: false, preventDefault() {}});
-assert(sent.at(-1).action === 'jog' && sent.at(-1).direction === -1, 'hold sends left jog');
+assert(sent.at(-1).action === 'jog' && sent.at(-1).direction === 1, 'arm left jog increases encoder angle');
 $('arm-jog-left').onkeyup({key: ' '});
 assert(sent.at(-1).action === 'stop', 'jog release sends stop');
+$('arm-jog-right').onkeydown({key:' ',repeat:false,preventDefault(){}});
+assert(sent.at(-1).action==='jog' && sent.at(-1).direction===-1, 'arm right jog decreases encoder angle');
+$('arm-jog-right').onkeyup({key:' '});
 updateArmSettings();
 $('arm-jog-speed').value = '6';
 updateArmSettings();
@@ -1063,6 +1107,8 @@ renderProbeScanMap({phase:'PROBING',probe_angles_deg:[0],scan_point_count:1,scan
 assert(pointRows.hidden && scanMap.querySelectorAll('g').length===1 && $('probe-map-plan').textContent==='1 position','single-point scans show their exact center');
 renderProbeScanMap({phase:'PROBING',total:5,confirmed_angle_deg:40},[{angle_deg:30,status:'CLEAR'}]);
 assert(scanMap.querySelectorAll('[data-result="unknown"]').length===4 && $('probe-map-plan').textContent==='5 positions','older partial scans show pending points without inventing their bearings');
+assert(clippedProbeEdges([-58.154,-57.487,-42.487,-27.487,-12.487,2.513,17.513], -27.487, 7, 15)==='right limit -58.2°',
+  'a clipped outer point is identified even when the scan still has seven positions');
 const previousPattern=state.settings?.probe_scan;
 state.settings={...state.settings,probe_scan:{point_count:11,spacing_deg:3}};
 state.inspection.scan_point_count=7;state.inspection.scan_spacing_deg=1.5;updateHud();
@@ -1128,12 +1174,12 @@ receive({type:'state',drive:liveDrive,detector:{...state.detector,sensor:metadat
 assert(state.detector.sensor.history === historyReference && detectorHistoryAt === historyClock && historyReference[0].adc===125.753,'live metadata preserves raw history and its timestamp');
 receive({type:'state',drive:liveDrive,detector:{...state.detector,sensor:{fresh:false,history:[]}}});
 assert(state.detector.sensor.history.length===0 && Number.isFinite(detectorHistoryAt),'explicit stale history clears samples with a finite clock');
-receive({type:'state',drive:liveDrive,probe:{...state.probe,contact_samples:[{x:-.5,load:2,current:3}],history_age_s:.2}});
+receive({type:'state',drive:liveDrive,probe:{...state.probe,contact_samples:[{x:-.5,load:2,current:3,depth_mm:18}],history_age_s:.2,history_time_s:100}});
 const probeSamples=state.probe.contact_samples, probeClock=pressureReceivedAt;
 assert(pressureSource===probeSamples && Math.abs(probeClock-(lastTelemetryAt-200))<1,'probe history clock starts at receipt even with diagnostics hidden');
-const probeMetadata={...state.probe};delete probeMetadata.contact_samples;delete probeMetadata.history_age_s;
+const probeMetadata={...state.probe};delete probeMetadata.contact_samples;delete probeMetadata.history_age_s;delete probeMetadata.history_time_s;
 receive({type:'state',drive:liveDrive,probe:probeMetadata});
-assert(state.probe.contact_samples===probeSamples && pressureReceivedAt===probeClock,'fast probe metadata preserves raw samples and receipt clock');
+assert(state.probe.contact_samples===probeSamples && state.probe.history_time_s===100 && pressureReceivedAt===probeClock,'fast probe metadata preserves samples, car Unix anchor and receipt clock');
 receive({type:'state',drive:liveDrive,probe:{...state.probe,contact_samples:[]}});
 assert(state.probe.contact_samples.length===0 && Number.isFinite(pressureReceivedAt),'explicit empty probe history clears without a missing-age NaN');
 lastServerMessageAt = performance.now()-GATEWAY_TIMEOUT_MS-1; gatewayWatchdog();

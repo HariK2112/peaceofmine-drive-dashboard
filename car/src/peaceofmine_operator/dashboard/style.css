@@ -581,6 +581,9 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 #probe-diagnostics .probe-load-chart { height: 8rem; }
 #probe-diagnostics > .note { display: block; margin: var(--s1) 0 var(--s2); }
 
+.probe-trace-heading { padding-top: var(--s1); min-height: 0; }
+.probe-trace-heading h3 { margin-right: auto; font-size: var(--fs-sm); }
+.manual-probe-chart { flex: 0 0 auto; height: clamp(10rem, 21vh, 13rem); }
 .probe-graphic { position: relative; height: 2.5rem; flex: none; border-bottom: 2px solid var(--line-strong); border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(var(--surface-2) 60%, var(--bg-sunken) 60%); }
 .probe-graphic i { position: absolute; bottom: -.15rem; left: 50%; height: .7rem; border-left: 3px solid var(--text); }
 .probe-graphic span { position: absolute; left: 50%; top: .25rem; width: .3rem; height: 2.1rem; max-height: 2.1rem; background: var(--text); transform: scaleY(0); transform-origin: top; }

@@ -343,13 +343,13 @@
     for (const second of scaleBuckets.keys()) if (end - second > SIGNAL_LOOKBACK_S) scaleBuckets.delete(second);
   }
 
-  function adcAxis(route, quantity, threshold = null) {
+  function adcAxis(route, quantity, threshold = null, selectedMux = null) {
     if (!latest) return {};
     let low = threshold ?? Infinity, high = threshold ?? -Infinity;
     const time = now(), voltsSpan = ranges[latest.config.pga] * .01;
     const quantities = quantity === 'comparison' ? ['volts', 'filtered_volts'] : [quantity];
     for (const channel of latest.config.channels) {
-      if (!channel.enabled || (route && ![route, 'both'].includes(latest.routes[channel.mux]))) continue;
+      if (!channel.enabled || (selectedMux !== null && channel.mux !== selectedMux) || (route && ![route, 'both'].includes(latest.routes[channel.mux]))) continue;
       for (const [second, channels] of scaleBuckets) {
         if (time - second > SIGNAL_LOOKBACK_S) continue;
         const channelBounds = channels.get(channel.mux);
@@ -362,16 +362,22 @@
     return signalBounds(low, high, voltsSpan);
   }
 
-  window.operatorADCOverlay = (target, route, baseCount) => {
-    const extra = datasets(route, 'filtered_volts', 30);
+  window.operatorProbeVoltageHistory = () => {
     const trigger = latest?.probe_trigger;
-    const level = unscale(trigger?.level, channelAt(trigger?.mux));
-    if (route === 'probe' && trigger?.enabled && level !== null) extra.push({label:`Contact limit · ${names[trigger.mux]} (V)`,
-      yAxisID:'ads1115', data:[{x:-30,y:level},{x:0,y:level}],
-      borderColor:'#ff9b89',borderDash:[5,4],borderWidth:1,pointRadius:0});
-    target.data.datasets = [...target.data.datasets.slice(0,baseCount), ...extra];
-    target.options.scales.ads1115 = {type:'linear', position:'right', display:extra.length > 0, ...adcAxis(route, 'filtered_volts', route === 'probe' && trigger?.enabled ? level : null),
-      title:{display:true,text:'Sensor voltage (V)'}, grid:{drawOnChartArea:false}, ticks:{color:'#efcf70'}};
+    if (!trigger) return {data:[], limit:null, status:'Contact settings unavailable.'};
+    const channel = channelAt(trigger.mux);
+    const limit = unscale(trigger.level, channel);
+    const data = datasets(null, 'filtered_volts', 30, trigger.mux)[0]?.data || [];
+    const gap = Math.max(.5, latest.config.interval_ms/1000 + 3*latest.config.channels.filter(c => c.enabled).length/latest.config.rate);
+    const last = data.at(-1);
+    const online = adcOnline && latest.connected && latest.running && latest.applied === latest.revision;
+    let status = '';
+    if (!online) status = 'Contact sensor offline.';
+    else if (!channel?.enabled) status = 'Contact input disabled.';
+    else if (!last || !Number.isFinite(last.y) || last.x < -gap) status = 'Contact voltage stale.';
+    else if (limit === null) status = 'Contact threshold unavailable.';
+    return {data, limit, name:names[trigger.mux], enabled:trigger.enabled, status, time:now(), gap,
+      bounds:adcAxis(null, 'filtered_volts', limit, trigger.mux)};
   };
   function render() {
     if (!latest) return;
@@ -514,9 +520,12 @@
     {panel:'settings-contact', canvas:'contact-history', error:'contact-chart-error', draw:drawContactHistory, reset:() => { contactChart = null; }},
     {panel:'settings-adc', canvas:'adc-history', error:'adc-chart-error', draw:drawBoardHistory, reset:() => { chart = null; }},
   ];
+  const probePlot = {canvas:'manual-probe-history', error:'manual-probe-chart-error',
+    draw:() => drawManualProbeHistory(performance.now(), true), reset:() => { manualProbeChart = null; }};
   window.operatorADCFrame = () => {
-    if (!latest || !document.getElementById('settings-dialog').open) return;
-    const plot = plots.find(item => !document.getElementById(item.panel).hidden);
+    const setup = document.getElementById('settings-dialog').open;
+    const plot = setup ? latest && plots.find(item => !document.getElementById(item.panel).hidden)
+      : !document.querySelector('[data-dock-pane="probe"]').hidden && probePlot;
     if (!plot || performance.now() < (plot.retryAt || 0)) return;
     const message = document.getElementById(plot.error);
     try {

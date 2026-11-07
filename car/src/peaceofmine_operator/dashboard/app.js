@@ -507,6 +507,7 @@ function connect() {
     }
     if (message.probe && !Object.hasOwn(message.probe, 'contact_samples')) {
       message.probe.contact_samples = state.probe.contact_samples;
+      message.probe.history_time_s = state.probe.history_time_s;
     } else if (Array.isArray(message.probe?.contact_samples)) {
       pressureSource = message.probe.contact_samples;
       pressureReceivedAt = lastTelemetryAt - Math.max(0, message.probe.history_age_s ?? 0) * 1000;
@@ -1037,6 +1038,15 @@ function recordedProbeSpacing(inspection) {
     ? Number(spacing.toFixed(4)) : null;
 }
 
+function clippedProbeEdges(angles, bearing, count, spacing) {
+  if (!angles?.length || !Number.isFinite(bearing) || !Number.isInteger(count) || !Number.isFinite(spacing)) return '';
+  const halfSpan = (count - 1) * spacing / 2;
+  const limits = [];
+  if (angles[0] > bearing - halfSpan + .0001) limits.push(`right limit ${angles[0].toFixed(1)}°`);
+  if (angles.at(-1) < bearing + halfSpan - .0001) limits.push(`left limit ${angles.at(-1).toFixed(1)}°`);
+  return limits.join(' · ');
+}
+
 function renderProbeScanMap(inspection, points) {
   const map = $('probe-scan-map');
   const olderScan = points.length > 0 || inspection.phase === 'PROBING' || inspection.phase === 'COMPLETE';
@@ -1044,7 +1054,10 @@ function renderProbeScanMap(inspection, points) {
     ? Math.max(points.length, inspection.total) : points.length;
   const plan = Array.isArray(inspection.probe_angles_deg) && inspection.probe_angles_deg.length
     ? inspection.probe_angles_deg : Array.from({length:oldCount}, (_, i) => points[i]?.angle_deg);
-  $('probe-map-plan').textContent = probePlanLabel(plan.length, recordedProbeSpacing(inspection), inspection.scan_point_count);
+  const label = probePlanLabel(plan.length, recordedProbeSpacing(inspection), inspection.scan_point_count);
+  const clipped = clippedProbeEdges(inspection.probe_angles_deg, inspection.probe_target_bearing_deg,
+                                    inspection.scan_point_count, inspection.scan_spacing_deg);
+  $('probe-map-plan').textContent = clipped ? label.replace('° spacing', '° requested') + ' · ' + clipped : label;
   const results = $('probe-map-readings');
   const target = inspection.probe_target_depth_mm;
   const bearing = inspection.probe_target_bearing_deg ?? inspection.confirmed_angle_deg;
@@ -2330,6 +2343,69 @@ function scrollTimeChart(chart, now, phase = 0) {
 }
 
 let pressureSource = null, pressureReceivedAt = 0;
+let manualProbeChart = null;
+
+function drawManualProbeHistory(frameTime = performance.now(), animate = false) {
+  const canvas = $('manual-probe-history');
+  if (!canvas.getClientRects().length) return;
+  if (animate && manualProbeChart && scrollTimeChart(manualProbeChart, frameTime, 10)) return;
+  const signal = window.operatorProbeVoltageHistory?.() ?? {data:[], limit:null, status:'Contact settings unavailable.'};
+  const probe = state.probe;
+  // Both car histories share Unix timestamps. Older snapshots give an age at
+  // receipt, which still lets each measured encoder sample age off the plot.
+  const anchor = Number.isFinite(probe.history_time_s) && Number.isFinite(signal.time)
+    ? probe.history_time_s-signal.time : -(frameTime-pressureReceivedAt)/1000;
+  const depths = [];
+  if (state.connected && Array.isArray(probe.contact_samples)) {
+    for (const sample of probe.contact_samples) {
+      if (!Number.isFinite(sample.x)) continue;
+      const x = anchor + sample.x;
+      if (x < -30 || x > 0) continue;
+      if (depths.length && x-depths.at(-1).x > .3) depths.push({x:x-.001,y:null});
+      depths.push({x, y:Number.isFinite(sample.depth_mm) ? sample.depth_mm : null});
+    }
+  }
+  if (!manualProbeChart) {
+    const theme = getComputedStyle(document.documentElement);
+    const color = token => theme.getPropertyValue(token).trim();
+    manualProbeChart = new Chart(canvas, {
+      type:'line',
+      data:{datasets:[
+        {label:'Filtered contact', yAxisID:'volts', borderColor:color('--accent'), borderWidth:2, pointRadius:0, spanGaps:false, data:[]},
+        {label:'Saved limit', yAxisID:'volts', borderColor:color('--warn'), borderWidth:1, borderDash:[5,4], pointRadius:0, data:[]},
+        {label:'Encoder depth', yAxisID:'depth', borderColor:color('--text'), borderWidth:1.5, pointRadius:0, spanGaps:false, data:[]},
+      ]},
+      options:{responsive:true,maintainAspectRatio:false,parsing:false,animation:false,
+        plugins:{legend:{labels:{color:color('--muted'),boxWidth:10,font:{size:10}}},
+          tooltip:{callbacks:{label:({dataset,parsed})=>dataset.label + ': ' +
+            (dataset.yAxisID === 'depth' ? parsed.y.toFixed(1) + ' mm' : parsed.y.toFixed(4) + ' V')}}},
+        scales:{
+          x:{type:'linear',min:-30,max:0,ticks:{maxTicksLimit:4,callback:v=>v===0?'now':v+'s'}},
+          volts:{type:'linear',position:'left',title:{display:true,text:'Contact (V)'},ticks:{maxTicksLimit:4}},
+          depth:{type:'linear',position:'right',title:{display:true,text:'Depth (mm)'},beginAtZero:true,ticks:{maxTicksLimit:4},grid:{drawOnChartArea:false}},
+        }},
+    });
+  }
+  const [volts, limit, depth] = manualProbeChart.data.datasets;
+  volts.label = signal.name ? `Filtered ${signal.name}` : 'Filtered contact';
+  setSampleTrace(volts, signal.data, signal.gap ?? .5);
+  limit.label = signal.enabled === false ? 'Saved limit (off)' : 'Saved limit';
+  limit.data = Number.isFinite(signal.limit) ? [{x:-30,y:signal.limit},{x:0,y:signal.limit}] : [];
+  // A gap or null sample breaks the line; no target or interpolated depth is plotted.
+  setSampleTrace(depth, depths, .3);
+  const axis = manualProbeChart.options.scales.volts;
+  axis.min = signal.bounds?.min;
+  axis.max = signal.bounds?.max;
+  const last = depths.at(-1);
+  const depthStatus = last && last.x >= -.5 && Number.isFinite(last.y) ? '' : 'Depth unavailable.';
+  const status = [signal.status, depthStatus].filter(Boolean).join(' ');
+  setText($('manual-probe-status'), status);
+  $('manual-probe-status').hidden = !status;
+  manualProbeChart.$scrollPixels = 0;
+  manualProbeChart.$renderedAt = frameTime;
+  manualProbeChart.update('none');
+}
+
 function drawPressureHistory(now = performance.now(), animate = false) {
   if (!$('pressure-history').getClientRects().length) return;
   const source = state.probe.contact_samples ?? state.probe.pressure_samples ?? state.probe.pressure_history;
@@ -2360,7 +2436,6 @@ function drawPressureHistory(now = performance.now(), animate = false) {
     const peak = Math.max(0, ...points.map(p => p.y || 0), (index ? probe.current_peak_ma : probe.contact_peak_percent) || 0);
     probePressureChart.options.scales[index ? 'current' : 'y'].max = contactScale(contactAxes[field], peak, index ? 50 : 10);
   });
-  window.operatorADCOverlay?.(probePressureChart, 'probe', 2);
   probePressureChart.$scrollPixels = 0;
   probePressureChart.$renderedAt = now;
   probePressureChart.update('none');
@@ -2930,6 +3005,21 @@ function showScanCoverage() {
       description = `Requested span −${edge}° to +${edge}° from the target. ${centre}`;
     }
   }
+  const arm = state.actuators?.arm;
+  const calibration = arm?.calibration ?? arm?.arm_calibration;
+  if (description && arm?.connected && Number.isFinite(arm.fixture_angle_offset_deg) &&
+      ['minimum', 'center', 'maximum'].every(k => Number.isFinite(calibration?.[k]))) {
+    const offset = arm.fixture_angle_offset_deg + probeOffsetDeg();
+    const right = (calibration.minimum - calibration.center) * 360/4096 + offset;
+    const left = (calibration.maximum - calibration.center) * 360/4096 + offset;
+    description += ` Saved probe bearing range: ${right.toFixed(1)}° to ${left.toFixed(1)}°.`;
+    const target = state.inspection?.confirmed_angle_deg;
+    if (Number.isFinite(target)) {
+      const clip = clippedProbeEdges([right, left], target, count, spacing);
+      if (target < right || target > left) description += ' The confirmed target is outside this range.';
+      else if (clip) description += ` At this target the scan reaches the ${clip}.`;
+    }
+  }
   const output = $('arm-scan-coverage');
   if (output.value !== description) output.value = description;
 }
@@ -3114,13 +3204,14 @@ function detectorAxis(sensor, elapsed) {
   return Number.isFinite(low) ? signalBounds(low, high, (range.max - range.min) / 100, range.min, range.max) : range;
 }
 
-function setDetectorTrace(dataset, points, gap) {
+function setSampleTrace(dataset, points, gap) {
   // Preserve gaps on a slow link. Isolated readings need a visible dot even
   // when neither neighbour is close enough to draw a line segment.
   let radii;
   for (let i = 0; i < points.length; i++) {
-    if ((i && points[i].x - points[i-1].x <= gap) ||
-        (i + 1 < points.length && points[i+1].x - points[i].x <= gap)) continue;
+    if (!Number.isFinite(points[i].y)) continue;
+    if ((i && Number.isFinite(points[i-1].y) && points[i].x - points[i-1].x <= gap) ||
+        (i + 1 < points.length && Number.isFinite(points[i+1].y) && points[i+1].x - points[i].x <= gap)) continue;
     radii ??= Array(points.length).fill(0);
     radii[i] = 2;
   }
@@ -3154,7 +3245,7 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
         y: {title: {display: true, text: 'Volts', color: '#bad0ca'}, ticks: {color: '#bad0ca', maxTicksLimit: 4}, grid: {color: '#24404a'}},
       }},
   });
-  setDetectorTrace(detectorChart.data.datasets[0], samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc * reference / 255})), .25);
+  setSampleTrace(detectorChart.data.datasets[0], samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc * reference / 255})), .25);
   Object.assign(detectorChart.options.scales.y, detectorAxis(sensor, elapsed));
   detectorChart.$scrollPixels = 0;
   detectorChart.$renderedAt = now;
@@ -3239,7 +3330,7 @@ function drawDetectorDiagnostics(now = performance.now(), animate = false) {
     });
   }
   const readings = detectorVoltagePoints(samples, sensor.reference_voltage, elapsed);
-  setDetectorTrace(detectorDiagnosticsChart.data.datasets[0], readings, .25);
+  setSampleTrace(detectorDiagnosticsChart.data.datasets[0], readings, .25);
   while (detectorAngles.length && now - detectorAngles[0].at > 30000) detectorAngles.shift();
   detectorDiagnosticsChart.data.datasets[1].data = samples.some(p => Object.hasOwn(p, 'angle_deg'))
     ? readings.map(p => ({x:p.x, y:Number.isFinite(p.angle_deg) ? p.angle_deg : null}))
@@ -3293,7 +3384,7 @@ function drawMetalHistory(animate = false) {
       },
     });
   }
-  setDetectorTrace(metalChart.data.datasets[0], detectorVoltagePoints(samples, reference, elapsed), .5);
+  setSampleTrace(metalChart.data.datasets[0], detectorVoltagePoints(samples, reference, elapsed), .5);
   metalChart.data.datasets[1].data = Number.isFinite(baseline)
     ? [{x: -seconds, y: baseline}, {x: 0, y: baseline}] : [];
   metalChart.data.datasets[2].data = Number.isFinite(trigger)
