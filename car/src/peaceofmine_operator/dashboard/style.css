@@ -551,6 +551,23 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 #radar-view { display: block; flex: 1 1 auto; width: 100%; min-height: 3rem; border-radius: var(--radius-sm); background: var(--bg-sunken); }
 
 /* probe */
+.probe-scan-plot { display: grid; place-items: center; flex: 1 0 auto; min-height: 6rem; background: var(--bg-sunken); border-radius: var(--radius-sm); }
+#probe-scan-map { display: block; width: 100%; height: clamp(7rem, 17vh, 12rem); }
+#probe-scan-map[hidden], #probe-map-empty[hidden] { display: none; }
+#probe-scan-map .scan-ring, #probe-scan-map .scan-ray { fill: none; stroke: var(--line-strong); stroke-width: 1; }
+#probe-scan-map text { fill: var(--text); font: 12px var(--mono); text-anchor: middle; }
+#probe-scan-map .map-contact { fill: var(--danger); }
+#probe-scan-map .map-clear { fill: var(--accent); }
+#probe-scan-map .map-unknown { fill: var(--bg-sunken); stroke: var(--muted); stroke-width: 2; }
+.probe-map-legend { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); font-size: var(--fs-xs); }
+.probe-map-legend .map-contact { color: var(--danger-text); }
+.probe-map-legend .map-clear { color: var(--accent); }
+.probe-map-legend .map-unknown { color: var(--muted); }
+.probe-sensor-readout { flex-wrap: wrap; }
+.probe-sensor-readout strong { color: var(--text); }
+#probe-diagnostics .probe-load-chart { height: 8rem; }
+#probe-diagnostics > .note { display: block; margin: var(--s1) 0 var(--s2); }
+
 .probe-graphic { position: relative; height: 2.5rem; flex: none; border-bottom: 2px solid var(--line-strong); border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(var(--surface-2) 60%, var(--bg-sunken) 60%); }
 .probe-graphic i { position: absolute; bottom: -.15rem; left: 50%; height: .7rem; border-left: 3px solid var(--text); }
 .probe-graphic span { position: absolute; left: 50%; top: .25rem; width: .3rem; height: 2.1rem; max-height: 2.1rem; background: var(--text); transform: scaleY(0); transform-origin: top; }
@@ -683,6 +700,8 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
   .pane-split > .pane-section + .pane-section { margin: var(--pad) 0 0; padding: var(--pad) 0 0; border-left: 0; border-top: 1px solid var(--line); }
   .chart-box { min-height: 10rem; }
   .pane-detector { grid-template-areas: "trend" "signal" "actions"; grid-template-rows: auto; }
+  .pane-probe > .probe-load { order: -1; margin: 0; padding: 0; border: 0; }
+  .pane-probe > .probe-diagnostics-panel { padding-top: var(--pad); border-top: 1px solid var(--line); }
   .pane-detector > .detector-trend { margin: 0; padding: 0; border: 0; }
   .detector-diagnostics-chart { min-height: clamp(14rem, 38vh, 22rem); }
 }

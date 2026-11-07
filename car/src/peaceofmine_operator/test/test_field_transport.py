@@ -67,6 +67,7 @@ class FieldTransportTest(unittest.TestCase):
                     self.assertEqual(entry['status'], 'SHOT COMMANDED')
                     self.assertAlmostEqual(entry['latitude'], 59 + 20/60)
                     self.assertTrue(result['trail'])
+                    self.assertEqual(bridge.field_snapshot(None, result['trail'][-1][0])['trail'], [])
                     self.assertNotIn('entries', bridge.field_snapshot(result['revision']))
                     wait(lambda: bridge.field_snapshot(None)['fix'] is None)
                     self.assertEqual(bridge.field_snapshot(None)['receiver'], 'Stale fix')

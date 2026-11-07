@@ -89,20 +89,17 @@ exclusive.
 `home`, `target` and `probe_cycle`. Arm angle actions complete once the current goal is applied, the measured
 position is within the configured arm sweep endpoint tolerance, and measured
 speed is at most three MX speed units (the firmware's reversal-settled threshold).
-They then release torque. Results include contact and measured contact depth for probe cycles. Actions expose feedback, cancellation and final success/failure. Homing
-uses the generic driver protective load stop but only the probe controller assigns
-meaning to that stop and establishes a home reference. Visually verify the top:
-resistance alone cannot identify its physical cause.
+They then release torque. Results include contact and measured contact depth for probe cycles. Actions expose feedback, cancellation and final success/failure. At startup the probe controller assumes the first encoder position is the top. A homing load stop or an explicit release of the held Home button sets the encoder zero. Reconnecting the same servo in the same encoder mode retains that zero.
 
 The browser's probe target retains its existing bounded hold behavior: hold the
 requested depth until Stop, permission/interlock loss, or the 60-second timeout.
 A ROS `target` action completes at depth and releases torque. Motor-contact zeroing
 remains session-only and requires a stable hold. ADC trigger and homing motor-load threshold are separate settings.
 An automated `probe_cycle` command (`start_probe_cycle`) descends toward an editable target depth (default 80 mm).
-It evaluates FSR slope/rate-of-change spikes (`spike_threshold`) as well as threshold contact.
-If a contact spike is encountered, descent halts immediately, contact depth is recorded, and the probe automatically retracts to 0 mm with an audible/visual operator alert.
+The saved contact input, threshold, hysteresis and debounce determine a hit during descent. Motor load is used to home; current and motor load are diagnostic readings during the scan.
+If the filtered ADC crosses the configured contact limit before the target depth, descent halts immediately, contact depth is recorded, and the probe automatically retracts to 0 mm with an audible/visual operator alert.
 If the target depth is reached without contact, the probe safely retracts and logs a clear result.
-The RC operator supervises vehicle motion during probing. Web driving is blocked while a probe cycle is active or the probe is deployed. Cycle completion requires encoder arrival from the current operation, including for shallow targets.
+The RC operator supervises vehicle motion during probing. A deliberate drive input cancels an active inspection. Cycle completion requires encoder arrival from the current operation, including for shallow targets.
 
 Probe ADC contact consumes `adc/filtered_samples`, not a plot. Disabled, unavailable,
 configuration-mismatched or stale measurements produce unknown contact. Hysteresis

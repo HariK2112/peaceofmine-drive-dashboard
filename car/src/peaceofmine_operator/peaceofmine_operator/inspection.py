@@ -21,6 +21,8 @@ class InspectionWorkflow:
         self.confirm_speed = None
         self.pass_from = self.pass_to = None
         self.points, self.passes = [], []
+        self.probe_angles = []
+        self.probe_depth = None
         self.arc_overlap = None
         self.queue = deque()
         self.pending = None
@@ -38,6 +40,7 @@ class InspectionWorkflow:
         return dict(phase=self.phase, active=self.active, message=self.message,
                     completed=self.completed, total=self.total, progress=self.progress,
                     confirmed_angle_deg=self.confirmed_angle, arc_overlap_ratio=self.arc_overlap,
+                    probe_angles_deg=list(self.probe_angles), probe_target_depth_mm=self.probe_depth,
                     probe_reachable=self.confirmed_angle is not None and self.lower <= self.confirmed_angle-PROBE_OFFSET_DEG <= self.upper, points=list(self.points), passes=list(self.passes))
 
     def confirm(self, lower, upper, speed):
@@ -52,6 +55,8 @@ class InspectionWorkflow:
         self.lower, self.upper = lower, upper
         self.confirmed_angle = None
         self.passes, self.points = [], []
+        self.probe_angles = []
+        self.probe_depth = None
         self.total = 2
         self.queue.extend([('start', lower), ('pass', upper), ('pass', lower)])
         self.message = f'Moving to sweep start at {speed:g}°/s.'
@@ -69,6 +74,8 @@ class InspectionWorkflow:
         self._begin('PROBING')
         self.lower, self.upper = lower, upper
         self.points = []
+        self.probe_angles = [angle + PROBE_OFFSET_DEG for angle in angles]
+        self.probe_depth = depth
         self.total = len(angles)
         for angle in angles:
             self.queue.extend([('position', angle), ('probe', depth)])

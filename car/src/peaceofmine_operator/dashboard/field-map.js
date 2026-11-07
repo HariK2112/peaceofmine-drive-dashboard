@@ -132,9 +132,13 @@
   window.operatorGnssResult = message => { el('gnss-feedback').textContent = message.message || (message.ok ? 'Saved' : 'Settings rejected'); };
   async function poll() {
     try {
-      const response = await fetch('/api/field?revision=' + encodeURIComponent(revision), {cache: 'no-store', signal: AbortSignal.timeout(4000)});
+      const query = new URLSearchParams({revision});
+      const previous = field.trail || [];
+      if (previous.length) query.set('trail_after', previous.at(-1)[0]);
+      const response = await fetch('/api/field?' + query, {cache: 'no-store', signal: AbortSignal.timeout(4000)});
       if (!response.ok) throw Error();
       field = await response.json();
+      if (Number.isFinite(field.trail_from)) field.trail = previous.filter(p => p[0] >= field.trail_from).concat(field.trail);
       window.operatorFieldAvailable = field.receiver !== 'Field recorder offline';
       if (Array.isArray(field.entries)) {
         entries = field.entries;

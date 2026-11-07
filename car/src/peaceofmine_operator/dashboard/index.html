@@ -126,14 +126,21 @@
             <input id="probe-slider" type="range">
             <div class="button-row">
               <button id="start-probing" type="button">Probe once</button>
-              <button id="probe-zero-contact" type="button" class="quiet">Zero motor load</button>
             </div>
-            <small id="probe-zero-status" class="note">Lift the probe clear of the ground before zeroing.</small>
           </section>
-          <section class="pane-section probe-load" aria-labelledby="load-heading">
-            <div class="section-head pressure-heading"><h2 id="load-heading">Motor load</h2><span class="head-note">last 30 s</span><strong id="probe-pressure" class="head-value">—</strong></div>
-            <div class="chart-box probe-load-chart"><canvas id="pressure-history" aria-label="Estimated probe motor load over the last thirty seconds"></canvas></div>
-            <details id="probe-diagnostics" class="more"><summary>More readings</summary>
+          <section class="pane-section probe-load" aria-labelledby="probe-map-heading">
+            <div class="section-head"><h2 id="probe-map-heading">Probe scan map <span class="tip" data-tip="Each marker represents one planned probe position. Positions are spaced in angle order, with positive angles to the left as on the detector radar."></span></h2><span id="probe-map-depth" class="head-note"></span></div>
+            <div class="probe-scan-plot">
+              <svg id="probe-scan-map" role="img" viewBox="0 0 360 130" aria-label="Probe scan positions" hidden></svg>
+              <span id="probe-map-empty" class="note">Waiting for a probe scan.</span>
+            </div>
+            <div class="probe-map-legend" aria-label="Scan result legend"><span class="map-contact">◆ Early contact</span><span class="map-clear">● Target reached</span><span class="map-unknown">○ Pending / unknown</span></div>
+            <p class="section-foot probe-sensor-readout"><span>Live contact sensor <span class="tip" data-tip="The selected, filtered ADC channel detects contact during descent. The motor readings below show servo load and current."></span></span><strong id="probe-map-sensor">Waiting for ADC input</strong></p>
+            <details id="probe-diagnostics" class="more"><summary>More readings · probe motor</summary>
+              <div class="section-head pressure-heading"><h3 id="load-heading">Motor load</h3><span class="head-note">Last 30 s</span><strong id="probe-pressure" class="head-value">—</strong></div>
+              <div class="chart-box probe-load-chart"><canvas id="pressure-history" aria-label="Estimated probe motor load over the last thirty seconds"></canvas></div>
+              <button id="probe-zero-contact" type="button" class="quiet">Zero motor load</button>
+              <small id="probe-zero-status" class="note">Lift the probe clear of the ground before zeroing.</small>
               <div class="probe-contact-readings">
                 <span>Motor current <strong id="probe-current">—</strong></span>
                 <span><span id="probe-current-change-label">Current magnitude</span> <strong id="probe-current-change">—</strong></span>
@@ -278,7 +285,7 @@
             </div>
             <button id="probe-stop" type="button" class="danger-outline" data-tip="Releases the motor at once. Hold the probe so it does not drop.">Stop probe</button>
           </div>
-          <p id="probe-cycle-help" class="step-note" role="status">Home the probe before starting a scan.</p>
+          <p id="probe-cycle-help" class="step-note" role="status">Waiting for probe telemetry.</p>
         </details>
 
         <div class="setup-shortcuts"><button type="button" class="quiet" data-open-settings="arm">Arm setup</button><button type="button" class="quiet" data-open-settings="probe">Probe setup</button></div>
@@ -539,7 +546,7 @@
         </section>
         <div class="panel-grid cols-2">
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">2</span>Home at the top <span class="tip" data-tip="The probe lifts until it presses the top stop; let go to cancel. A jam can look like the top, so check by eye. Home again after a reconnect or power cycle."></span></h4></header>
+            <header class="card-head"><h4><span class="step">2</span>Home at the top <span class="tip" data-tip="Hold to lift the probe. Release at the top to set zero, or let the load threshold stop it. At startup the first encoder position is treated as zero."></span></h4></header>
             <button type="button" id="probe-servo-home" class="hold-btn">↑ Hold to home</button>
             <p id="probe-servo-home-status" class="status-msg" role="status">Not homed</p>
             <label class="field"><span class="field-name">Stop at load <span class="unit">%</span> <span class="tip" data-tip="Homing stops when the motor load reaches this. 10–60%."></span></span><input id="probe-servo-home-load" type="number" min="10" max="60" step="1" value="10" required></label>
@@ -642,6 +649,7 @@
           <section class="set-card">
             <header class="card-head"><h4>Live contact signal</h4><output class="head-value" id="contact-live-volts">—</output></header>
             <div class="metal-chart-container"><canvas id="contact-history" role="img" aria-label="Filtered contact sensor voltage and contact limit over the last 30 seconds"></canvas></div>
+            <p id="contact-chart-error" class="error-line" role="status" hidden></p>
           </section>
           <section class="set-card">
             <header class="card-head"><h4>Contact calibration</h4></header>
@@ -793,6 +801,7 @@
             <label class="field"><span class="field-name">Low-pass time constant <span class="unit">ms</span> <span class="tip" data-tip="0 turns filtering off. Larger values smooth noise and delay the detector and probe response. Apply &amp; save to use this value on the car."></span></span><input data-adc-field="filter_ms" type="number" min="0" max="2000" step="1" required></label>
             <p id="adc-filter-status" class="meta" role="status"></p>
             <div class="adc-chart"><canvas id="adc-history" aria-label="Live ADS1115 input readings"></canvas></div>
+            <p id="adc-chart-error" class="error-line" role="status" hidden></p>
             <p id="adc-rate" class="meta"></p>
             <div class="table-wrap"><table class="set-table"><thead><tr><th>Input</th><th>Raw</th><th>Volts</th><th>Scaled</th><th>Min / max / mean</th><th>Status</th></tr></thead><tbody id="adc-readings"></tbody></table></div>
           </section>

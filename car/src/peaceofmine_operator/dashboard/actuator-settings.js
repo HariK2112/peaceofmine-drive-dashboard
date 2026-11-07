@@ -54,6 +54,7 @@ function createServoSettings(role) {
     loadChart.update('none');
   }
   let armHoldTimer = null;
+  let homeGesture = null;
   let quickHomePending = false, quickHomeHeld = false;
   let armSliderMoving = false;
   let armSliderDragging = false;
@@ -80,12 +81,16 @@ function createServoSettings(role) {
   function armAngle(position) {
     return Number.isFinite(position) ? `${(position * 360 / 4096).toFixed(1)}°` : '—';
   }
-  function stopArmMove() {
+  function stopArmMove(acceptHome = false) {
     armSliderMoving = false;
     if (armHoldTimer !== null) {
       clearInterval(armHoldTimer);
       armHoldTimer = null;
-      if (state.connected && state.drive.you_control_owner) armCommand('stop');
+      if (state.connected && state.drive.you_control_owner) {
+        if (acceptHome === true && homeGesture) armCommand('home_release', {hold_id:homeGesture});
+        else armCommand('stop');
+      }
+      homeGesture = null;
     }
   }
   function updateArmSettings() {
@@ -183,7 +188,7 @@ function createServoSettings(role) {
         const busy = Boolean(state.inspection?.active || state.probe?.cycle_active);
         quick.disabled = !ready || busy || (armHoldTimer !== null && !quickHomeHeld);
         quick.title = !owner ? 'Take control first' : !servo.connected ? 'Probe motor not connected' : busy ? 'Wait for the probe to finish'
-          : !state.safety?.servo_allowed ? state.safety?.servo_reason || 'RC blocks motion' : 'Hold to pull the probe up until it finds the top; release to stop';
+          : !state.safety?.servo_allowed ? state.safety?.servo_reason || 'RC blocks motion' : 'Hold to lift the probe. Release at the top to set zero.';
         document.getElementById('probe-home-quick-status').textContent = !servo.connected ? 'Probe motor not connected'
           : quickHomeHeld ? 'Homing… keep holding' : servo.home_status || 'Not homed';
         if (quickHomePending && armHoldTimer === null && !$('settings-dialog').open) {
@@ -270,14 +275,16 @@ function createServoSettings(role) {
           setArmFeedback('Enter a positive jog speed.', 'error'); return;
         }
         const held = {...selected, held: true};
+        homeGesture = action === 'home' ? held.hold_id : null;
         armCommand(action, held);
         armHoldTimer = setInterval(() => armCommand(action, held, false), 80);
         updateArmSettings();
       };
       button.onpointerdown = event => { event.preventDefault(); button.setPointerCapture(event.pointerId); start(); };
-      button.onpointerup = button.onpointercancel = button.onlostpointercapture = stopArmMove;
+      button.onpointerup = () => stopArmMove(true);
+      button.onpointercancel = button.onlostpointercapture = stopArmMove;
       button.onkeydown = event => { if ([' ', 'Enter'].includes(event.key) && !event.repeat) { event.preventDefault(); start(); } };
-      button.onkeyup = event => { if ([' ', 'Enter'].includes(event.key)) stopArmMove(); };
+      button.onkeyup = event => { if ([' ', 'Enter'].includes(event.key)) stopArmMove(true); };
       button.onblur = stopArmMove;
     }
     const jogOptions = () => ({speed_deg_s: Number($('arm-jog-speed').value)});

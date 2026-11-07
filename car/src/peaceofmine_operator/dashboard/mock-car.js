@@ -9,7 +9,7 @@
   const pressureHistory = Array(150).fill(0.05);
   const mock = {owner: false, armed: false, sweep: false, linear: 0, angular: 0, pose: {x: 0, y: 0, yaw: 0},
     inspection: {phase: 'IDLE', active: false, message: '', completed: 0, total: 0, confirmed_angle_deg: null, points: []},
-    phaseAt: 0, depth: 0, cycle: false, calibrating: false, homing: 0, homed: false};
+    phaseAt: 0, depth: 0, cycle: false, calibrating: false, homing: 0, homed: true};
   window.__mockCar = mock; // preview-only handle for scripted checks
   const capture = {device:'auto', width:640, height:480, framerate:30, pixel_format:'mjpeg2rgb'};
   mock.settings = {
@@ -38,11 +38,12 @@
     } else if (i.phase === 'PROBING') {
       const point = Math.floor(dt / 2), within = (dt % 2) / 2;
       mock.cycle = point < 5;
-      mock.depth = mock.cycle ? 60 * Math.sin(Math.PI * within) : 0;
+      mock.depth = mock.cycle ? i.probe_target_depth_mm * Math.sin(Math.PI * within) : 0;
       mock.cyclePhase = within < 0.5 ? 'DESCENDING' : 'RETRACTING';
+      i.probe_goal_id = mock.cycle ? `preview-${mock.phaseAt}-${point}` : null;
       while (i.points.length < Math.min(point, 5)) {
         const n = i.points.length;
-        i.points.push({angle_deg: i.confirmed_angle_deg - 10 + 5 * n, status: n === 2 ? 'CONTACT' : 'CLEAR', depth_mm: n === 2 ? 38 : 60});
+        i.points.push({angle_deg: i.confirmed_angle_deg - 10 + 5 * n, status: n === 2 ? 'CONTACT' : 'CLEAR', contact_depth_mm: n === 2 ? Math.min(38, i.probe_target_depth_mm / 2) : null});
       }
       i.completed = i.points.length; i.progress = i.completed;
       if (point >= 5) Object.assign(i, {phase: 'COMPLETE', active: false, message: 'Probe scan complete · 1 contact.'});
@@ -82,7 +83,9 @@
           reference_voltage: 3.3, baseline_adc: 40, packet: {filtered_adc: filtered, precise_adc: filtered, amplitude_adc: filtered}, full_response_adc: 160, port: '/dev/ttyMOCK',
           history_age_s: 0, history: detectorHistory.map(p => ({age_s: +(t - p.at).toFixed(3), adc: p.adc, filtered_adc: p.filtered_adc}))}},
       probe: {depth_mm: mock.depth, target_mm: mock.cycle ? 60 : 0, max_depth_mm: 110, pressure_ratio: mock.cycle ? 0.1 + mock.depth / 200 : 0.05,
-        pressure_history: pressureHistory.slice(), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, holding: false,
+        pressure_history: pressureHistory.slice(), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, cycle_goal_id: mock.inspection.probe_goal_id,
+        contact_detected: mock.cycle && mock.cyclePhase === 'RETRACTING' && mock.inspection.completed === 2,
+        contact_depth_mm: mock.inspection.completed === 2 ? Math.min(38, mock.inspection.probe_target_depth_mm / 2) : null, holding: false,
         adc_contact_state: mockContact()},
       power: {battery: {available: true, present: true, stale: false, power_w: 38 + 6 * Math.sin(t / 3) + mock.linear * 40,
           current_a: 3.2, voltage_v: 11.9, remaining_pct: 72, temperature_c: 31, cell_delta_v: 0.012},
@@ -160,12 +163,13 @@
       if (m.type === 'sweep_enabled') { mock.sweep = !!m.enabled; return; }
       if (m.type === 'calibration_begin' || m.type === 'calibration_end') { stopPump(); mock.calibrating = m.type === 'calibration_begin'; mock.homing = 0; return; }
       if (m.type === 'arm_servo' && m.role === 'probe' && m.action === 'home' && m.held) { mock.calibrating = true; if (++mock.homing > 15) mock.homed = true; return; }
+      if (m.type === 'arm_servo' && m.role === 'probe' && m.action === 'home_release') { mock.homed = true; mock.homing = 0; return; }
       if (m.type === 'arm_servo' && m.action === 'stop') { mock.homing = 0; return; }
       if (m.type === 'inspection') {
         const t = (performance.now() - started) / 1000;
         if (m.action === 'stop') Object.assign(mock.inspection, {phase: 'STOPPED', active: false, message: 'Inspection stopped.'}), mock.cycle = false, mock.depth = 0;
-        if (m.action === 'confirm') Object.assign(mock.inspection, {phase: 'CONFIRMING', active: true, total: 2, completed: 0, progress: 0, points: [], message: ''});
-        if (m.action === 'probe_scan') Object.assign(mock.inspection, {phase: 'PROBING', active: true, total: 5, completed: 0, progress: 0, points: [], message: ''});
+        if (m.action === 'confirm') Object.assign(mock.inspection, {phase: 'CONFIRMING', active: true, total: 2, completed: 0, progress: 0, points: [], probe_angles_deg: [], probe_target_depth_mm: null, message: ''});
+        if (m.action === 'probe_scan') Object.assign(mock.inspection, {phase: 'PROBING', active: true, total: 5, completed: 0, progress: 0, points: [], probe_angles_deg: [-10,-5,0,5,10].map(offset => mock.inspection.confirmed_angle_deg + offset), probe_target_depth_mm: m.depth_mm, message: ''});
         mock.phaseAt = t;
       }
     }

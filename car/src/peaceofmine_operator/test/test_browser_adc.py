@@ -90,8 +90,26 @@ assert($('adc-readings').textContent.includes('9.0000'),'ADC readings retain raw
 adcResponse={...adcResponse,now:101,sequence:5,samples:[{seq:5,time:101,mux:4,raw:500,volts:.5,scaled:4,filtered_scaled:4,filtered_volts:.5,clipped:false}]};
 await window.nextPoll();drawDetectorDiagnostics(2200);
 assert(detectorDiagnosticsChart.data.datasets.at(-1).data.at(-1).y===4,'detector filter resets after sensor gap');
+const updateChart = Chart.prototype.update;
+let failContactChart = true;
+Chart.prototype.update = function(...args) {
+  if (this.canvas?.id === 'contact-history' && failContactChart) {
+    failContactChart = false;
+    throw Error('Interrupted chart initialization');
+  }
+  return updateChart.apply(this, args);
+};
 document.querySelector('[data-settings-tab="contact"]').click();
 await window.nextPoll();
+assert(!Chart.getChart('contact-history') && $('contact-chart-error').textContent.includes('Interrupted chart initialization'), 'failed initialization releases the registered canvas');
+assert($('adc-status').textContent.includes('SAMPLING') && $('adc-error').textContent === '', 'render failure preserves ADC connection');
+assert($('contact-live-volts').textContent === '0.5000 V' && $('adc-trigger-state').textContent.includes('Outside contact range'), 'live sensor and threshold comparison remain available while the chart retries');
+Chart.prototype.update = updateChart;
+const realNow = performance.now.bind(performance);
+Object.defineProperty(performance,'now',{value:() => realNow()+1500,configurable:true});
+operatorADCFrame();
+delete performance.now;
+assert($('contact-chart-error').hidden, 'chart recovers after a transient render failure');
 const contactChart = Chart.getChart('contact-history');
 assert(contactChart, 'contact chart created: '+JSON.stringify({open:$('settings-dialog').open,hidden:$('settings-contact').hidden,error:$('adc-error').textContent,canvases:Object.values(Chart.instances).map(c=>c.canvas?.id)}));
 assert(contactChart.data.datasets[0].label.includes('filtered V') && contactChart.data.datasets[0].data.at(-1).y === .5, 'calibration plots car-filtered voltage on selected input');

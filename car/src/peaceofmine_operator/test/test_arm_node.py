@@ -78,7 +78,7 @@ class ActuatorTest(unittest.TestCase):
         for _ in range(20):
             self.command(self.probe, action='home', held=True, hold_id='cycle-home', load_percent=20.)
             self.spin(.08)
-            if self.probe.home_position is not None:
+            if self.probe.home_position is not None and self.probe.motion != 'home':
                 break
         self.assertIsNotNone(self.probe.home_position, self.probe.reason)
         self.command(self.probe, action='stop')
@@ -112,7 +112,7 @@ class ActuatorTest(unittest.TestCase):
         self.spin(.3)
         self.assertTrue(self.probe.last_command['success'],self.probe.last_command)
         self.assertTrue(self.probe.reverse)
-        self.assertIsNone(self.probe.home_position)
+        self.assertEqual(self.probe.home_position, self.probe.telemetry.position)
         saved=configuration.load(self.path)
         self.assertEqual(saved['probe_direction_simulation'],dict(reverse=True))
         self.assertNotIn('probe_direction',saved)
@@ -160,6 +160,17 @@ class ActuatorTest(unittest.TestCase):
         self.spin(.12)
         self.assertEqual(self.driver.runtime.bus.values[1][32],14)
 
+    def test_operator_release_sets_zero_and_a_reconnect_keeps_it(self):
+        self.assertTrue(self.probe.behavior_state()['probe']['ready'])
+        self.assertTrue(self.command(self.probe, action='home', held=True, hold_id='operator', load_percent=20)['success'])
+        self.spin(.08)
+        position = self.probe.telemetry.position
+        self.assertTrue(self.command(self.probe, action='home_release', hold_id='operator')['success'])
+        self.assertEqual(self.probe.home_position, position)
+        self.assertIsNone(self.probe.operation)
+        self.probe.on_disconnect()
+        self.assertEqual(self.probe.home_position, position)
+
     def test_home_and_jog_require_permission_and_no_fault(self):
         for allow,fault in ((False,False),(True,True)):
             self.allow,self.probe.fault=allow,fault
@@ -170,6 +181,7 @@ class ActuatorTest(unittest.TestCase):
                 self.assertIsNone(self.probe.operation)
 
     def test_homing_needs_no_odometry_and_permission_loss_still_stops_it(self):
+        previous_zero = self.probe.home_position
         self.publish_velocity=False
         self.spin(.6)
         self.command(self.probe,action='home',held=True,hold_id='home',load_percent=20)
@@ -178,7 +190,7 @@ class ActuatorTest(unittest.TestCase):
         self.allow=False
         self.spin(.12)
         self.assertIsNone(self.probe.operation)
-        self.assertIsNone(self.probe.home_position)
+        self.assertEqual(self.probe.home_position, previous_zero)
 
     def test_expired_manual_hold_does_not_restart(self):
         self.command(self.arm,action='jog',held=True,direction=1)
@@ -192,16 +204,18 @@ class ActuatorTest(unittest.TestCase):
         self.spin(.1)
         self.assertIsNotNone(self.driver.runtime.active)
 
-    def test_homing_contact_and_reconnect_invalidates_zero(self):
+    def test_homing_contact_and_reconnect_retains_zero(self):
+        self.command(self.probe,action='home',held=True,hold_id='home',load_percent=20)
         deadline=time.monotonic()+3
-        while self.probe.home_position is None and time.monotonic()<deadline:
+        while self.probe.motion == 'home' and time.monotonic()<deadline:
             self.command(self.probe,action='home',held=True,hold_id='home',load_percent=20)
             self.spin(.08)
         self.assertIsNotNone(self.probe.home_position,self.probe.reason)
         self.assertFalse(self.driver.runtime.bus.values[2][24])
+        zero = self.probe.home_position
         self.driver.disconnect('test unplug')
         self.spin(.1)
-        self.assertIsNone(self.probe.home_position)
+        self.assertEqual(self.probe.home_position, zero)
 
     def test_manual_probe_motion_does_not_require_odometry(self):
         self.publish_velocity=False

@@ -24,7 +24,7 @@ class SimulationPipelineTest(unittest.TestCase):
             for _ in range(16):
                 bridge.handle_command(client,dict(type='arm_servo',role='probe',action='home',held=True,hold_id='pipeline',load_percent=20))
                 fixture.spin(.08)
-                if fixture.probe.home_position is not None:break
+                if fixture.probe.home_position is not None and fixture.probe.motion != 'home':break
             self.assertIsNotNone(fixture.probe.home_position,fixture.probe.reason)
             bridge.handle_command(client,dict(type='calibration_end'))
             fixture.spin(.1)

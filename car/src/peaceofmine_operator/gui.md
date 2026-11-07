@@ -227,11 +227,11 @@ alternative, pass `config_file:=/absolute/path/operator_config.json`.
 Saved sections take precedence over legacy calibration launch parameters;
 those parameters are fallbacks only when a section is absent.
 Updates are atomic and locked across processes, preserving the other sections.
-The file contains no home position; home again after reconnecting or restarting.
+The first valid probe encoder position after a controller restart is assumed to be the top. If the probe is extended at startup, hold Home and release at the physical top to set zero. A brief driver reconnect retains the session reference.
 
 Close Settings, take control, and use the main Probe slider. Hardware targets
 now reach the MX-64 driver; simulation retains its fake payload. The main
-control requires a saved maximum and a session home. It moves at approximately
+control uses the saved travel and the session zero. It moves at approximately
 50 degrees/s and holds torque at the target to maintain contact. The main
 Chart.js graph shows absolute servo load (0–100%), not calibrated pressure or
 force; missing or stale load displays as unavailable. The hold remains subject
@@ -366,7 +366,7 @@ dashboard control lease. Global STOP and RC/session loss cancel outstanding goal
 
 The Probe panel exposes maximum depth and the saved Above/Below contact limit in
 volts. This changes the configured probe input's threshold, not its raw samples.
-Existing spike/load protection stays active. Manual controls and technical motor
+During descent the selected filtered ADC input and its configured threshold determine contact. Manual controls and technical motor
 readings remain available under their details sections.
 
 ### Probe direction
@@ -420,7 +420,7 @@ pressed. Choose the input, direction, voltage limit, hysteresis and debounce,
 enable detection and select **Save contact settings**. The graph previews the
 draft limit against the selected channel. The main screen shows the applied
 contact state and links back to calibration. The probe controller handles
-threshold and spike detection and retracts on contact during a cycle. Missing
+threshold detection and retracts on contact during a descent. Missing
 or stale readings block probing.
 
 Relative ROS topics (under `/self/` with the default vehicle name):
@@ -455,8 +455,7 @@ See [architecture](architecture.md) for ownership, safety and persistence, and
 
 Both launch commands now run the same arm and probe controllers. In simulation,
 `servo_driver` uses an in-memory device/plant, and ADC acquisition uses generated
-samples. No physical device is opened. Probe simulation starts unhomed, so the same
-homing/calibration workflow is exercised as on hardware.
+samples. No physical device is opened. Probe simulation uses the same startup zero and hold-to-home behavior as hardware.
 
 `servo_driver` owns all serial I/O and enforces bounded speed, acceleration,
 exclusive actuator ownership, operation identities and watchdogs. Controllers

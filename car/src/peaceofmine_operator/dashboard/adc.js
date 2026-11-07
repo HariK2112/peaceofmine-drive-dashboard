@@ -68,7 +68,8 @@
     const status = !adcOnline ? 'ADC disconnected' : !trigger.enabled ? 'Contact detection disabled'
       : volts === null ? 'Waiting for contact reading.' : `${contact.detected ? 'CONTACT' : 'Clear'} · ${names[trigger.mux]} · ${volts.toFixed(4)} V`;
     document.getElementById('probe-adc-contact').textContent = status;
-    el('trigger-state').textContent = status;
+    document.getElementById('probe-map-sensor').textContent = status;
+    renderContactSignal();
     contactFeedback.textContent = issue || (pending === 'contact' ? 'Saving contact settings…' : contactMessage)
       || (!owner ? 'Take control to save contact settings.' : contactDirty ? 'Unsaved contact settings' : '');
     const detectors = detectorMuxes(latest);
@@ -324,16 +325,34 @@
     if (chart) chart.$frameBucket = null;
     window.operatorADCFrame();
   };
+  function renderContactSignal() {
+    const mux = Number(muxInput.value);
+    const sample = history.findLast(point => point.mux === mux);
+    const scanSeconds = latest.config.channels.filter(channel => channel.enabled).length / latest.config.rate;
+    const maxAge = Math.max(.5, latest.config.interval_ms / 1000 + 3 * scanSeconds);
+    const fresh = adcOnline && latest.connected && latest.running && latest.applied === latest.revision
+      && Number.isFinite(sample?.filtered_volts) && now() - sample.time <= maxAge;
+    document.getElementById('contact-live-volts').textContent = fresh ? `${sample.filtered_volts.toFixed(4)} V` : '—';
+    let comparison = 'Waiting for a fresh sample';
+    if (fresh) {
+      const level = contactVolts.valueAsNumber;
+      comparison = 'Live reading';
+      if (!enabledInput.checked) comparison = 'Detection disabled';
+      else if (Number.isFinite(level)) {
+        const within = contactDirection.value === 'above' ? sample.filtered_volts >= level : sample.filtered_volts <= level;
+        comparison = within ? 'In contact range' : 'Outside contact range';
+        if (contactDirty) comparison += ' · draft limit';
+      }
+    } else if (!adcOnline) comparison = 'ADC telemetry unavailable';
+    else if (latest.error || latest.load_error) comparison = latest.error || latest.load_error;
+    el('trigger-state').textContent = `${names[mux]} · ${comparison}`;
+  }
+
   function drawContactHistory() {
     if (contactChart && scrollTimeChart(contactChart, performance.now())) return;
     const mux = Number(muxInput.value);
     const traces = datasets(null, 'filtered_volts', 30, mux);
     const line = traces[0];
-    const last = line?.data.at(-1);
-    const maxAge = Math.max(.5, latest.config.interval_ms / 1000 + 3 * latest.config.channels.filter(c => c.enabled).length / latest.config.rate);
-    const fresh = adcOnline && latest.connected && latest.running && latest.applied === latest.revision
-      && Number.isFinite(last?.y) && last.x >= -maxAge;
-    document.getElementById('contact-live-volts').textContent = fresh ? `${last.y.toFixed(4)} V` : '—';
     if (line) {
       line.label = `${names[mux]} · filtered V`;
       line.borderColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
@@ -353,10 +372,7 @@
     contactChart.$renderedAt = performance.now();
     contactChart.update('none');
   }
-  window.operatorADCFrame = () => {
-    if (!latest || !document.getElementById('settings-dialog').open) return;
-    if (!document.getElementById('settings-contact').hidden) { drawContactHistory(); return; }
-    if (document.getElementById('settings-adc').hidden) return;
+  function drawBoardHistory() {
     if (chart && scrollTimeChart(chart, performance.now())) return;
     const seconds = Number(el('window').value), quantity = el('quantity').value;
     if (!chart) chart = new Chart(el('history'), {type:'line', data:{datasets:[]}, options:{animation:false, responsive:true, maintainAspectRatio:false, parsing:false,
@@ -369,27 +385,56 @@
     chart.data.datasets = quantity === 'comparison' ? previewTraces(seconds) : datasets(null,quantity,seconds);
     chart.options.scales.ads1115 = {type:'linear', position:'left', ...adcAxis(null, quantity)};
     chart.options.scales.x.min = -seconds; chart.$scrollPixels = 0; chart.$renderedAt = performance.now(); chart.update('none');
+  }
+
+  const plots = [
+    {panel:'settings-contact', canvas:'contact-history', error:'contact-chart-error', draw:drawContactHistory, reset:() => { contactChart = null; }},
+    {panel:'settings-adc', canvas:'adc-history', error:'adc-chart-error', draw:drawBoardHistory, reset:() => { chart = null; }},
+  ];
+  window.operatorADCFrame = () => {
+    if (!latest || !document.getElementById('settings-dialog').open) return;
+    const plot = plots.find(item => !document.getElementById(item.panel).hidden);
+    if (!plot || performance.now() < (plot.retryAt || 0)) return;
+    const message = document.getElementById(plot.error);
+    try {
+      plot.draw();
+      message.hidden = true;
+    } catch (error) {
+      // Chart.js can register a canvas before its constructor finishes.
+      // Release even that partial chart so the next draw can use the canvas.
+      plot.retryAt = performance.now() + 1000;
+      plot.reset();
+      try { Chart.getChart(plot.canvas)?.destroy(); }
+      catch (cleanupError) { console.warn('Could not release ADC chart', cleanupError); }
+      message.textContent = `Chart unavailable · ${error.message}`;
+      message.hidden = false;
+    }
   };
+
+  function receive(value) {
+    if (session !== value.session) { cursor=0; history=[]; scaleBuckets.clear(); revision=null; session=value.session; }
+    if (value.sequence < cursor) { cursor=0; history=[]; scaleBuckets.clear(); revision=null; }
+    if (revision !== value.revision) {
+      history = [];
+      scaleBuckets.clear();
+      if (revision === null) fill(value);
+      else if (field('filter_ms').valueAsNumber === latest?.config.filter_ms) field('filter_ms').value = value.config.filter_ms;
+      revision = value.revision;
+    }
+    latest=value; adcOnline=true; clockOffset=(value.now-Date.now()/1000);
+    rememberScale(value.samples, value.now);
+    history.push(...value.samples); cursor=value.samples.at(-1)?.seq ?? cursor;
+    history=history.filter(s=>value.now-s.time<=60).slice(-30000);
+    if (value.dropped) el('feedback').textContent = `${value.dropped} readings missed during disconnection.`;
+    render();
+  }
+
   async function poll() {
+    let value;
     try {
       const response = await fetch(`/api/adc?after=${cursor}&session=${encodeURIComponent(session || "")}`, {cache:'no-store', signal:AbortSignal.timeout(3000)});
       if (!response.ok) throw Error(`ADC telemetry: HTTP ${response.status}`);
-      const value = await response.json();
-      if (session !== value.session) { cursor=0; history=[]; scaleBuckets.clear(); revision=null; session=value.session; }
-      if (value.sequence < cursor) { cursor=0; history=[]; scaleBuckets.clear(); revision=null; }
-      if (revision !== value.revision) {
-        history = [];
-        scaleBuckets.clear();
-        if (revision === null) fill(value);
-        else if (field('filter_ms').valueAsNumber === latest?.config.filter_ms) field('filter_ms').value = value.config.filter_ms;
-        revision = value.revision;
-      }
-      latest=value; adcOnline=true; clockOffset=(value.now-Date.now()/1000);
-      rememberScale(value.samples, value.now);
-      history.push(...value.samples); cursor=value.samples.at(-1)?.seq ?? cursor;
-      history=history.filter(s=>value.now-s.time<=60).slice(-30000);
-      if (value.dropped) el('feedback').textContent = `${value.dropped} readings missed during disconnection.`;
-      render();
+      value = await response.json();
     } catch (error) {
       adcOnline = false;
       el('status').textContent='DISCONNECTED';
@@ -400,7 +445,15 @@
       el('apply').disabled=true;
       renderSensors();
       document.getElementById('probe-adc-contact').textContent='ADC disconnected';
+      document.getElementById('probe-map-sensor').textContent='ADC disconnected';
       document.getElementById('contact-live-volts').textContent='—';
+    }
+    if (value) {
+      try { receive(value); }
+      catch (error) {
+        el('error').textContent = `ADC display error · ${error.message}`;
+        el('trigger-state').textContent = el('error').textContent;
+      }
     }
     setTimeout(poll, document.hidden ? 1000 : 100);
   }

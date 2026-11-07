@@ -30,9 +30,8 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.telemetry.operation_id = 'op1'
         self.probe.extension = {'servo_id': 2, 'max_extension_mm': 120.0, 'travel_ticks': 3000}
         self.probe.contact = MagicMock()
-        self.probe.contact.spike_detected = False
         self.probe.contact.detected = False
-        self.probe.contact.snapshot.side_effect = lambda: dict(enabled=True, fresh=True, detected=self.probe.contact.spike_detected or self.probe.contact.detected)
+        self.probe.contact.snapshot.side_effect = lambda: dict(enabled=True, fresh=True, detected=self.probe.contact.detected)
         self.probe.speed = 0.0
         self.probe.speed_limit = 0.03
         self.probe.odometry_at = time.monotonic()
@@ -106,7 +105,7 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertFalse(self.probe.cycle_active)
         self.assertEqual(self.probe.last_probe_result['status'], 'ABORTED')
 
-    def test_probe_cycle_spike_detection_and_retraction(self):
+    def test_probe_cycle_adc_threshold_and_retraction(self):
         self.probe.start_probe_cycle(80.0)
         self.assertEqual(self.probe.cycle_phase, 'DESCENDING')
 
@@ -120,7 +119,7 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertFalse(self.probe.contact_detected)
 
         # FSR contact spike occurs!
-        self.probe.contact.spike_detected = True
+        self.probe.contact.detected = True
         self.probe.update_behavior()
 
         # Should immediately detect contact, record depth, and switch to RETRACTING towards 0.0 mm
@@ -143,15 +142,14 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertTrue(self.probe.last_probe_result['contact'])
         self.assertAlmostEqual(self.probe.last_probe_result['contact_depth_mm'], 45.0, delta=0.5)
 
-    def test_probe_cycle_clear_when_target_reached_without_spike(self):
+    def test_probe_cycle_clear_when_target_reached(self):
         self.probe.start_probe_cycle(80.0)
         self.assertEqual(self.probe.cycle_phase, 'DESCENDING')
 
         # Probe reaches 80 mm target position (target = 4000 - 80/120*3000 = 2000)
         self.probe.telemetry.position = 2000
-        self.probe.contact.spike_detected = False
         self.probe.contact.detected = False
-        self.probe.contact.snapshot.side_effect = lambda: dict(enabled=True, fresh=True, detected=self.probe.contact.spike_detected or self.probe.contact.detected)
+        self.probe.contact.snapshot.side_effect = lambda: dict(enabled=True, fresh=True, detected=self.probe.contact.detected)
 
         self.probe.update_behavior()
         # Should switch to RETRACTING clear
@@ -169,6 +167,17 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertEqual(self.probe.last_probe_result['status'], 'CLEAR')
         self.assertFalse(self.probe.last_probe_result['contact'])
         self.assertEqual(self.probe.last_probe_result['target_depth_mm'], 80.0)
+
+    def test_contact_at_target_or_on_return_stays_clear(self):
+        self.probe.start_probe_cycle(80.)
+        self.probe.telemetry.position = self.probe.telemetry.goal = self.probe.operation.target
+        self.probe.contact.detected = True
+        self.probe.update_behavior()
+        self.assertFalse(self.probe.contact_detected)
+        self.assertEqual(self.probe.cycle_phase, 'RETRACTING')
+        self.probe.telemetry.position = self.probe.telemetry.goal = self.probe.home_position
+        self.probe.update_behavior()
+        self.assertEqual(self.probe.last_probe_result['status'], 'CLEAR')
 
     def test_probe_cycle_aborts_if_rc_permission_is_lost(self):
         self.probe.start_probe_cycle(80.)

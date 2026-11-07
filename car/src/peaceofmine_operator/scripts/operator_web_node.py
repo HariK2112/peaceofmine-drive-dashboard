@@ -98,7 +98,11 @@ def build_app(node: OperatorGateway) -> web.Application:
     app = web.Application()
     dashboard = dashboard_directory()
     async def field_handler(request):
-        field = node.field_snapshot(request.query.get('revision'))
+        try:
+            after = float(request.query['trail_after']) if 'trail_after' in request.query else None
+        except ValueError:
+            raise web.HTTPBadRequest(text='Invalid trail cursor')
+        field = node.field_snapshot(request.query.get('revision'), after)
         if field is None:
             raise web.HTTPServiceUnavailable(text='Waiting for field recorder')
         return web.json_response(field, headers={'Cache-Control': 'no-store'})

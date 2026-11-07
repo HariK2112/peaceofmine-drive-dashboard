@@ -332,33 +332,81 @@ let historyStream = null;
 let historyCursor = 0;
 let historyTime = 0;
 let historyRequest = false;
-let detectorPoints = [];
+let detectorPoints = []; // Exact samples from the car, aged relative to historyTime.
+let backfillReceivedAt = 0;
+let liveReceivedAt = 0;
+let liveDetectorPoints = null;
+let liveDetectorSeq = null;
+
+function receiveDetectorStream(sensor, now) {
+  if (sensor.history_stream !== historyStream) {
+    historyStream = sensor.history_stream;
+    historyCursor = historyTime = backfillReceivedAt = liveReceivedAt = 0;
+    detectorPoints = [];
+    liveDetectorPoints = liveDetectorSeq = null;
+    queueMicrotask(refreshDetectorHistory);
+  }
+  sensor.history = liveDetectorPoints || detectorPoints;
+  detectorHistoryAt = liveDetectorPoints ? liveReceivedAt : backfillReceivedAt;
+  // Short HTTP gaps are already covered by the next delta. While bootstrapping
+  // or during a longer outage, display each distinct measured telemetry packet.
+  const latestRecordedAt = backfillReceivedAt - (historyTime - historyCursor) * 1000;
+  if (detectorPoints.length && now - latestRecordedAt < 1000 && !liveDetectorPoints) return;
+  const packet = sensor.packet;
+  const adc = packet?.precise_adc ?? packet?.amplitude_adc;
+  if (!sensor.fresh || !Number.isFinite(packet?.seq) || packet.seq === liveDetectorSeq ||
+      !Number.isFinite(adc) || !Number.isFinite(packet.filtered_adc) || !Number.isFinite(sensor.age_ms)) return;
+  liveDetectorSeq = packet.seq;
+  if (!liveDetectorPoints) liveDetectorPoints = detectorPoints.map(point => ({...point}));
+  const elapsed = Math.max(0, (now - detectorHistoryAt) / 1000);
+  for (const point of liveDetectorPoints) point.age_s += elapsed;
+  while (liveDetectorPoints.length && liveDetectorPoints[0].age_s > 120) liveDetectorPoints.shift();
+  const age = Math.max(0, sensor.age_ms / 1000);
+  if (!liveDetectorPoints.length || age < liveDetectorPoints.at(-1).age_s) {
+    liveDetectorPoints.push({age_s: age, adc, filtered_adc: packet.filtered_adc});
+  }
+  sensor.history = liveDetectorPoints;
+  liveReceivedAt = detectorHistoryAt = now;
+}
+
 async function refreshDetectorHistory() {
   const stream = state.detector?.sensor?.history_stream;
   if (!state.connected || !stream || historyRequest || document.hidden) return;
   historyRequest = true;
+  // A new browser can need two minutes of history over the field link.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), historyCursor ? 5000 : 20000);
   try {
-    const query = new URLSearchParams({stream, after:String(stream === historyStream ? historyCursor : 0)});
-    const response = await fetch('/api/detector-history?' + query, {cache:'no-store', signal:AbortSignal.timeout(5000)});
+    const query = new URLSearchParams({stream, after:String(historyCursor)});
+    const response = await fetch('/api/detector-history?' + query, {cache:'no-store', signal:controller.signal});
     if (!response.ok) return;
     const batch = await response.json();
-    if (batch.stream !== stream || state.detector?.sensor?.history_stream !== stream) return;
-    if (stream !== historyStream) { detectorPoints = []; historyCursor = 0; historyStream = stream; }
+    if (batch.stream !== stream || state.detector?.sensor?.history_stream !== stream ||
+        !Number.isFinite(batch.now) || !Array.isArray(batch.points)) return;
     const elapsed = batch.now - historyTime;
     detectorPoints = detectorPoints.filter(p => p.age_s + elapsed <= 120);
     for (const point of detectorPoints) point.age_s += elapsed;
     for (const [stamp, adc, filtered_adc] of batch.points) {
+      if (stamp <= historyCursor || ![stamp, adc, filtered_adc].every(Number.isFinite)) continue;
       detectorPoints.push({age_s:batch.now-stamp, adc, filtered_adc});
       historyCursor = stamp;
     }
     historyTime = batch.now;
+    // Keep a newer live trace when a receiver or gateway returns an empty or
+    // stale batch. Once it catches up, use its exact, deduplicated history.
+    if (liveDetectorPoints && (!historyCursor || batch.now - historyCursor > 1) &&
+        state.detector.sensor.fresh) return;
+    liveDetectorPoints = null;
+    backfillReceivedAt = detectorHistoryAt = performance.now();
     state.detector.sensor.history = detectorPoints;
-    detectorHistoryAt = performance.now();
-  } catch { /* The next poll resumes from the same cursor. */ }
-  finally { historyRequest = false; }
+  } catch { /* Received packets continue to draw while the history request retries. */ }
+  finally { clearTimeout(timeout); historyRequest = false; }
 }
 
 setInterval(refreshDetectorHistory, 400);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshDetectorHistory();
+});
 
 function connect() {
   clearTimeout(reconnectTimer);
@@ -448,7 +496,8 @@ function connect() {
     if (recoveringControl) setConnection(true, 'Raspberry Pi connected');
     const sensor = message.detector?.sensor;
     if (sensor) {
-      if (Object.hasOwn(sensor, 'history')) {
+      if (sensor.history_stream) receiveDetectorStream(sensor, lastTelemetryAt);
+      else if (Object.hasOwn(sensor, 'history')) {
         if (Array.isArray(sensor.history)) detectorHistoryAt = lastTelemetryAt - Math.max(0, sensor.history_age_s ?? 0) * 1000;
       } else sensor.history = state.detector.sensor?.history;
     }
@@ -457,6 +506,10 @@ function connect() {
     } else if (Array.isArray(message.probe?.contact_samples)) {
       pressureSource = message.probe.contact_samples;
       pressureReceivedAt = lastTelemetryAt - Math.max(0, message.probe.history_age_s ?? 0) * 1000;
+    }
+    if (recoveringControl) {
+      observedDescent = null;
+      lastSeenProbeResultTime = message.probe?.last_result?.timestamp || 0;
     }
     Object.assign(state, message);
     state.connected = true;
@@ -541,7 +594,7 @@ function updatePower() {
 let targetLog = [];
 
 let lastSeenProbeResultTime = 0;
-let contactAlertPlayed = false;
+let observedDescent = null;
 let probeAlertTimeout = null;
 let audioCtx = null;
 
@@ -632,7 +685,7 @@ function updateSearchAlert(now) {
   const settings = preferences.searchAlert;
   const detector = state.detector;
   const live = state.connected && detector.fresh !== false && detector.sensor?.fresh !== false;
-  const suppressed = Boolean(state.inspection?.active || state.probe?.cycle_active);
+  const suppressed = Boolean(state.drive.calibrating || state.inspection?.active || state.probe?.active || state.probe?.cycle_active);
   const signal = detector.signal_ratio * 100;
   const shared = state.search_alert;
   if (shared) {
@@ -741,7 +794,9 @@ function operationBlock(allowManualTarget = false) {
 function probeActionBlock(allowManualTarget = false) {
   const blocked = operationBlock(allowManualTarget);
   if (blocked) return blocked;
-  if (state.probe.ready !== true || !Number.isFinite(state.probe.depth_mm) || !Number.isFinite(state.probe.max_depth_mm) || state.probe.max_depth_mm <= 0) return 'Home and calibrate the probe in Setup → Probe.';
+  if (state.actuators?.probe?.connected === false) return 'Waiting for probe encoder telemetry.';
+  if (!Number.isFinite(state.probe.max_depth_mm) || state.probe.max_depth_mm <= 0) return 'Save the measured travel in Setup → Probe.';
+  if (!state.probe.ready || !Number.isFinite(state.probe.depth_mm)) return 'Waiting for probe encoder telemetry.';
   if (state.probe.fault) return 'Clear the probe fault in Setup → Probe.';
   return '';
 }
@@ -781,22 +836,24 @@ function checkProbeCycleState() {
   const alertBadge = $('probe-cycle-alert-badge');
   const alertText = $('probe-cycle-alert-text');
 
-  // Live spike alert during cycle
-  if (!probe.cycle_active) contactAlertPlayed = false;
-  if (probe.cycle_active && probe.cycle_phase === 'DESCENDING' && !probe.contact_detected && !probe.adc_contact_state?.spike_detected) {
-    if (alertEl) alertEl.classList.add('hidden');
-  }
-  if (probe.cycle_active && (probe.contact_detected || probe.adc_contact_state?.spike_detected)) {
-    if (alertEl) alertEl.classList.remove('hidden');
-    if (alertBadge) {
-      alertBadge.textContent = 'CONTACT TRIGGER';
-      alertBadge.className = 'badge active';
+  if (probe.cycle_active && probe.cycle_phase === 'DESCENDING') {
+    observedDescent = probe.cycle_started_at;
+    alertEl?.classList.add('hidden');
+    if (probeAlertTimeout) clearTimeout(probeAlertTimeout);
+  } else {
+    if (probe.cycle_active && probe.contact_detected === true && Number.isFinite(probe.contact_depth_mm)) {
+      alertEl?.classList.remove('hidden');
+      if (alertBadge) {
+        alertBadge.textContent = 'CONTACT ON DESCENT';
+        alertBadge.className = 'badge active';
+      }
+      if (alertText) alertText.textContent = `Hit at ${probe.contact_depth_mm.toFixed(1)} mm on descent. Retracting.`;
+      if (state.connected && !document.hidden && Number.isFinite(observedDescent) &&
+          observedDescent === probe.cycle_started_at) playContactAlertSound();
+    } else if (probe.cycle_active) {
+      alertEl?.classList.add('hidden');
     }
-    if (alertText) {
-      const depthStr = Number.isFinite(probe.contact_depth_mm) ? `${probe.contact_depth_mm.toFixed(1)} mm` : `${Math.round(probe.depth_mm || 0)} mm`;
-      alertText.textContent = `Contact trigger at ${depthStr}. Retracting probe.`;
-    }
-    if (!contactAlertPlayed) { playContactAlertSound(); contactAlertPlayed = true; }
+    observedDescent = null;
   }
 
   // Completed result
@@ -806,18 +863,17 @@ function checkProbeCycleState() {
     if (lastRes.contact) {
       if (alertEl) alertEl.classList.remove('hidden');
       if (alertBadge) {
-        alertBadge.textContent = 'CONTACT TRIGGER';
+        alertBadge.textContent = 'CONTACT ON DESCENT';
         alertBadge.className = 'badge active';
       }
       if (alertText) {
         alertText.textContent = `Contact trigger at ${lastRes.contact_depth_mm ?? '—'} mm. Probe retracted.`;
       }
-      playContactAlertSound();
-      showNotice(`Probe contact trigger at ${lastRes.contact_depth_mm} mm`);
+
     } else if (lastRes.status === 'CLEAR') {
       if (alertEl) alertEl.classList.remove('hidden');
       if (alertBadge) {
-        alertBadge.textContent = 'NO CONTACT TRIGGER';
+        alertBadge.textContent = 'DEPTH REACHED';
         alertBadge.className = 'badge safe';
       }
       if (alertText) {
@@ -936,6 +992,67 @@ function startInspection(action) {
   send(command);
 }
 
+function returningProbePoint(inspection, probe) {
+  if (!state.connected || inspection.phase !== 'PROBING' || !inspection.active || !inspection.probe_goal_id
+      || probe.cycle_goal_id !== inspection.probe_goal_id || !probe.cycle_active || probe.cycle_phase !== 'RETRACTING') return null;
+  const angle = inspection.probe_angles_deg?.[inspection.completed];
+  if (!Number.isFinite(angle) || inspection.completed !== inspection.points?.length) return null;
+  if (probe.contact_detected === false) return {angle_deg:angle, status:'CLEAR', returning:true};
+  if (probe.contact_detected === true && Number.isFinite(probe.contact_depth_mm) && probe.contact_depth_mm >= 0)
+    return {angle_deg:angle, status:'CONTACT', contact_depth_mm:probe.contact_depth_mm, returning:true};
+  return null;
+}
+
+function renderProbeScanMap(inspection, points) {
+  const map = $('probe-scan-map');
+  const plan = Array.isArray(inspection.probe_angles_deg) && inspection.probe_angles_deg.length
+    ? inspection.probe_angles_deg : points.map(point => point?.angle_deg);
+  const target = inspection.probe_target_depth_mm;
+  $('probe-map-depth').textContent = Number.isFinite(target) ? `Target ${Number(target.toFixed(1))} mm` : '';
+  map.toggleAttribute('hidden', !plan.length);
+  $('probe-map-empty').hidden = !!plan.length;
+  map.replaceChildren();
+  if (!plan.length) return;
+
+  const make = (tag, attributes, content) => {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [name, value] of Object.entries(attributes)) node.setAttribute(name, value);
+    if (content !== undefined) node.textContent = content;
+    return node;
+  };
+  // Discrete samples are spread across the fan in angle order, as in the legend.
+  const at = (index, radius) => {
+    const direction = plan.length === 1 ? 0 : (0.5 - index / (plan.length - 1)) * 1.9;
+    return [180 + radius * Math.sin(direction), 164 - radius * Math.cos(direction)];
+  };
+  for (const radius of [86, 108, 130]) {
+    const from = at(0, radius), to = at(plan.length - 1, radius);
+    map.append(make('path', {class:'scan-ring', d:`M${from} A${radius} ${radius} 0 0 0 ${to}`}));
+  }
+  const legend = [];
+  plan.forEach((angle, index) => {
+    const point = points[index];
+    const validAngle = Number.isFinite(angle);
+    const matches = validAngle && Number.isFinite(point?.angle_deg) && Math.abs(angle - point.angle_deg) < .001;
+    const hit = matches && point.status === 'CONTACT' && Number.isFinite(point.contact_depth_mm) && point.contact_depth_mm >= 0;
+    const clear = matches && point.status === 'CLEAR';
+    const status = hit ? `Early contact at ${point.contact_depth_mm.toFixed(1)} mm` : clear ? 'Target reached'
+      : !point && inspection.phase === 'PROBING' ? 'Pending' : 'Unknown';
+    const label = validAngle ? `${Number(angle.toFixed(1))}°` : '—';
+    const description = `${validAngle ? label : 'Angle unavailable'}: ${status}${point?.returning ? ' · retracting' : ''}`;
+    legend.push(description);
+    const [x, y] = at(index, 130);
+    const mark = make('g', {'data-result': hit ? 'contact' : clear ? 'clear' : 'unknown'});
+    mark.append(make('title', {}, description));
+    mark.append(make('path', {class:'scan-ray', d:`M${at(index, 72)} L${x},${y}`}));
+    mark.append(hit ? make('path', {class:'map-contact', d:`M${x},${y-6} l6,6 -6,6 -6,-6 z`})
+      : make('circle', {class:clear ? 'map-clear' : 'map-unknown', cx:x, cy:y, r:5}));
+    mark.append(make('text', {x, y:y-12}, label));
+    map.append(mark);
+  });
+  map.setAttribute('aria-label', 'Probe scan map. ' + legend.join('. '));
+}
+
 let inspectionPointsKey = '';
 let inspectionTaskKey = '';
 function renderInspection() {
@@ -977,14 +1094,17 @@ function renderInspection() {
   $('mode-probe-btn').dataset.active = String(phase === 'PROBING');
   const points = Array.isArray(inspection.points) ? inspection.points : [];
   $('inspection-points').parentElement.hidden = !points.length;
-  const key = JSON.stringify(points);
+  const returning = returningProbePoint(inspection, probe);
+  const mapPoints = returning ? [...points, returning] : points;
+  const key = JSON.stringify([mapPoints, inspection.probe_angles_deg, inspection.probe_target_depth_mm, phase]);
   if (key === inspectionPointsKey) return;
   inspectionPointsKey = key;
+  renderProbeScanMap(inspection, mapPoints);
   $('inspection-points').replaceChildren(...points.map(point => {
     const item = document.createElement('li');
-    const angle = Number.isFinite(point.angle_deg) ? `${point.angle_deg.toFixed(1)}°` : 'Angle unavailable';
-    const status = ({CONTACT: 'Contact trigger', CLEAR: 'No contact trigger'})[point.status] || point.status;
-    const depth = point.status === 'CONTACT' && Number.isFinite(point.contact_depth_mm) ? ` · ${point.contact_depth_mm.toFixed(1)} mm` : '';
+    const angle = Number.isFinite(point?.angle_deg) ? `${point.angle_deg.toFixed(1)}°` : 'Angle unavailable';
+    const status = point?.status === 'CLEAR' ? 'Target reached' : point?.status === 'CONTACT' && Number.isFinite(point.contact_depth_mm) && point.contact_depth_mm >= 0 ? 'Early contact' : 'Unknown result';
+    const depth = status === 'Early contact' ? ` · ${point.contact_depth_mm.toFixed(1)} mm` : '';
     item.textContent = `${angle} · ${status}${depth}`;
     return item;
   }));
@@ -1148,7 +1268,7 @@ function updateHud() {
   setRange($('probe-slider'), 0, probe.max_depth_mm || 1, .1);
   if (!activeSliders.has('probe-slider')) $('probe-slider').value = probe.target_mm;
   if (!state.connected) drawProbeMotion(probe.depth_mm);
-  $('probe-status').textContent = probe.ready !== true ? 'SETUP REQUIRED' : probe.fault ? 'FAULT' : probe.cycle_active ? (probe.cycle_phase === 'DESCENDING' ? 'PROBING' : 'RETRACTING') : probe.holding ? 'HOLDING' : probe.depth_mm > 2 ? 'DEPLOYED' : 'STOWED';
+  $('probe-status').textContent = probe.fault ? 'FAULT' : probe.ready !== true ? (state.actuators?.probe?.connected === false ? 'OFFLINE' : probe.max_depth_mm > 0 ? 'WAITING' : 'TRAVEL NEEDED') : probe.cycle_active ? (probe.cycle_phase === 'DESCENDING' ? 'PROBING' : 'RETRACTING') : probe.holding ? 'HOLDING' : probe.depth_mm > 2 ? 'DEPLOYED' : 'STOWED';
   $('probe-status').title = probe.reason || '';
   $('probe-status').className = `badge ${probe.fault || (probe.cycle_active && probe.contact_detected) ? 'active' : probe.cycle_active ? 'active' : probe.depth_mm > 2 ? 'safe' : 'neutral'}`;
 
@@ -2118,7 +2238,7 @@ function drawPressureHistory(now = performance.now(), animate = false) {
         y: {min: 0, max: 10, ticks: {color: '#57d3a8'}},
         current: {position: 'right', min: 0, max: 50, grid: {drawOnChartArea: false}, ticks: {color: '#ffb86b'}}}},
   });
-  const samples = probe.contact_samples ?? (probe.pressure_samples ?? probe.pressure_history.map((ratio, i, all) =>
+  const samples = probe.contact_samples ?? (probe.pressure_samples ?? (probe.pressure_history || []).map((ratio, i, all) =>
     ({x: (i - all.length + 1) * .2, y: ratio * 100}))).map(p => ({x: p.x, load: p.y, current: null}));
   ['load', 'current'].forEach((field, index) => {
     const points = [];
@@ -2757,8 +2877,29 @@ function detectorAxis(sensor, elapsed, factor = 1) {
   return Number.isFinite(low) ? signalBounds(low, high, DETECTOR_MIN_SPAN_ADC * factor, 0, full) : {min: 0, max: full};
 }
 
+function setDetectorTrace(dataset, points, gap) {
+  // Preserve gaps on a slow link. Isolated readings need a visible dot even
+  // when neither neighbour is close enough to draw a line segment.
+  let radii;
+  for (let i = 0; i < points.length; i++) {
+    if ((i && points[i].x - points[i-1].x <= gap) ||
+        (i + 1 < points.length && points[i+1].x - points[i].x <= gap)) continue;
+    radii ??= Array(points.length).fill(0);
+    radii[i] = 2;
+  }
+  dataset.data = points;
+  dataset.pointRadius = radii || 0;
+}
+
+function detectorPlotVisible(id, chart) {
+  const holder = $(id).parentElement;
+  if (!holder.clientWidth || !holder.clientHeight) return false;
+  if (chart && (!chart.width || !chart.height)) chart.resize();
+  return true;
+}
+
 function drawDetectorHistory(now = performance.now(), animate = false) {
-  if (!$('detector-history').getClientRects().length) return;
+  if (!detectorPlotVisible('detector-history', detectorChart)) return;
   if (animate && detectorChart && scrollTimeChart(detectorChart, now)) return;
   const sensor = state.detector.sensor || {};
   const elapsed = Math.max(0, (now - detectorHistoryAt) / 1000);
@@ -2776,7 +2917,7 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
         y: {title: {display: true, text: 'Volts', color: '#bad0ca'}, ticks: {color: '#bad0ca', maxTicksLimit: 4}, grid: {color: '#24404a'}},
       }},
   });
-  detectorChart.data.datasets[0].data = samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc * reference / 255}));
+  setDetectorTrace(detectorChart.data.datasets[0], samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc * reference / 255})), .25);
   if (Number.isFinite(reference) && reference > 0) {
     Object.assign(detectorChart.options.scales.y, detectorAxis(sensor, elapsed, reference / 255));
   }
@@ -2786,7 +2927,7 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
 }
 
 function drawDetectorDiagnostics(now = performance.now(), animate = false) {
-  if (!$('detector-diagnostics-history').getClientRects().length) return;
+  if (!detectorPlotVisible('detector-diagnostics-history', detectorDiagnosticsChart)) return;
   if (animate && detectorDiagnosticsChart && scrollTimeChart(detectorDiagnosticsChart, now)) return;
   const sensor = state.detector.sensor || {};
   const elapsed = Math.max(0, (now - detectorHistoryAt) / 1000);
@@ -2797,7 +2938,7 @@ function drawDetectorDiagnostics(now = performance.now(), animate = false) {
     detectorDiagnosticsChart = new Chart($('detector-diagnostics-history'), {
       type: 'line',
       data: {datasets: [
-        {label: 'Filtered ADC', yAxisID: 'adc', borderColor: '#6edcc7', borderWidth: 1.5, data: []},
+        {label: 'Filtered ADC', yAxisID: 'adc', borderColor: '#6edcc7', borderWidth: 1.5, pointRadius: 0, data: []},
         {label: 'Angle (deg)', yAxisID: 'angle', borderColor: '#b9a0ef', borderWidth: 1.5, data: []},
         {label: 'Zero', yAxisID: 'adc', borderColor: '#efbb63', borderDash: [4, 4], borderWidth: 1, data: []},
         {label: 'Trigger', yAxisID: 'adc', borderColor: '#ed7770', borderDash: [4, 4], borderWidth: 1, data: []},
@@ -2814,7 +2955,7 @@ function drawDetectorDiagnostics(now = performance.now(), animate = false) {
         }},
     });
   }
-  detectorDiagnosticsChart.data.datasets[0].data = samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc}));
+  setDetectorTrace(detectorDiagnosticsChart.data.datasets[0], samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc})), .25);
   while (detectorAngles.length && now - detectorAngles[0].at > 30000) detectorAngles.shift();
   detectorDiagnosticsChart.data.datasets[1].data = detectorAngles.map(p => ({x: (p.at - now) / 1000, y: p.angle}));
   for (const [index, value] of [[2, zero], [3, trigger]]) {
@@ -2870,7 +3011,7 @@ function drawMetalHistory(animate = false) {
       },
     });
   }
-  metalChart.data.datasets[0].data = samples.map(sample => ({x: -sample.age_s - elapsed, y: sample.filtered_adc * reference / 255}));
+  setDetectorTrace(metalChart.data.datasets[0], samples.map(sample => ({x: -sample.age_s - elapsed, y: sample.filtered_adc * reference / 255})), .5);
   metalChart.data.datasets[1].data = Number.isFinite(baseline)
     ? [{x: -seconds, y: baseline}, {x: 0, y: baseline}] : [];
   metalChart.data.datasets[2].data = Number.isFinite(trigger)

@@ -76,11 +76,15 @@ class OperatorWebBridge(Node):
     def _field_log(self, value):
         self._field_entries = value
 
-    def field_snapshot(self, revision):
+    def field_snapshot(self, revision, trail_after=None):
         with self._lock:
             if self._field_state is None:
                 return None
             field = dict(self._field_state)
+            trail = field.get('trail', [])
+            if trail_after is not None and trail and trail[0][0] <= trail_after <= trail[-1][0]:
+                field['trail'] = [point for point in trail if point[0] > trail_after]
+                field['trail_from'] = trail[0][0]
             if time.monotonic() - self._field_at > 2:
                 field.update(fix=None, receiver='Field recorder offline')
             if self._field_entries.get('revision') != revision:

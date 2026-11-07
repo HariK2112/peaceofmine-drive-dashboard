@@ -21,7 +21,9 @@ class ProbeController(ActuatorController):
         self.reverse = False
         self.extension_sign = -1
         self.home_position = None
-        self.home_status = 'Not homed'
+        self.home_status = 'Waiting for probe encoder'
+        self.home_servo_id = None
+        self.home_range = None
         self.motion = None
         self.home_hold = None
         self.target = 0.
@@ -62,8 +64,8 @@ class ProbeController(ActuatorController):
     def apply_direction(self, value):
         reverse = probe_calibration.validate_direction(value)['reverse']
         if reverse != self.reverse:
-            self.on_disconnect()
-            self.home_status = 'Direction changed; home again'
+            self.home_position = None
+            self.home_status = 'Direction changed; waiting for encoder'
         self.reverse = reverse
         self.extension_sign = 1 if reverse else -1
 
@@ -109,9 +111,25 @@ class ProbeController(ActuatorController):
     def calibration(self):
         return None
 
+    def driver_cb(self, msg):
+        super().driver_cb(msg)
+        if self.connected():
+            sample = self.telemetry
+            bounds = (sample.minimum, sample.maximum)
+            if self.home_position is None or bounds != self.home_range:
+                if sample.minimum < sample.maximum and sample.minimum <= sample.position <= sample.maximum:
+                    self.set_home(sample.position, 'Assuming probe is at the top · zero set')
+
+    def set_home(self, position, status):
+        self.home_position = position
+        self.home_servo_id = self.ident
+        self.home_range = (self.telemetry.minimum, self.telemetry.maximum)
+        self.home_status = status
+
     def on_disconnect(self):
-        self.home_position = None
-        self.home_status = 'Home required after driver loss'
+        if self.home_servo_id != self.ident:
+            self.home_position = None
+            self.home_status = 'Waiting for probe encoder'
 
     def stop(self, reason='Stopped; torque released', success=False):
         if self.cycle_active:
@@ -120,8 +138,7 @@ class ProbeController(ActuatorController):
             if not success:
                 self.last_probe_result = dict(status='ABORTED', reason=reason, timestamp=time.time())
         if self.motion == 'home' and not success:
-            self.home_position = None
-            self.home_status = 'Homing interrupted; zero not set'
+            self.home_status = 'Homing stopped · previous zero retained' if self.home_position is not None else 'Waiting for probe encoder'
         self.motion = None
         super().stop(reason, success)
 
@@ -134,9 +151,9 @@ class ProbeController(ActuatorController):
             raise ValueError('Home load threshold must be 10..60 percent')
         target = self.telemetry.minimum if self.reverse else self.telemetry.maximum
         self.start(target, self.telemetry.minimum, self.telemetry.maximum, load=threshold)
-        self.home_hold, self.home_position = hold, None
+        self.home_hold = hold
         self.motion, self.started = 'home', time.monotonic()
-        self.home_status, self.lifecycle = 'Seeking top; release to stop', 'HOMING'
+        self.home_status, self.lifecycle = 'Seeking top · release at the top to set zero', 'HOMING'
 
     def start_probe_cycle(self, depth):
         self.reload_contact()
@@ -160,6 +177,7 @@ class ProbeController(ActuatorController):
         self.cycle_active = True
         self.cycle_phase = 'DESCENDING'
         self.cycle_target_depth = float(depth)
+        self.at_cycle_depth = False
         self.contact_detected = False
         self.contact_depth_mm = None
         self.cycle_timeout = max(60., 10+2*abs(self.operation.target-self.telemetry.position)*360/(4096*self.operation.speed*.684))
@@ -186,7 +204,13 @@ class ProbeController(ActuatorController):
                 and abs(self.telemetry.speed_deg_s) <= 3*.684)
 
     def special_command(self, action, command):
-        if action == 'home':
+        if action == 'home_release':
+            expired_hold = not self.operation and self.reason == 'Held command expired; release and start again'
+            if self.home_hold and command.get('hold_id') == self.home_hold and (self.motion == 'home' or expired_hold):
+                position = self.telemetry.position
+                self.stop('Home hold released', success=True)
+                self.set_home(position, 'Zero set on operator release')
+        elif action == 'home':
             if command.get('held') is not True or not self.interlock():
                 raise ValueError('Homing requires a held command, RC permission and no fault')
             hold = command.get('hold_id')
@@ -263,7 +287,7 @@ class ProbeController(ActuatorController):
         if self.motion == 'home' and outcome == 'load_stop':
             position = self.telemetry.position
             self.stop('Home reached; torque released', success=True)
-            self.home_position, self.home_status = position, 'Homed; verify top visually'
+            self.set_home(position, 'Zero set at top load')
         else:
             self.stop(message or outcome)
 
@@ -299,7 +323,12 @@ class ProbeController(ActuatorController):
                 if not contact['enabled'] or not contact['fresh']:
                     self.stop('Contact input lost; probe result unknown')
                     return
-                detected = contact['detected'] is True
+                if self.telemetry.operation_id != self.operation.operation_id:
+                    return
+                remaining_ticks = self.extension_sign * (self.operation.target - self.telemetry.position)
+                if remaining_ticks <= self.arrival_tolerance:
+                    self.at_cycle_depth = True
+                detected = contact['detected'] is True and not self.at_cycle_depth
                 if detected or (self.target_reached()
                                 and self.extension_sign*(self.telemetry.position-self.home_position) > 0):
                     self.contact_detected = detected
@@ -349,7 +378,9 @@ class ProbeController(ActuatorController):
             if self.action_handle:
                 self.command_at = time.monotonic()
             if abs(self.telemetry.position-self.operation.target) <= 3:
-                self.stop('Encoder limit reached without confirmed home contact')
+                position = self.telemetry.position
+                self.stop('Reached upper encoder limit', success=True)
+                self.set_home(position, 'Zero set at upper encoder limit')
 
     def behavior_state(self):
         now = time.monotonic()
@@ -378,6 +409,9 @@ class ProbeController(ActuatorController):
                 max_depth_mm=self.extension['max_extension_mm'] if self.extension else None,
                 depth_mm=depth, target_mm=self.target, active=self.motion=='target', moving=self.motion=='target' and self.lifecycle!='HOLDING', holding=self.lifecycle=='HOLDING',
                 cycle_active=self.cycle_active, cycle_phase=self.cycle_phase, cycle_target_depth=self.cycle_target_depth,
+                cycle_goal_id=(bytes(self.action_handle.goal_id.uuid).hex()
+                               if self.cycle_active and self.action_probe_cycle and self.action_handle else None),
+                cycle_started_at=self.started if self.cycle_active else None,
                 contact_detected=self.contact_detected, contact_depth_mm=self.contact_depth_mm, last_result=self.last_probe_result,
                 reason=self.reason, fault=self.fault, pressure_ratio=ratio, pressure_window_s=30,
                 pressure_samples=[dict(x=t-now,y=v*100) for t,v in self.history],

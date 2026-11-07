@@ -176,7 +176,7 @@ class OperatorControl(Node):
         level = self._alert_options['level']
         live = (self._alert_options['enabled'] and now - self._inspection_detector_at < .5 and
                 reading.get('fresh') and isinstance(ratio,(int,float)) and math.isfinite(ratio) and
-                not self._inspection.active and not self._probe_state.get('probe', {}).get('cycle_active'))
+                not self._calibrating and not self._inspection.active and not self._probe_active())
         if not live:
             if alert['phase'] in ('active', 'cooling'):
                 alert['cleared_at'] = time.time()
@@ -320,8 +320,12 @@ class OperatorControl(Node):
             if (type(depth) not in (int,float) or not math.isfinite(depth)
                     or not 0 < depth <= probe.get('max_depth_mm', 0)):
                 raise ValueError('Choose a positive probe depth within its calibrated travel')
-            if self._probe_fault or not probe.get('ready') or time.monotonic()-self._probe_state_at >= .5:
-                raise ValueError('Home and calibrate the probe before scanning')
+            if self._probe_fault:
+                raise ValueError('Probe fault active')
+            if time.monotonic()-self._probe_state_at >= .5 or not self._probe_state.get('connected'):
+                raise ValueError('Waiting for probe encoder telemetry')
+            if not probe.get('ready'):
+                raise ValueError('Save the measured probe travel in Setup → Probe')
             if not self._inspection_clients['probe'].server_is_ready():
                 raise ValueError('Probe action server unavailable')
             self._stop_motion_locked(stop_inspection=False)
@@ -692,7 +696,7 @@ class OperatorControl(Node):
             self._last_probe_log = stamp
             status = result.get('status', 'UNKNOWN')
             self._log_field_event('CONTACT TRIGGER' if result.get('contact') else 'PROBE ' + status,
-                                  'contact' if result.get('contact') else 'clear', result.get('contact_depth_mm'),
+                                  'contact' if result.get('contact') else 'clear' if status == 'CLEAR' else 'unknown', result.get('contact_depth_mm'),
                                   f'probe-{stamp}', stamp)
         except (TypeError, ValueError, AttributeError):
             self.get_logger().warning('Invalid probe result')
@@ -733,6 +737,9 @@ class OperatorControl(Node):
             joy = {**self._joy, 'seen': joy_live}
             if self._last_joy:
                 joy['age_ms'] = round((now - self._last_joy) * 1000)
+            inspection = self._inspection.snapshot()
+            if self._inspection.pending == 'probe' and self._inspection_goal is not None:
+                inspection['probe_goal_id'] = bytes(self._inspection_goal.goal_id.uuid).hex()
             return {
                 'type': 'state',
                 'safety': self._rc_safety.snapshot(),
@@ -761,7 +768,7 @@ class OperatorControl(Node):
                 'pump_active': self._pump_active,
                 'marking': dict(settings=self._marking, mode=self._pump_mode,
                                 output_percent=self._pump_output, last_shot_request=self._last_shot_request),
-                'inspection': self._inspection.snapshot(),
+                'inspection': inspection,
                 'search_alert': dict(self._search_alert, server_time=time.time()),
                 'robot': {**self._pose, 'speed_mps': self._speed, 'stationary': self._stationary(),
                           'odometry_fresh': now - self._odometry_at < .5,
@@ -848,6 +855,9 @@ class OperatorControl(Node):
                 if self._inspection.active:
                     self._stop_motion_locked()
                 return self._actuator_command(command)
+            elif message_type == 'arm_servo' and payload.get('role') == 'probe' and payload.get('action') == 'home_release':
+                return self._actuator_command(dict(action='home_release', role='probe', hold_id=payload.get('hold_id'),
+                                                   request_id=payload.get('request_id')))
             elif message_type == 'pump_manual':
                 return self._pump_command(payload, safety)
             elif message_type == 'rc_drive_enable':

@@ -174,6 +174,13 @@ class InspectionTest(unittest.TestCase):
         self.flow.probe(-45.,45.,50.)
         self.assertEqual([target for kind,target in self.flow.queue if kind=='position'],[33.,38.,43.,45.])
         self.assertEqual(self.flow.total,4)
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [78., 83., 88., 90.])
+        self.assertEqual(self.flow.snapshot()['probe_target_depth_mm'], 50.)
+        self.flow.stop('Interrupted')
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [78., 83., 88., 90.])
+        self.flow.confirm(-45., 45., 25.)
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [])
+        self.assertIsNone(self.flow.snapshot()['probe_target_depth_mm'])
 
     def test_target_outside_probe_reach_requires_repositioning(self):
         self.flow.confirmed_angle=-20.
