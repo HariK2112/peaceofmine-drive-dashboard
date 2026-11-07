@@ -13,6 +13,11 @@ Bring your car dashboard (`src/peaceofmine_operator/dashboard/`) into this proje
 - **Less confusing:** related controls are grouped under clear headings. Every button shows its blocking reason in the same place and the same way. Diagnostics (drive, probe, detector) fold into tabs inside one panel instead of three separate panels.
 - **Settings dialog:** restyled to match, with the same tabs and fields.
 
+## Syncing with your repository
+- Lovable can't sync with PeaceOfMine directly. Connecting to GitHub always creates a brand-new repository.
+- I'll keep a read-only copy of the whole repo in this project. That way I can read the ROS nodes, topics, `web_bridge.py` and message formats, and the dashboard and pretend-car data will match what the car actually sends.
+- Getting changes back: connect this project to a new GitHub repository, then copy `public/dashboard/` into `src/peaceofmine_operator/dashboard/` in PeaceOfMine. One `cp`, or a small script I can add.
+
 ## Out of scope
 The car-side Python/ROS code, message formats and safety logic. No behavior changes, only layout, styling and presentation markup.
 
