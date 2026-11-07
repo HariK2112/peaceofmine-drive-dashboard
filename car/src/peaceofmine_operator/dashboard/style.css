@@ -120,14 +120,15 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
 .tab-count { margin-left: .35rem; color: var(--muted); font-weight: 500; font-size: var(--fs-xs); }
 .dock-pane { min-height: 0; min-width: 0; }
 .dock-pane > .panel { height: 100%; overflow: auto; }
-.dock-overview { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr); gap: var(--gap); height: 100%; }
-.dock-overview > .panel { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
-.dock-overview .map-panel #map-view { flex: 1 1 auto; min-height: 4rem; height: auto; width: 100%; }
+.dock-search { display: grid; grid-template-columns: minmax(0, 1fr); height: 100%; }
+.dock-search > .panel { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
 .detector-diagnostics-panel { display: grid; grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr); gap: .5rem 1rem; align-content: start; }
 .detector-diagnostics-panel > h2, .detector-diagnostics-panel > .signal-value, .detector-diagnostics-panel > .meter, .detector-diagnostics-panel > #radar-view { grid-column: 1; }
 .detector-diagnostics-panel > .detector-diagnostics-chart { grid-column: 2; grid-row: 1 / span 5; height: 100%; min-height: 10rem; margin: 0; }
 .detector-diagnostics-panel > details, .detector-diagnostics-panel > button { grid-column: 1 / -1; justify-self: start; }
-.drive-diagnostics, .probe-diagnostics-panel { columns: 2 18rem; column-gap: 1.25rem; }
+.dock-vehicle { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gap); height: 100%; }
+.dock-vehicle > .panel { min-height: 0; overflow: auto; }
+.drive-diagnostics, .probe-diagnostics-panel { columns: 2 18rem; column-gap: var(--pad); }
 .drive-diagnostics > *, .probe-diagnostics-panel > * { break-inside: avoid; }
 
 /* Smaller or shorter screens fall back to a scrolling page. */
@@ -1130,3 +1131,79 @@ input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
 .settings-tab { background: transparent; border: 1px solid transparent; color: var(--muted); }
 .settings-tab.active { background: var(--surface-2); color: var(--text); border-color: var(--line-strong); box-shadow: inset 0 -2px 0 var(--accent); }
 fieldset { border: 1px solid var(--line); border-radius: var(--radius); }
+
+
+/* ===================================================== Even spacing ===
+ * One rhythm: --gap between panels, --pad inside them, --gap between blocks
+ * inside a panel. Overrides the older per-panel margins.
+ */
+:root { --gap: .5rem; --pad: .75rem; }
+.panel > * + *, .task-workbench > * + * { margin-top: var(--gap); }
+.panel > .panel-heading, .panel > h2 { margin: 0 0 var(--gap); }
+.panel > .panel-heading + * { margin-top: 0; }
+.task-workbench > .panel-heading { margin: 0 0 var(--pad); }
+.workflow-status, .notice, #inspection-panel { margin: var(--pad) 0 0; }
+.task-controls { margin: var(--pad) 0 0; padding: var(--pad) 0 0; }
+.task-controls label { margin: var(--gap) 0 .25rem; }
+.setup-shortcuts { margin: var(--pad) 0 0; padding: var(--pad) 0 0; gap: var(--gap); }
+.probe-cycle-card { margin: var(--gap) 0 0; padding: 0; gap: var(--gap); }
+.drive-feedback { padding: 0 .25rem; }
+.dock-tabs, .drive-toolbar { margin: 0; }
+.power-summary, .power-metrics { gap: var(--gap); }
+.diagnostics-grid h2 { margin-bottom: var(--gap); }
+
+/* ===================================================== Mission stage ===
+ * Two cameras side by side. Drive & search: forward large, probe small.
+ * Probe stage: probe camera large. layout.js sets data-focus; markup order
+ * never changes. The small camera is sized from the stage height (4:3) so
+ * both cameras fill the row without empty space.
+ */
+.stage-frame { position: relative; min-height: 0; container-type: size; }
+.camera-stage { display: grid; height: 100%; grid-template-columns: minmax(0, 1fr) min(calc(100cqh * 4 / 3), 36%); grid-template-areas: "forward probe"; gap: var(--gap); }
+.camera-stage[data-focus=probe] { grid-template-areas: "probe forward"; }
+.camera-stage > .forward-camera { grid-area: forward; }
+.camera-stage > .probe-camera { grid-area: probe; }
+.camera-stage > * { margin: 0; min-width: 0; }
+.camera-stage > .viewport { height: 100%; min-height: 0; }
+.camera-swap { position: absolute; z-index: 4; top: var(--gap); right: var(--gap); min-height: 1.9rem; padding: .2rem .6rem; font-size: var(--fs-xs); background: color-mix(in srgb, var(--bg-sunken) 80%, transparent); backdrop-filter: blur(4px); }
+.probe-camera .aux-camera { position: absolute; inset: 0; width: 100%; height: 100%; right: auto; bottom: auto; aspect-ratio: auto; object-fit: cover; border: 0; border-radius: 0; box-shadow: none; background: var(--bg-sunken); }
+.probe-camera .aux-camera-label { position: absolute; top: var(--gap); left: var(--gap); right: auto; bottom: auto; }
+.probe-camera .aux-camera-latency { top: 2.4rem; left: var(--gap); right: auto; bottom: auto; }
+.camera-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: var(--gap); padding: var(--pad); text-align: center; color: var(--muted); font-size: var(--fs-sm); }
+.camera-empty strong { color: var(--text); font-size: var(--fs-md); }
+.camera-label, .aux-camera-label { padding: .25rem .5rem; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg-sunken) 80%, transparent); border: 1px solid var(--line-strong); color: var(--text); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; }
+/* the small camera hides secondary overlays (the swap button sits there) */
+.camera-stage[data-focus=probe] > .forward-camera .speed-readout,
+.camera-stage[data-focus=probe] > .forward-camera .camera-latency,
+.camera-stage[data-focus=forward] > .probe-camera .aux-camera-latency { display: none; }
+
+/* Search tab: detector chart wide, map beside it */
+.dock-search { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--gap); }
+.dock-search .map-panel #map-view { flex: 1 1 auto; min-height: 4rem; height: auto; width: 100%; }
+
+/* Compact one-line drive toolbar */
+.drive-toolbar { flex-wrap: nowrap; }
+.input-state { overflow: hidden; }
+#controller, #controller-mapping { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Probe tab: tools left, live load chart right */
+.probe-diagnostics-panel { columns: auto; display: grid; grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr); grid-template-rows: auto 1fr; gap: var(--gap) var(--pad); }
+.probe-diagnostics-panel > * { margin: 0 !important; }
+.probe-diagnostics-panel > h2 { grid-column: 1; }
+.probe-diagnostics-panel > details:not(#probe-diagnostics) { grid-column: 1; }
+.probe-diagnostics-panel > #probe-diagnostics { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
+#probe-diagnostics[open] .probe-load-chart { flex: 1 1 auto; min-height: 7rem; height: auto; }
+
+/* Header battery chip */
+.power-chip { display: inline-flex; align-items: center; gap: .45rem; min-height: 2rem; padding: .2rem .65rem; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
+.power-chip #power-chip-pct { font-family: var(--mono); color: var(--text); font-size: var(--fs-sm); }
+.power-chip[data-level=ok] #power-chip-pct { color: var(--accent); }
+.power-chip[data-level=mid] #power-chip-pct { color: var(--warn); }
+.power-chip[data-level=low] { border-color: var(--danger); }
+.power-chip[data-level=low] #power-chip-pct { color: var(--danger-text); }
+
+/* Workbench steps follow the mission order: 1 Search … 4 Mark */
+.workflow-buttons { counter-reset: step; }
+.operation-action .mode-btn { counter-increment: step; }
+.operation-action .mode-btn .mode-text::before { content: counter(step); display: inline-grid; place-items: center; width: 1.35rem; height: 1.35rem; margin-right: .6rem; border-radius: 50%; border: 1px solid var(--line-strong); font-size: var(--fs-xs); color: var(--muted); }
+.mode-btn[data-active=true] .mode-text::before { background: var(--accent); border-color: var(--accent); color: var(--bg-sunken); }

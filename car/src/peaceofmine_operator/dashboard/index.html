@@ -25,6 +25,7 @@
       <div class="header-actions">
         <div class="connection"><span id="connection-dot"></span><span id="connection">Connecting</span></div>
         <span id="rc-safety" class="badge neutral" title="PX4 safety status">RC UNKNOWN · LOCKED</span>
+        <button id="power-chip" type="button" class="power-chip" title="Battery · open Vehicle &amp; link"><span id="power-chip-pct">—</span><span id="power-chip-w">— W</span></button>
         <span id="control-owner" class="badge neutral">SPECTATING</span>
         <button id="take-control" class="primary">Take control</button>
         <button id="settings" class="quiet">Setup</button>
@@ -41,22 +42,31 @@
           <span id="arm-state" class="badge neutral">DISARMED</span>
           <button type="button" class="quiet" data-open-settings="input">Input setup</button>
         </div>
-        <section id="camera-panel" class="viewport panel" tabindex="0" aria-label="Camera view. Click to capture WASD. Escape or clicking outside releases keys.">
+        <div class="stage-frame">
+        <div id="camera-stage" class="camera-stage" data-focus="forward">
+        <section id="camera-panel" class="viewport panel forward-camera" tabindex="0" aria-label="Camera view. Click to capture WASD. Escape or clicking outside releases keys.">
         <canvas id="forward-view" aria-label="Virtual rover camera view"></canvas>
         <video id="forward-video" autoplay muted playsinline class="camera-feed hidden" aria-label="Selected forward camera"></video>
         <img id="forward-network-camera" draggable="false" class="camera-feed hidden" alt="Selected Raspberry Pi camera stream">
-        <video id="aux-video" autoplay muted playsinline class="aux-camera hidden" aria-label="Selected auxiliary camera"></video>
-        <img id="aux-network-camera" draggable="false" class="aux-camera hidden" alt="Selected Raspberry Pi auxiliary camera stream">
         <div class="camera-label" id="forward-camera-label">VIRTUAL FORWARD CAMERA</div>
         <div class="camera-latency hidden" id="forward-camera-latency">CAMERA --</div>
-        <div class="aux-camera-label hidden" id="aux-camera-label">AUX CAMERA</div>
-        <div class="aux-camera-latency hidden" id="aux-camera-latency">--</div>
         <div id="input-lock" class="input-lock hidden">CLICK CAMERA FOR INPUT</div>
         <div class="speed-readout">
           <span>ACTUAL SPEED</span>
           <strong id="speed">0.00 m/s</strong>
         </div>
       </section>
+      <section id="probe-camera-panel" class="viewport panel probe-camera" aria-label="Probe camera">
+        <video id="aux-video" autoplay muted playsinline class="aux-camera hidden" aria-label="Probe camera"></video>
+        <img id="aux-network-camera" draggable="false" class="aux-camera hidden" alt="Probe camera stream">
+        <div class="camera-label aux-camera-label hidden" id="aux-camera-label">PROBE CAMERA</div>
+        <div class="aux-camera-latency hidden" id="aux-camera-latency">--</div>
+        <div id="probe-camera-empty" class="camera-empty"><strong>Probe camera off</strong><span>Choose the probe-facing camera in Setup → Cameras.</span><button type="button" class="quiet" data-open-settings="cameras">Choose camera</button></div>
+      </section>
+        <button id="camera-swap" type="button" class="camera-swap quiet" title="Swap the large and small camera">⇄ <span id="camera-swap-label">Make probe camera large</span></button>
+      </div>
+        
+      </div>
         <div class="drive-feedback"><p id="drive-block">Take control when RC permits ROS driving.</p><p id="drive-help">Click camera for WASD · Esc releases keys · hold Space to sweep</p></div>
 
       </div>
@@ -137,7 +147,7 @@
         </details>
         <p class="setup-shortcuts"><button type="button" class="quiet" data-open-settings="arm">Arm setup</button><button type="button" class="quiet" data-open-settings="probe">Home / travel setup</button></p>
       </aside>
-      <section class="dock" aria-label="Telemetry"><nav class="dock-tabs" role="tablist" aria-label="Telemetry views"><button type="button" role="tab" class="dock-tab active" data-dock-tab="overview" aria-selected="true">Overview</button><button type="button" role="tab" class="dock-tab" data-dock-tab="detector" aria-selected="false">Detector</button><button type="button" role="tab" class="dock-tab" data-dock-tab="drive" aria-selected="false">Drive &amp; link</button><button type="button" role="tab" class="dock-tab" data-dock-tab="probe" aria-selected="false">Probe</button><button type="button" role="tab" class="dock-tab" data-dock-tab="log" aria-selected="false">Mission log <span id="mission-record-count" class="tab-count">0 entries</span></button></nav><div class="dock-pane dock-overview" data-dock-pane="overview" role="tabpanel"><section class="panel detector-panel" aria-labelledby="detector-heading">
+      <section class="dock" aria-label="Telemetry"><nav class="dock-tabs" role="tablist" aria-label="Telemetry views"><button type="button" role="tab" class="dock-tab active" data-dock-tab="overview" aria-selected="true">Search</button><button type="button" role="tab" class="dock-tab" data-dock-tab="detector" aria-selected="false">Detector</button><button type="button" role="tab" class="dock-tab" data-dock-tab="drive" aria-selected="false">Vehicle &amp; link</button><button type="button" role="tab" class="dock-tab" data-dock-tab="probe" aria-selected="false">Probe</button><button type="button" role="tab" class="dock-tab" data-dock-tab="log" aria-selected="false">Mission log <span id="mission-record-count" class="tab-count">0 entries</span></button></nav><div class="dock-pane dock-search" data-dock-pane="overview" role="tabpanel"><section class="panel detector-panel" aria-labelledby="detector-heading">
           <div class="panel-heading"><h2 id="detector-heading">Detector voltage</h2><strong id="detector-voltage">— V</strong><span id="detector-status" class="badge neutral">NO DATA</span><span id="sweep-status" class="safety-note" role="status"></span></div>
           <div class="detector-chart"><canvas id="detector-history" role="img" aria-label="Filtered detector voltage over the last 30 seconds"></canvas></div>
           <p id="detector-detail" class="safety-note">Waiting for detector telemetry.</p>
@@ -148,16 +158,6 @@
         </div>
         <canvas id="map-view" aria-label="Local field map"></canvas>
         <p id="position">X 0.0 &middot; Y 0.0 &middot; heading 0&deg;</p>
-      </section><section class="panel power-panel" aria-labelledby="power-heading">
-        <div class="panel-heading"><h2 id="power-heading">Power</h2><span id="power-status" class="badge neutral">NO DATA</span></div>
-        <div class="power-summary"><div><span>Battery draw</span><strong id="battery-watts">—</strong></div><div><span>Charge</span><strong id="battery-charge">—</strong></div></div>
-        <progress id="battery-level" max="100" aria-label="Battery charge" hidden></progress>
-        <svg id="power-history" viewBox="0 0 300 38" preserveAspectRatio="none" role="img" aria-label="Battery power over the last sixty seconds"><polyline id="power-history-line" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-        <div class="power-metrics"><span>Voltage <b id="battery-voltage">—</b></span><span>Current <b id="battery-current">—</b></span><span>Temperature <b id="battery-temperature">—</b></span><span>Cell spread <b id="battery-cells">—</b></span></div>
-        <div class="power-subheading">ESC <span id="esc-status">No telemetry</span></div>
-        <div id="esc-readings" class="power-esc">Waiting for ESC telemetry</div>
-        <div class="power-subheading">Arm servo <span id="power-arm">No telemetry</span></div>
-        <p class="power-note">Battery watts = V × A · negative draw means charging. ESC and arm readings are separate, not added to battery draw.</p>
       </section></div><div class="dock-pane " data-dock-pane="detector" role="tabpanel" hidden><section class="panel detector-diagnostics-panel"><h2>Detector signal &amp; angle</h2>
           <div class="signal-value">
             <strong id="signal">0</strong>
@@ -178,7 +178,17 @@
           </details>
 
           <button type="button" class="quiet" data-open-settings="detector">Detector calibration / CSV</button>
-        </section></div><div class="dock-pane " data-dock-pane="drive" role="tabpanel" hidden><section class="panel drive-diagnostics"><h2>Drive &amp; link</h2><p class="pad-raw" id="pad-raw">Waiting for Gamepad API…</p><svg id="pad-visual" class="pad-visual" viewBox="0 0 280 132" role="img" aria-label="Xbox controller input preview">
+        </section></div><div class="dock-pane dock-vehicle" data-dock-pane="drive" role="tabpanel" hidden><section class="panel power-panel" aria-labelledby="power-heading">
+        <div class="panel-heading"><h2 id="power-heading">Power</h2><span id="power-status" class="badge neutral">NO DATA</span></div>
+        <div class="power-summary"><div><span>Battery draw</span><strong id="battery-watts">—</strong></div><div><span>Charge</span><strong id="battery-charge">—</strong></div></div>
+        <progress id="battery-level" max="100" aria-label="Battery charge" hidden></progress>
+        <svg id="power-history" viewBox="0 0 300 38" preserveAspectRatio="none" role="img" aria-label="Battery power over the last sixty seconds"><polyline id="power-history-line" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        <div class="power-metrics"><span>Voltage <b id="battery-voltage">—</b></span><span>Current <b id="battery-current">—</b></span><span>Temperature <b id="battery-temperature">—</b></span><span>Cell spread <b id="battery-cells">—</b></span></div>
+        <div class="power-subheading">ESC <span id="esc-status">No telemetry</span></div>
+        <div id="esc-readings" class="power-esc">Waiting for ESC telemetry</div>
+        <div class="power-subheading">Arm servo <span id="power-arm">No telemetry</span></div>
+        <p class="power-note">Battery watts = V × A · negative draw means charging. ESC and arm readings are separate, not added to battery draw.</p>
+      </section><section class="panel drive-diagnostics"><h2>Drive &amp; link</h2><p class="pad-raw" id="pad-raw">Waiting for Gamepad API…</p><svg id="pad-visual" class="pad-visual" viewBox="0 0 280 132" role="img" aria-label="Xbox controller input preview">
             <rect class="pad-shell" x="18" y="30" width="244" height="86" rx="32"/>
             <rect id="pad-lt" class="pad-trigger" x="36" y="8" width="46" height="16" rx="5"/>
             <rect id="pad-rt" class="pad-trigger" x="198" y="8" width="46" height="16" rx="5"/>
@@ -207,7 +217,7 @@
             <button id="probe-zero-contact" type="button">Zero motor load</button>
             <small id="probe-zero-status">Hold clear of the ground before zeroing.</small>
           </details>
-          <details id="probe-diagnostics"><summary>Diagnostics</summary>
+          <details id="probe-diagnostics" open><summary>Diagnostics</summary>
             <div class="probe-graphic" aria-hidden="true"><span id="probe-arm"></span><i></i></div>
             <div class="pressure-heading"><span>Estimated motor load</span><strong id="probe-pressure">—</strong><small>last 30 s</small></div>
             <div class="probe-load-chart"><canvas id="pressure-history" aria-label="Estimated probe motor load over the latest thirty seconds"></canvas></div>
@@ -586,10 +596,10 @@
             <p id="forward-source-detail" class="camera-source-detail"></p>
           </article>
           <article class="camera-card">
-            <div class="camera-card-heading"><h3>Inset camera</h3><span id="auxiliary-preview-state" class="camera-state">Waiting</span></div>
+            <div class="camera-card-heading"><h3>Probe camera</h3><span id="auxiliary-preview-state" class="camera-state">Waiting</span></div>
             <label for="aux-camera-source">Camera source</label>
             <select id="aux-camera-source"><option value="off">Off</option></select>
-            <div class="camera-settings-preview"><canvas id="auxiliary-settings-preview" width="640" height="360" aria-label="Inset camera live preview"></canvas><p id="auxiliary-preview-empty">Waiting for camera</p></div>
+            <div class="camera-settings-preview"><canvas id="auxiliary-settings-preview" width="640" height="360" aria-label="Probe camera live preview"></canvas><p id="auxiliary-preview-empty">Waiting for camera</p></div>
             <div class="camera-actions"><button type="button" id="auxiliary-rotate">Rotate 90°</button><output id="auxiliary-rotation">0°</output><button type="button" id="auxiliary-camera-retry" class="quiet">Reconnect</button></div>
             <dl class="camera-stats">
               <div><dt>Resolution</dt><dd id="auxiliary-dimensions">—</dd></div>

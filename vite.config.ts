@@ -29,6 +29,15 @@ function carDashboard(): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = (req.url || "").split("?")[0] ?? "";
+        // Pretend car cameras: /camera/<id> -> public/mock/<id>.jpg (a still frame).
+        const cam = /^\/camera\/([A-Za-z0-9_-]+)$/.exec(url);
+        if (cam) {
+          const still = join(process.cwd(), "public/mock", `${cam[1]}.jpg`);
+          if (!existsSync(still)) return next();
+          res.setHeader("Content-Type", "image/jpeg");
+          res.setHeader("Cache-Control", "no-store");
+          return res.end(readFileSync(still));
+        }
         if (!url.startsWith("/dashboard/")) return next();
         let rel = url.slice("/dashboard/".length) || "index.html";
         if (rel.startsWith("assets/")) rel = rel.slice("assets/".length);

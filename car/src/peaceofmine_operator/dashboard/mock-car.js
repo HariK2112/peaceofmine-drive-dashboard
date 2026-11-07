@@ -6,7 +6,38 @@
   const RealWebSocket = window.WebSocket;
   const started = performance.now();
   const detectorHistory = [];
-  const mock = {owner: false, armed: false, sweep: false, linear: 0, angular: 0, pose: {x: 0, y: 0, yaw: 0}};
+  const pressureHistory = Array(150).fill(0.05);
+  const mock = {owner: false, armed: false, sweep: false, linear: 0, angular: 0, pose: {x: 0, y: 0, yaw: 0},
+    inspection: {phase: 'IDLE', active: false, message: '', completed: 0, total: 0, confirmed_angle_deg: null, points: []},
+    phaseAt: 0, depth: 0, cycle: false};
+  // Show the pretend probe camera (served by the preview at /camera/camera_probe).
+  try {
+    const key = 'peaceofmine.operator.preferences';
+    const prefs = JSON.parse(localStorage.getItem(key) || '{}') || {};
+    prefs.cameras = Object.assign({forward: 'virtual'}, prefs.cameras);
+    if (!prefs.cameras.auxiliary || prefs.cameras.auxiliary === 'off') prefs.cameras.auxiliary = 'raspberry:camera_probe';
+    localStorage.setItem(key, JSON.stringify(prefs));
+  } catch {}
+
+  // Pretend inspection: confirm takes 4 s, then 5 probe points of 2 s each.
+  function stepInspection(t) {
+    const i = mock.inspection, dt = t - mock.phaseAt;
+    if (i.phase === 'CONFIRMING') {
+      i.progress = Math.min(2, dt / 2);
+      if (dt >= 4) Object.assign(i, {phase: 'CONFIRMED', active: false, message: '', confirmed_angle_deg: 6, probe_reachable: true, progress: 2});
+    } else if (i.phase === 'PROBING') {
+      const point = Math.floor(dt / 2), within = (dt % 2) / 2;
+      mock.cycle = point < 5;
+      mock.depth = mock.cycle ? 60 * Math.sin(Math.PI * within) : 0;
+      mock.cyclePhase = within < 0.5 ? 'DESCENDING' : 'RETRACTING';
+      while (i.points.length < Math.min(point, 5)) {
+        const n = i.points.length;
+        i.points.push({angle_deg: i.confirmed_angle_deg - 10 + 5 * n, status: n === 2 ? 'CONTACT' : 'CLEAR', depth_mm: n === 2 ? 38 : 60});
+      }
+      i.completed = i.points.length; i.progress = i.completed;
+      if (point >= 5) Object.assign(i, {phase: 'COMPLETE', active: false, message: 'Probe scan complete · 1 contact.'});
+    }
+  }
 
   function telemetry() {
     const t = (performance.now() - started) / 1000;
@@ -20,6 +51,9 @@
     mock.pose.x += mock.linear * Math.cos(mock.pose.yaw) * dt;
     mock.pose.y += mock.linear * Math.sin(mock.pose.yaw) * dt;
     const ratio = Math.max(0, Math.min(1, (filtered - 40) / 120));
+    stepInspection(t);
+    pressureHistory.push(mock.cycle ? 0.08 + mock.depth / 150 + 0.02 * Math.random() : 0.05 + 0.01 * Math.random());
+    while (pressureHistory.length > 150) pressureHistory.shift();
     return {
       type: 'state',
       safety: {allowed: true, servo_allowed: true, mode: 'simulation', simulated: true, reason: 'Pretend car (preview)'},
@@ -32,16 +66,18 @@
         sweep_enabled: mock.sweep, sweep_speed_deg_s: 36, sweep_speed_min: 5, sweep_speed_max: 180, beam_half_angle_deg: 45,
         beam_min_angle_deg: -45, beam_max_angle_deg: 45, beam: [],
         sensor: {available: true, fresh: true, age_ms: 20, rate_hz: 50, received: Math.round(t * 50), invalid_lines: 0,
-          reference_voltage: 3.3, baseline_adc: 40, full_response_adc: 200, port: '/dev/ttyMOCK',
+          reference_voltage: 3.3, baseline_adc: 40, packet: {filtered_adc: filtered, precise_adc: filtered, amplitude_adc: filtered}, full_response_adc: 200, port: '/dev/ttyMOCK',
           history_age_s: 0, history: detectorHistory.map(p => ({age_s: +(t - p.at).toFixed(3), adc: p.adc, filtered_adc: p.filtered_adc}))}},
-      probe: {depth_mm: 0, target_mm: 0, max_depth_mm: 110, pressure_ratio: 0.05, fault: false, ready: true, active: false, cycle_active: false, holding: false},
+      probe: {depth_mm: mock.depth, target_mm: mock.cycle ? 60 : 0, max_depth_mm: 110, pressure_ratio: mock.cycle ? 0.1 + mock.depth / 200 : 0.05,
+        pressure_history: pressureHistory.slice(), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, holding: false,
+        adc_contact_state: {enabled: true, fresh: true, detected: false, value: 0.2, level: 1, direction: 'above'}},
       power: {battery: {available: true, present: true, stale: false, power_w: 38 + 6 * Math.sin(t / 3) + mock.linear * 40,
           current_a: 3.2, voltage_v: 11.9, remaining_pct: 72, temperature_c: 31, cell_delta_v: 0.012},
         history: Array.from({length: 30}, (_, i) => ({age_s: i * 2, watts: 38 + 6 * Math.sin((t - i * 2) / 3)})),
         esc: {available: true, stale: false, motors: [{id: 1, online: true, power_w: 12, current_a: 1, temperature_c: 34, rpm: 0, faults: 0}]}},
-      actuators: {arm: {connected: true, servo_id: 1, voltage: 11.8, current_a: 0.12, temperature_c: 33}},
-      inspection: {phase: 'IDLE', active: false, message: '', completed: 0, total: 0, confirmed_angle_deg: null, points: []},
-      cameras: {},
+      actuators: {arm: {connected: true, arm_calibration: true, servo_id: 1, voltage: 11.8, current_a: 0.12, temperature_c: 33}},
+      inspection: structuredClone(mock.inspection),
+      cameras: {camera_probe: {label: 'camera / probe', topic: '/camera/probe/camera_info', fps: 15, frame_age_ms: 60, width: 944, height: 704}},
     };
   }
 
@@ -61,7 +97,14 @@
       if (m.type === 'take_control') { mock.owner = true; mock.armed = true; return; }
       if (m.type === 'release_control' || m.type === 'estop') { mock.owner = mock.armed = false; mock.linear = mock.angular = 0; mock.sweep = false; return; }
       if (m.type === 'drive' && mock.owner) { mock.linear = m.deadman ? m.linear_x : 0; mock.angular = m.deadman ? m.angular_z : 0; return; }
-      if (m.type === 'sweep_enabled') { mock.sweep = !!m.enabled; }
+      if (m.type === 'sweep_enabled') { mock.sweep = !!m.enabled; return; }
+      if (m.type === 'inspection') {
+        const t = (performance.now() - started) / 1000;
+        if (m.action === 'stop') Object.assign(mock.inspection, {phase: 'STOPPED', active: false, message: 'Inspection stopped.'}), mock.cycle = false, mock.depth = 0;
+        if (m.action === 'confirm') Object.assign(mock.inspection, {phase: 'CONFIRMING', active: true, total: 2, completed: 0, progress: 0, points: [], message: ''});
+        if (m.action === 'probe_scan') Object.assign(mock.inspection, {phase: 'PROBING', active: true, total: 5, completed: 0, progress: 0, points: [], message: ''});
+        mock.phaseAt = t;
+      }
     }
     close() { clearInterval(this.timer); if (this.readyState === 3) return; this.readyState = 3; this.onclose?.({}); }
   }
