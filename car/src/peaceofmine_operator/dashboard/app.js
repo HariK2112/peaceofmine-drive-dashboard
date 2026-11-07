@@ -822,7 +822,7 @@ function updateHud() {
   $('client-count').textContent = `${drive.client_count} ${drive.client_count === 1 ? 'viewer' : 'viewers'}`;
   $('control-owner').textContent = owner ? 'YOU CONTROL' : (drive.control_owner_present ? 'SPECTATING' : 'UNCLAIMED');
   $('control-owner').className = `badge ${owner ? 'safe' : 'neutral'}`;
-  $('take-control').textContent = drive.control_owner_present ? 'Steal control' : 'Take control';
+  $('take-control').textContent = owner ? 'In control' : drive.control_owner_present ? 'Take over' : 'Take control';
 
   $('take-control').disabled = !state.connected || owner;
   const safe = state.safety?.allowed === true;

@@ -37,4 +37,6 @@ use the editor.
 - Dashboard colors, spacing and type come only from the tokens at the top of `dashboard/style.css`. Why: one consistent design language.
 - `dashboard/layout.js` is presentation-only. It reads the `state` global from app.js and never sends commands. It sets the mission stage (drive / confirm / probe) from `state.inspection.phase` and `state.probe.cycle_active`, and it swaps which camera is large using CSS grid areas, never by moving DOM nodes. Why: keyboard focus and the camera code in app.js depend on fixed elements.
 - `dashboard/mock-car.js` (loaded only with `?mock=1`, and not on the car allow-list) fakes `/ws` and `/api/adc` for the preview. Keep its message shapes in line with `operator_control_node.py`, `web_bridge.py` and `adc_telemetry.py`.
+- The main-screen probe "Hold to home" button reuses the Setup → Probe hold-to-home logic in `actuator-settings.js` and sends `calibration_end` after release when Setup is closed. Why: the car enters calibration mode on any home command, which blocks driving until it ends.
+- Dashboard asset links in `index.html` are relative (`assets/...`) so the page works at the car's `/` and the preview's `/dashboard/`; the Python browser tests accept both forms. Why: one HTML file for both hosts.
 - `car/` is excluded from the web app's lint, prettier and typecheck.

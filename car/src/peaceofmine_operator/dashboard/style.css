@@ -628,19 +628,20 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
 .workflow-buttons { display: grid; gap: var(--s2); }
 .operation-action { display: grid; gap: var(--s1); }
 .mode-btn {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s3);
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "num text badge" "num desc desc";
+  align-items: center; gap: .1rem var(--s3);
   width: 100%; min-height: 3.25rem; padding: var(--s2) var(--s3);
   border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-2);
   text-align: left; white-space: normal;
 }
 .mode-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
 .mode-btn[data-active=true] { border-color: var(--accent); background: var(--accent-soft); }
-.mode-num { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.mode-num { grid-area: num; display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
 .mode-btn[data-active=true] .mode-num { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.mode-copy { display: grid; gap: .1rem; min-width: 0; }
-.mode-text { font-size: var(--fs-md); font-weight: 600; }
-.mode-desc { color: var(--muted); font-size: var(--fs-xs); font-weight: 400; }
-.mode-btn .badge { padding: .1rem var(--s2); background: var(--bg-sunken); border-color: var(--line); color: var(--muted); }
+.mode-copy { display: contents; } /* name, description and badge sit in the button grid */
+.mode-text { grid-area: text; font-size: var(--fs-md); font-weight: 600; }
+.mode-desc { grid-area: desc; color: var(--muted); font-size: var(--fs-xs); font-weight: 400; }
+.mode-btn .badge { grid-area: badge; justify-self: end; padding: .1rem var(--s2); background: var(--bg-sunken); border-color: var(--line); color: var(--muted); }
 .mode-btn .badge::before { display: none; }
 .mode-btn[data-active=true] .badge { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
 .step-note { display: block; padding: 0 var(--s3); color: var(--warn); font-size: var(--fs-xs); line-height: 1.4; }
@@ -705,3 +706,4 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
 
 /* the setup window wraps long button labels */
 dialog button { white-space: normal; }
+

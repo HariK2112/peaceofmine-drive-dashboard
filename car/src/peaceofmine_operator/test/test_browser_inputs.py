@@ -42,7 +42,7 @@ else {
   const detectorBounds=document.querySelector('.detector-panel').getBoundingClientRect();
   assert(taskBounds.top>=cameraBounds.bottom && detectorBounds.top>=taskBounds.bottom,'phone order is camera then workflow then detector graph');
 }
-assert($('search-task').open && !$('probe-task').open,'search settings start open, probe controls remain available by disclosure');
+assert($('search-task').open && $('probe-task').open,'sweep and probe controls (with Hold to home) start open on the main screen');
 $('probe-diagnostics').open=$('arm-diagnostics').open=$('probe-servo-diagnostics').open=true;
 state.connected = true;
 state.robot.stationary = true;
