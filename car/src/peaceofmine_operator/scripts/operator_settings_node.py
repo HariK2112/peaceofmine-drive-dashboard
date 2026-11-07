@@ -11,6 +11,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from peaceofmine_operator import configuration, camera_settings
 from peaceofmine_operator.node_runner import run_node
+from peaceofmine_operator.detector import calibration_values
 
 
 from peaceofmine_operator import display_settings, driving_settings, field_gnss, inspection, marking_settings
@@ -63,9 +64,7 @@ class OperatorSettings(Node):
                     raise ValueError('Invalid motion limits')
                 value = dict(max_speed_deg_s=speed, acceleration_deg_s2=acceleration)
             elif section == 'metal_detector':
-                baseline, full, reference = (value.get(k) for k in ('baseline_adc','full_response_adc','reference_voltage'))
-                if not all(type(v) in (int,float) and math.isfinite(v) for v in (baseline,full,reference)) or not (0 <= baseline <= 255 and 0 <= full <= 255 and full != baseline) or not 0 < reference <= 5.5:
-                    raise ValueError('Invalid detector calibration')
+                calibration_values(value)
             else:
                 raise ValueError('Unknown settings section')
             if section in ('arm','probe'):

@@ -40,6 +40,17 @@ class BridgeTest(unittest.TestCase):
         self.bridge._cameras_at = self.bridge._power_at = self.bridge._settings_at = self.now
         self.bridge._settings = {}
 
+    def test_contact_decision_and_voltage_use_matching_adc_session_and_settings(self):
+        self.bridge.adc = Mock()
+        self.bridge._actuator_times['probe'] = self.now
+        contact = dict(enabled=True, fresh=True, detected=True, value=7.2, filtered_volts=.65,
+                       source_session='a', source_revision=9)
+        self.bridge._actuators['probe'] = dict(probe=dict(adc_contact_state=contact))
+        for session, revision, expected in (('a', 9, True), ('a', 10, False), ('b', 9, False)):
+            envelope = dict(session=session, saved_config_revision=revision, probe_contact=dict(fresh=False))
+            self.bridge._adc_state(envelope)
+            self.assertEqual(envelope['probe_contact'].get('filtered_volts'), .65 if expected else None)
+
     def test_history_reconnects_by_cursor_and_stays_out_of_control_frames(self):
         from collections import deque
         self.bridge._detector_history = deque()

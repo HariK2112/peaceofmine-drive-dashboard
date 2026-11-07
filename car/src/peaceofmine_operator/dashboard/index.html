@@ -86,7 +86,7 @@
 
         <div class="dock-pane pane-split pane-signal" data-dock-pane="overview" role="tabpanel">
           <section class="pane-section detector-panel" aria-labelledby="detector-heading">
-            <div class="section-head"><h2 id="detector-heading">Detector signal</h2><span id="detector-alert-note" class="head-note alert-note">Alert at 60%</span><span id="detector-status" class="badge neutral">NO DATA</span><strong id="detector-voltage" class="head-value">— V</strong></div>
+            <div class="section-head"><h2 id="detector-heading">Detector signal</h2><span id="detector-alert-note" class="head-note alert-note">Alert at — V</span><span id="detector-status" class="badge neutral">NO DATA</span><strong id="detector-voltage" class="head-value">— V</strong></div>
             <div class="chart-box detector-chart"><canvas id="detector-history" role="img" aria-label="Filtered detector voltage over the last 30 seconds"></canvas></div>
             <div class="section-foot"><p id="detector-detail">Waiting for detector data.</p><span id="sweep-status" role="status"></span></div>
           </section>
@@ -101,14 +101,14 @@
 
         <div class="dock-pane pane-split pane-detector" data-dock-pane="detector" role="tabpanel" hidden>
           <section class="pane-section detector-diagnostics-panel" aria-labelledby="signal-heading">
-            <div class="section-head"><h2 id="signal-heading">Signal strength</h2><span id="detector-raw" class="head-note">-- ADC</span></div>
-            <div class="signal-value"><strong id="signal">0</strong><span>%</span></div>
+            <div class="section-head"><h2 id="signal-heading">Filtered signal</h2><span id="detector-raw" class="head-note" hidden></span></div>
+            <div class="signal-value"><strong id="signal">—</strong><span>V</span></div>
             <div class="meter" aria-label="Detector signal"><span id="meter-fill"></span><i id="alert-marker" class="alert-marker" title="Search alert level"></i><i id="threshold" title="Mine level"></i></div>
             <canvas id="radar-view" aria-label="Detector sweep radar"></canvas>
           </section>
           <section class="pane-section detector-trend" aria-labelledby="history-heading">
             <div class="section-head"><h2 id="history-heading">Signal and arm angle</h2><span class="head-note" data-tip="The last 30 seconds are shown. The detector axis uses two minutes of measured signal. Calibration lines appear when in range.">Last 30 s</span><button type="button" id="detector-expand" class="quiet" aria-pressed="false" aria-controls="detector-diagnostics-history">Expand chart</button></div>
-            <div class="chart-box detector-diagnostics-chart"><canvas id="detector-diagnostics-history" aria-label="Detector reading, arm angle and calibration history"></canvas></div>
+            <div class="chart-box detector-diagnostics-chart"><canvas id="detector-diagnostics-history" aria-label="Filtered detector voltage, arm angle and calibration levels over the last 30 seconds"></canvas></div>
           </section>
           <section class="pane-section pane-actions" aria-labelledby="align-heading">
             <div class="section-head"><h2 id="align-heading">Aim the probe</h2></div>
@@ -169,8 +169,8 @@
             </div>
             <div class="table-wrap">
               <table class="target-table">
-                <thead><tr><th scope="col">ID</th><th scope="col">Position</th><th scope="col">Signal %</th><th scope="col">Contact depth</th><th scope="col">Result</th><th scope="col">Time</th></tr></thead>
-                <tbody id="target-log-body"><tr class="empty-row"><td colspan="6">Nothing logged yet. Log a position, mark the ground or run a probe.</td></tr></tbody>
+                <thead><tr><th scope="col">ID</th><th scope="col">Position</th><th scope="col" title="Recorded filtered detector voltage">Detector (V)</th><th scope="col">Contact depth (mm)</th><th scope="col" title="Filtered probe voltage when descent ended">Probe sensor (V)</th><th scope="col">Result</th><th scope="col">Time</th></tr></thead>
+                <tbody id="target-log-body"><tr class="empty-row"><td colspan="7">Nothing logged yet. Log a position, mark the ground or run a probe.</td></tr></tbody>
               </table>
             </div>
           </section>
@@ -260,8 +260,8 @@
         <details id="search-task" class="task-controls" open><summary>Sweep and alert</summary>
           <div class="field-row"><label for="sweep-speed">Sweep speed</label><output id="sweep-speed-value">36&deg;/s</output></div>
           <input id="sweep-speed" type="range" value="36">
-          <div class="field-row"><label for="search-alert-level">Alert at <span class="tip" data-tip="Warn me when the detector reaches this share of the mine level. 100% is the mine level from Setup → Metal detector. Saved on the car."></span></label><output id="search-alert-value">60%</output></div>
-          <input id="search-alert-level" type="range" min="20" max="100" step="5" value="60">
+          <div class="field-row"><label for="search-alert-level">Alert voltage <span class="tip" data-tip="Alerts when the filtered detector voltage crosses this level toward the calibrated mine response. Saved on the car."></span></label>
+            <span class="probe-cycle-input-wrap"><input id="search-alert-level" type="number" min="-6.144" max="6.144" step="any" required disabled><span id="search-alert-value" class="unit">V</span></span></div>
           <div class="check-row">
             <label class="check"><input id="search-alert-enabled" type="checkbox" checked> Show alert</label>
             <label class="check"><input id="search-alert-sound" type="checkbox" checked> Beep</label>
@@ -603,7 +603,7 @@
                 <tr><th scope="row">Model / firmware</th><td id="probe-servo-model">—</td></tr>
                 <tr><th scope="row">PX4 permission</th><td id="probe-servo-px4">—</td></tr>
               </tbody></table>
-              <label class="field" for="probe-servo-position-slider"><span class="field-name">Raw shaft target</span><output id="probe-servo-position-label">—</output></label>
+              <label class="field" for="probe-servo-position-slider"><span class="field-name">Shaft angle target</span><output id="probe-servo-position-label">—</output></label>
               <input id="probe-servo-position-slider" type="range" min="0" max="4095" step="1" value="0" disabled>
             </div>
             <div class="diag-chart">
@@ -674,15 +674,13 @@
       <!-- ====================================================== Metal detector -->
       <section id="settings-detector" class="settings-panel" role="tabpanel" data-settings-panel="detector" hidden>
         <header class="panel-head">
-          <h3>Metal detector <span class="tip" data-tip="Set the no-metal baseline and the level that counts as a mine. Signal % on the main screen is measured from baseline (0%) to mine level (100%)."></span></h3>
+          <h3>Metal detector <span class="tip" data-tip="Set the filtered detector voltage with the coil clear and over a test target."></span></h3>
           <div class="panel-tools"><span id="metal-status" class="badge neutral">NO TELEMETRY</span></div>
         </header>
         <div class="status-bar">
           <p id="metal-feedback" class="status-msg" role="status">Waiting for detector</p>
           <dl class="readouts inline">
-            <div><dt>Raw</dt><dd id="metal-raw">-- ADC</dd></div>
-            <div><dt>Voltage</dt><dd id="metal-voltage">-- V</dd></div>
-            <div><dt>Signal</dt><dd id="metal-response">-- %</dd></div>
+            <div><dt>Filtered</dt><dd id="metal-voltage">— V</dd></div>
             <div><dt>Rate</dt><dd id="metal-rate">-- Hz</dd></div>
             <div><dt>Age</dt><dd id="metal-age">-- ms</dd></div>
           </dl>
@@ -717,30 +715,32 @@
               <button id="metal-control" type="button" class="quiet">Take control</button>
               <button id="metal-reset" type="button" class="quiet push-right" data-tip="Go back to the values the car started with.">Reset</button>
             </div>
-            <p id="metal-voltage-note" class="meta">Estimated ADC input voltage.</p>
+            <p id="metal-voltage-note" class="meta">Detector input voltage.</p>
             <label class="field"><span class="field-name">Confirmation passes <span class="tip" data-tip="The car counts each sweep across the target as one pass. Saved for the next confirmation."></span></span>
               <select id="confirm-passes" disabled><option>2</option><option>4</option><option>6</option><option>8</option></select></label>
             <p id="confirm-passes-feedback" class="status-msg" role="status"></p>
             <div class="kv-row">
               <span class="field-name">Search alert <span class="tip" data-tip="Warns the operator during the search. Change it on the main screen under Mission → Sweep and alert. Saved on the car."></span></span>
-              <output id="metal-alert-level">60% of mine level</output>
+              <output id="metal-alert-level">— V</output>
             </div>
           </section>
         </div>
         <details class="set-more"><summary>Detector readings</summary>
           <div class="set-more-body">
             <dl class="kv-list">
+              <dt>Unfiltered voltage</dt><dd id="metal-raw">— V</dd>
+              <dt>Filtered voltage from baseline</dt><dd id="metal-response">— V</dd>
               <dt>Port</dt><dd id="metal-port">--</dd>
               <dt>Packets / rejected</dt><dd id="metal-counts">--</dd>
               <dt>Sequence / uptime</dt><dd id="metal-sequence">--</dd>
               <dt>Driver</dt><dd id="metal-error">--</dd>
             </dl>
-            <div class="btn-row"><label class="check"><input id="metal-debug-live" type="checkbox" checked> Live packet log</label><button id="metal-export" type="button" class="quiet push-right">Export CSV</button></div>
-            <textarea id="metal-log" class="code-box" rows="5" readonly spellcheck="false" aria-label="Recent decoded detector packets"></textarea>
+            <div class="btn-row"><label class="check"><input id="metal-debug-live" type="checkbox" checked> Live voltage log</label><button id="metal-export" type="button" class="quiet push-right">Export CSV</button></div>
+            <textarea id="metal-log" class="code-box" rows="5" readonly spellcheck="false" aria-label="Recent detector voltage readings"></textarea>
           </div>
         </details>
-        <details class="set-more"><summary>Saved launch values</summary>
-          <div class="set-more-body"><textarea id="metal-launch" class="code-box" rows="4" readonly spellcheck="false" aria-label="Detector calibration launch values"></textarea></div>
+        <details class="set-more"><summary>Applied calibration</summary>
+          <div class="set-more-body"><textarea id="metal-launch" class="code-box" rows="4" readonly spellcheck="false" aria-label="Applied detector calibration in volts"></textarea></div>
         </details>
       </section>
 
@@ -796,24 +796,24 @@
         <p id="adc-error" class="error-line" role="alert"></p>
         <div class="panel-grid">
           <section class="set-card span-all">
-            <header class="card-head"><h4>Inputs <span class="tip" data-tip="Turn on only the inputs you use. Scaled value = volts × multiplier + offset."></span></h4></header>
+            <header class="card-head"><h4>Inputs <span class="tip" data-tip="Enable the inputs you use. The multiplier and offset calibrate the scaled ROS signal. The readings below show filtered sensor voltage."></span></h4></header>
             <div class="table-wrap"><table class="set-table"><thead><tr><th>On</th><th>Input</th><th>Multiplier</th><th>Offset</th><th>Used for</th></tr></thead><tbody id="adc-input-settings"></tbody></table></div>
             <div class="btn-row"><button type="button" class="quiet" data-goto-settings="contact">Probe contact →</button><button type="button" class="quiet" data-goto-settings="detector">Metal detector →</button></div>
           </section>
           <section class="set-card span-all">
             <header class="card-head"><h4>Live readings</h4>
               <div class="card-tools">
-                <select id="adc-quantity" aria-label="Plot quantity"><option value="comparison">Raw and filtered volts</option><option value="scaled">Scaled</option><option value="volts">Volts</option><option value="raw">Raw counts</option></select>
+                <select id="adc-quantity" aria-label="Voltage traces"><option value="filtered_volts">Filtered voltage (V)</option><option value="comparison">Compare unfiltered voltage (V)</option></select>
                 <select id="adc-window" aria-label="History"><option value="10">10 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select>
-                <button type="button" id="adc-csv" class="quiet">Export CSV</button>
+                <button type="button" id="adc-csv" class="quiet" data-tip="Exports filtered voltage. The comparison view also includes unfiltered voltage.">Export CSV</button>
               </div>
             </header>
             <label class="field"><span class="field-name">Low-pass time constant <span class="unit">ms</span> <span class="tip" data-tip="0 turns filtering off. Larger values smooth noise and delay the detector and probe response. Apply &amp; save to use this value on the car."></span></span><input data-adc-field="filter_ms" type="number" min="0" max="2000" step="1" required></label>
             <p id="adc-filter-status" class="meta" role="status"></p>
-            <div class="adc-chart"><canvas id="adc-history" aria-label="Live ADS1115 input readings"></canvas></div>
+            <div class="adc-chart"><canvas id="adc-history" aria-label="ADS1115 input voltages over time"></canvas></div>
             <p id="adc-chart-error" class="error-line" role="status" hidden></p>
             <p id="adc-rate" class="meta"></p>
-            <div class="table-wrap"><table class="set-table"><thead><tr><th>Input</th><th>Raw</th><th>Volts</th><th>Scaled</th><th>Min / max / mean</th><th>Status</th></tr></thead><tbody id="adc-readings"></tbody></table></div>
+            <div class="table-wrap"><table class="set-table"><thead><tr><th>Input</th><th>Filtered voltage (V)</th><th>Filtered min / max / mean (V)</th><th>Status</th></tr></thead><tbody id="adc-readings"></tbody></table></div>
           </section>
         </div>
         <details class="set-more"><summary>Chip settings <span class="tip" data-tip="Usually bus 1, address 0x48. The data rate is shared by all inputs. Pick a range that doesn't clip; inputs must stay between GND and VDD whatever the range."></span></summary>
@@ -829,14 +829,14 @@
             <p class="meta">Resolution: <output id="adc-resolution"></output></p>
           </div>
         </details>
-        <details class="set-more"><summary>ALERT / RDY pin <span class="tip" data-tip="The car doesn't watch this pin. Reading data clears a latched alert."></span></summary>
+        <details class="set-more"><summary>ALERT / RDY pin <span class="tip" data-tip="The hardware comparator uses the unfiltered voltage. Changing the input range preserves the entered thresholds. Saving rounds to the nearest available voltage. Reading data clears a latched alert."></span></summary>
           <div class="set-more-body">
             <div class="fields-3">
               <label class="field"><span class="field-name">Function</span><select data-adc-field="alert"><option value="disabled">Off</option><option value="traditional">Comparator</option><option value="window">Window comparator</option><option value="ready">Conversion ready</option></select></label>
               <label class="field"><span class="field-name">Polarity</span><select data-adc-field="polarity"><option value="0">Active low</option><option value="1">Active high</option></select></label>
               <label class="field"><span class="field-name">Trigger after</span><select data-adc-field="queue"><option value="1">1 conversion</option><option value="2">2 conversions</option><option value="4">4 conversions</option></select></label>
-              <label class="field"><span class="field-name">Low threshold <span class="unit">counts</span></span><input data-adc-field="low" type="number" min="-32768" max="32767" required><output id="adc-low-volts" class="meta"></output></label>
-              <label class="field"><span class="field-name">High threshold <span class="unit">counts</span></span><input data-adc-field="high" type="number" min="-32768" max="32767" required><output id="adc-high-volts" class="meta"></output></label>
+              <label class="field"><span class="field-name">Low threshold <span class="unit">V</span></span><input data-adc-field="low" type="number" step="any" required><output id="adc-low-volts" class="meta"></output></label>
+              <label class="field"><span class="field-name">High threshold <span class="unit">V</span></span><input data-adc-field="high" type="number" step="any" required><output id="adc-high-volts" class="meta"></output></label>
               <label class="check"><input data-adc-field="latch" type="checkbox"> Latch until read</label>
             </div>
           </div>

@@ -56,7 +56,7 @@ class OperatorTransportTest(unittest.TestCase):
             self.assertTrue(permissions[-1])
             # Simulate a web process dying: do not send a clean disconnect.
             bridge._shutting_down=True
-            spin(.65)
+            spin(3.2)  # Allow the three-second browser heartbeat lease to expire.
             self.assertIsNone(control._lease)
             self.assertEqual(probe_commands[-1]['action'], 'stop')
             self.assertFalse(permissions[-1])

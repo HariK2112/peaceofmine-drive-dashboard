@@ -31,7 +31,9 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.extension = {'servo_id': 2, 'max_extension_mm': 120.0, 'travel_ticks': 3000}
         self.probe.contact = MagicMock()
         self.probe.contact.detected = False
-        self.probe.contact.snapshot.side_effect = lambda: dict(enabled=True, fresh=True, detected=self.probe.contact.detected)
+        self.probe.contact.filtered_volts = .2
+        self.probe.contact.snapshot.side_effect = lambda: dict(enabled=True, fresh=True, detected=self.probe.contact.detected,
+                                                               filtered_volts=self.probe.contact.filtered_volts)
         self.probe.speed = 0.0
         self.probe.speed_limit = 0.03
         self.probe.odometry_at = time.monotonic()
@@ -41,6 +43,7 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.cycle_target_depth = 80.0
         self.probe.contact_detected = False
         self.probe.contact_depth_mm = None
+        self.probe.contact_volts = None
         self.probe.last_probe_result = None
         self.probe.motion = None
         self.probe.operation = None
@@ -120,7 +123,9 @@ class ProbeCycleTest(unittest.TestCase):
 
         # FSR contact spike occurs!
         self.probe.contact.detected = True
+        self.probe.contact.filtered_volts = .73
         self.probe.update_behavior()
+        self.probe.contact.filtered_volts = .1
 
         # Should immediately detect contact, record depth, and switch to RETRACTING towards 0.0 mm
         self.assertTrue(self.probe.contact_detected)
@@ -141,6 +146,7 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertEqual(self.probe.last_probe_result['status'], 'CONTACT')
         self.assertTrue(self.probe.last_probe_result['contact'])
         self.assertAlmostEqual(self.probe.last_probe_result['contact_depth_mm'], 45.0, delta=0.5)
+        self.assertEqual(self.probe.last_probe_result['contact_volts'], .73)
 
     def test_probe_cycle_clear_when_target_reached(self):
         self.probe.start_probe_cycle(80.0)
@@ -149,7 +155,9 @@ class ProbeCycleTest(unittest.TestCase):
         # Probe reaches 80 mm target position (target = 4000 - 80/120*3000 = 2000)
         self.probe.telemetry.position = 2000
         self.probe.contact.detected = False
-        self.probe.contact.snapshot.side_effect = lambda: dict(enabled=True, fresh=True, detected=self.probe.contact.detected)
+        self.probe.contact.filtered_volts = .2
+        self.probe.contact.snapshot.side_effect = lambda: dict(enabled=True, fresh=True, detected=self.probe.contact.detected,
+                                                               filtered_volts=self.probe.contact.filtered_volts)
 
         self.probe.update_behavior()
         # Should switch to RETRACTING clear

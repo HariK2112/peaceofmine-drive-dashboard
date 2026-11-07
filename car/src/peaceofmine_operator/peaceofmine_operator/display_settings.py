@@ -13,8 +13,11 @@ def validate(value):
     wheel, alert = value.get('wheel'), value.get('searchAlert')
     if not isinstance(wheel, dict) or not isinstance(alert, dict):
         raise ValueError('Missing wheel or search alert settings')
+    # Old cars store a percentage of their detector calibration span. Keep its
+    # meaning until an operator saves an absolute voltage.
+    threshold = ('volts', -6.144, 6.144) if 'volts' in alert else ('level', 20, 100)
     for obj, key, lower, upper in [(value, 'sensitivity', 50, 150), (wheel, 'deadzone', 0, .9),
-                                    (alert, 'level', 20, 100)]:
+                                    (alert, *threshold)]:
         number = obj.get(key)
         if type(number) not in (int, float) or not math.isfinite(number) or not lower <= number <= upper:
             raise ValueError(f'Invalid {key}')
@@ -25,4 +28,4 @@ def validate(value):
             type(alert.get(k)) is not bool for k in ('enabled', 'sound')):
         raise ValueError('Invalid switch value')
     return dict(mapping=value['mapping'], sensitivity=value['sensitivity'],
-                wheel={k: wheel[k] for k in DEFAULTS['wheel']}, searchAlert={k: alert[k] for k in DEFAULTS['searchAlert']})
+                wheel={k: wheel[k] for k in DEFAULTS['wheel']}, searchAlert={k: alert[k] for k in ('enabled', 'sound', threshold[0])})

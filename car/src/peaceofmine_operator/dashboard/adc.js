@@ -35,6 +35,11 @@
     ? (mux === probeMux ? 'both' : 'detector') : (mux === probeMux ? 'probe' : 'none'));
   const detectorMuxes = settings => settings.routes.flatMap((role, mux) => detectorRole(role) ? [mux] : []);
   const channelAt = mux => latest?.config.channels.find(channel => channel.mux === mux);
+  function unscale(value, channel) {
+    if (!Number.isFinite(value) || !Number.isFinite(channel?.multiplier) || channel.multiplier === 0 || !Number.isFinite(channel.offset)) return null;
+    const volts = (value - channel.offset) / channel.multiplier;
+    return Number.isFinite(volts) ? volts : null;
+  }
   function inputProblem(mux, needsEnabled = true) {
     const channel = channelAt(mux);
     if (!channel) return 'Waiting for ADC settings.';
@@ -84,24 +89,26 @@
     if (!contactDirty && key !== contactDraftKey && channel) {
       muxInput.value = trigger.mux;
       enabledInput.checked = trigger.enabled;
-      contactVolts.value = channel.multiplier ? Number(((trigger.level - channel.offset) / channel.multiplier).toFixed(9)) : '';
+      const levelVolts = unscale(trigger.level, channel);
+      contactVolts.value = levelVolts === null ? '' : Number(levelVolts.toFixed(9));
       contactDirection.value = channel.multiplier < 0 ? opposite(trigger.direction) : trigger.direction;
       hysteresis.value = channel.multiplier ? Number(((trigger.hysteresis || 0) / Math.abs(channel.multiplier)).toFixed(9)) : 0;
       debounce.value = trigger.debounce_ms || 0;
       contactDraftKey = key;
     }
     const issue = inputProblem(Number(muxInput.value), enabledInput.checked);
-    contactSave.disabled = !owner || Boolean(pending) || Boolean(issue);
+    const disabling = trigger.enabled && !enabledInput.checked && Number(muxInput.value) === trigger.mux;
+    contactSave.disabled = !owner || Boolean(pending) || Boolean(issue && !disabling);
     for (const input of [muxInput, enabledInput, contactVolts, contactDirection, hysteresis, debounce]) input.disabled = Boolean(pending);
     const contact = latest.probe_contact;
-    const volts = adcOnline && contact?.fresh && contact.mux === trigger.mux && Number.isFinite(contact.value) && channel?.multiplier
-      ? (contact.value - channel.offset) / channel.multiplier : null;
+    const reading = contact && Object.hasOwn(contact, 'filtered_volts') ? contact.filtered_volts : unscale(contact?.value, channel);
+    const volts = adcOnline && contact?.fresh && contact.mux === trigger.mux && Number.isFinite(reading) ? reading : null;
     const status = !adcOnline ? 'ADC disconnected' : !trigger.enabled ? 'Contact detection disabled'
       : volts === null ? 'Waiting for contact reading.' : `${contact.detected ? 'CONTACT' : 'Clear'} · ${names[trigger.mux]} · ${volts.toFixed(4)} V`;
     document.getElementById('probe-adc-contact').textContent = status;
     document.getElementById('probe-map-sensor').textContent = status;
     renderContactSignal();
-    contactFeedback.textContent = issue || (pending === 'contact' ? 'Saving contact settings…' : contactMessage)
+    contactFeedback.textContent = (issue && disabling ? 'Save to disable contact detection.' : issue) || (pending === 'contact' ? 'Saving contact settings…' : contactMessage)
       || (!owner ? 'Take control to save contact settings.' : contactDirty ? 'Unsaved contact settings' : '');
     const detectors = detectorMuxes(latest);
     const active = detectors.filter(mux => channelAt(mux)?.enabled);
@@ -131,13 +138,20 @@
     contactDirty = false; contactDraftKey = ''; contactMessage = ''; renderSensors();
   };
   contactSave.onclick = () => {
-    if (contactSave.disabled || ![contactVolts, hysteresis, debounce].every(input => input.reportValidity())) return;
+    if (contactSave.disabled) return;
     const mux = Number(muxInput.value), channel = channelAt(mux);
     const settings = savedSettings();
-    settings.probe_trigger = {...settings.probe_trigger, enabled:enabledInput.checked, mux,
-      level:contactVolts.valueAsNumber * channel.multiplier + channel.offset,
-      direction:channel.multiplier < 0 ? opposite(contactDirection.value) : contactDirection.value,
-      hysteresis:hysteresis.valueAsNumber * Math.abs(channel.multiplier), debounce_ms:debounce.valueAsNumber};
+    // An old zero-gain mapping has no physical limit. Permit disabling it
+    // before the operator corrects the gain on the sensor board.
+    if (!enabledInput.checked && mux === settings.probe_trigger.mux && channel.multiplier === 0) {
+      settings.probe_trigger.enabled = false;
+    } else {
+      if (![contactVolts, hysteresis, debounce].every(input => input.reportValidity())) return;
+      settings.probe_trigger = {...settings.probe_trigger, enabled:enabledInput.checked, mux,
+        level:contactVolts.valueAsNumber * channel.multiplier + channel.offset,
+        direction:channel.multiplier < 0 ? opposite(contactDirection.value) : contactDirection.value,
+        hysteresis:hysteresis.valueAsNumber * Math.abs(channel.multiplier), debounce_ms:debounce.valueAsNumber};
+    }
     settings.routes = assignedRoutes(detectorMuxes(latest), mux);
     contactMessage = '';
     command({action:'settings', settings}, 'contact');
@@ -152,9 +166,17 @@
     renderSensors();
   };
 
+  const isThreshold = key => key === 'low' || key === 'high';
+  const thresholdVolts = (counts, pga) => Number((counts * ranges[pga] / 32768).toFixed(10));
+  const thresholdCounts = (volts, pga) => Math.sign(volts) * Math.round(Math.abs(volts) * 32768 / ranges[pga]);
+
   function fill(value) {
+    const {pga, low, high} = value.config;
+    if (!Number.isInteger(pga) || !ranges[pga] || ![low, high].every(n => Number.isInteger(n) && n >= -32768 && n <= 32767))
+      throw Error('Invalid ADC input range or comparator register values.');
     fields.forEach(input => {
-      const v = value.config[input.dataset.adcField];
+      const key = input.dataset.adcField;
+      const v = isThreshold(key) ? thresholdVolts(value.config[key], pga) : value.config[key];
       if (input.type === 'checkbox') input.checked = v; else input.value = v;
     });
     rows.forEach((row,i) => {
@@ -167,11 +189,19 @@
   }
   function draft() {
     const config = {};
+    equivalents();
     fields.forEach(input => {
-      if (input.type === 'number' && (!input.value || !input.checkValidity())) throw Error(`Invalid ${input.dataset.adcField}`);
-      config[input.dataset.adcField] = input.type === 'checkbox' ? input.checked :
-        ['mode','alert'].includes(input.dataset.adcField) ? input.value : Number(input.value);
+      const key = input.dataset.adcField;
+      if (isThreshold(key)) {
+        if (!input.checkValidity()) throw Error(`Enter the ${key} threshold between ${input.min} and ${input.max} V.`);
+        config[key] = thresholdCounts(input.valueAsNumber, Number(field('pga').value));
+      } else {
+        if (input.type === 'number' && (!input.value || !input.checkValidity())) throw Error(`Invalid ${key}`);
+        config[key] = input.type === 'checkbox' ? input.checked : ['mode','alert'].includes(key) ? input.value : Number(input.value);
+      }
     });
+    if (['traditional','window'].includes(config.alert) && config.low >= config.high)
+      throw Error('The rounded low threshold must be below the rounded high threshold.');
     config.channels = rows.map((row,mux) => {
       const inputs = row.querySelectorAll('input');
       if ([...inputs].slice(1).some(input => !input.value || !input.checkValidity())) throw Error('Enter finite scaling values');
@@ -179,12 +209,37 @@
     });
     const source = importedSettings || latest;
     if (!source) throw Error('Waiting for ADC settings.');
-    return {config, routes:[...source.routes], probe_trigger:{...source.probe_trigger}};
+    const trigger = {...source.probe_trigger};
+    const previous = source.config.channels[trigger.mux], next = config.channels[trigger.mux];
+    if (previous.multiplier !== next.multiplier || previous.offset !== next.offset) {
+      if (next.multiplier === 0) throw Error('Use a nonzero multiplier for the probe contact input.');
+      if (previous.multiplier === 0) {
+        if (trigger.enabled) throw Error('Disable detection in Probe contact before correcting its zero multiplier.');
+        // There was no physical threshold to carry over. Detection stays off.
+      } else {
+        const volts = unscale(trigger.level, previous);
+        if (volts === null) throw Error('The current probe limit cannot be converted to voltage.');
+        trigger.level = volts * next.multiplier + next.offset;
+        trigger.hysteresis = (trigger.hysteresis || 0) / Math.abs(previous.multiplier) * Math.abs(next.multiplier);
+        if (![trigger.level, trigger.hysteresis].every(n => Number.isFinite(n) && Math.abs(n) <= 1e12))
+          throw Error('The new scaling cannot represent the saved probe contact settings.');
+        if (Math.sign(previous.multiplier) !== Math.sign(next.multiplier)) trigger.direction = opposite(trigger.direction);
+      }
+    }
+    return {config, routes:[...source.routes], probe_trigger:trigger};
   }
   function equivalents() {
-    const lsb = ranges[Number(field('pga').value)] / 32768;
-    el('resolution').textContent = `${(lsb * 1e6).toFixed(3)} µV / count`;
-    ['low','high'].forEach(key => el(`${key}-volts`).textContent = `${(Number(field(key).value) * lsb).toFixed(6)} V`);
+    const pga = Number(field('pga').value);
+    const min = thresholdVolts(-32768, pga), max = thresholdVolts(32767, pga);
+    el('resolution').textContent = `${(ranges[pga] / 32768 * 1e6).toFixed(3)} µV / count`;
+    for (const key of ['low','high']) {
+      const input = field(key), volts = input.valueAsNumber;
+      input.min = min;
+      input.max = max;
+      const rounded = thresholdVolts(thresholdCounts(volts, pga), pga);
+      el(`${key}-volts`).textContent = !input.checkValidity() ? `Range ${min} to ${max} V`
+        : rounded !== volts ? `Nearest setting: ${rounded} V` : '';
+    }
   }
   fields.forEach(input => input.addEventListener('input', equivalents));
   function command(value, source = 'board') {
@@ -234,13 +289,23 @@
         trigger = {enabled:false, mux:probeInputs.length === 1 ? probeInputs[0] : 4, level:1, direction:'above'};
       }
       if (!trigger) throw Error('Waiting for contact settings.');
-      importedSettings = {routes, probe_trigger:trigger};
+      if (!Number.isInteger(trigger.mux) || trigger.mux < 0 || trigger.mux >= names.length) throw Error('Invalid imported probe input.');
       fill({config});
+      importedSettings = {config, routes, probe_trigger:trigger};
       el('feedback').textContent = 'Imported draft. Apply & save to use it.';
     } catch (error) { el('feedback').textContent = error.message; }
     el('file').value = '';
   };
-  el('csv').onclick = () => download('time,input,raw,volts,scaled,clipped,filtered_volts,filtered_scaled\n' + history.map(s => [s.time,names[s.mux],s.raw,s.volts,s.scaled,s.clipped,s.filtered_volts,s.filtered_scaled].join(',')).join('\n'), 'text/csv', 'ads1115.csv');
+  el('csv').onclick = () => {
+    const compare = el('quantity').value === 'comparison';
+    const lines = [compare ? 'time,channel,filtered_volts,unfiltered_volts' : 'time,channel,filtered_volts'];
+    for (const sample of history) {
+      const row = [sample.time, names[sample.mux], sample.filtered_volts];
+      if (compare) row.push(sample.volts);
+      lines.push(row.join(','));
+    }
+    download(lines.join('\n'), 'text/csv', 'ads1115.csv');
+  };
   const now = () => Date.now()/1000 + clockOffset;
   function datasets(target, quantity, seconds, selectedMux = null) {
     if (!latest) return [];
@@ -251,13 +316,13 @@
       const gap = Math.max(.5, latest.config.interval_ms/1000 + 3 * latest.config.channels.filter(c => c.enabled).length/latest.config.rate);
       samples.forEach((s,i) => {
         if (i && s.time-samples[i-1].time > gap) data.push({x:s.time-time-.001, y:null});
-        data.push({x:s.time-time,y:s[quantity]});
+        data.push({x:s.time-time,y:Number.isFinite(s[quantity]) ? s[quantity] : null});
       });
-      return {label:`ADS ${names[ch.mux]} (${quantity === 'filtered_scaled' ? 'filtered scaled' : quantity})`, yAxisID:'ads1115', data, borderColor:colors[ch.mux], borderWidth:1.5, pointRadius:0, spanGaps:false};
+      return {label:`ADS ${names[ch.mux]} · ${quantity === 'filtered_volts' ? 'filtered' : 'unfiltered'} (V)`, yAxisID:'ads1115', data, borderColor:colors[ch.mux], borderWidth:1.5, pointRadius:0, spanGaps:false};
     });
   }
   const scaleBuckets = new Map();
-  const scaleFields = ['raw', 'volts', 'scaled', 'filtered_volts', 'filtered_scaled'];
+  const scaleFields = ['volts', 'filtered_volts'];
   function rememberScale(samples, end) {
     for (const sample of samples) {
       const second = Math.floor(sample.time);
@@ -278,15 +343,13 @@
     for (const second of scaleBuckets.keys()) if (end - second > SIGNAL_LOOKBACK_S) scaleBuckets.delete(second);
   }
 
-  function adcAxis(route, quantity) {
+  function adcAxis(route, quantity, threshold = null) {
     if (!latest) return {};
-    let low = Infinity, high = -Infinity, minSpan = 0;
+    let low = threshold ?? Infinity, high = threshold ?? -Infinity;
     const time = now(), voltsSpan = ranges[latest.config.pga] * .01;
     const quantities = quantity === 'comparison' ? ['volts', 'filtered_volts'] : [quantity];
     for (const channel of latest.config.channels) {
       if (!channel.enabled || (route && ![route, 'both'].includes(latest.routes[channel.mux]))) continue;
-      const span = quantity === 'raw' ? 327.68 : quantity.includes('scaled') ? voltsSpan * Math.abs(channel.multiplier) : voltsSpan;
-      minSpan = Math.max(minSpan, span);
       for (const [second, channels] of scaleBuckets) {
         if (time - second > SIGNAL_LOOKBACK_S) continue;
         const channelBounds = channels.get(channel.mux);
@@ -296,18 +359,19 @@
         }
       }
     }
-    return signalBounds(low, high, minSpan || .001);
+    return signalBounds(low, high, voltsSpan);
   }
 
   window.operatorADCOverlay = (target, route, baseCount) => {
-    const extra = datasets(route, 'filtered_scaled', 30);
+    const extra = datasets(route, 'filtered_volts', 30);
     const trigger = latest?.probe_trigger;
-    if (route === 'probe' && trigger?.enabled) extra.push({label:`Contact trigger (${names[trigger.mux]})`,
-      yAxisID:'ads1115', data:[{x:-30,y:trigger.level},{x:0,y:trigger.level}],
+    const level = unscale(trigger?.level, channelAt(trigger?.mux));
+    if (route === 'probe' && trigger?.enabled && level !== null) extra.push({label:`Contact limit · ${names[trigger.mux]} (V)`,
+      yAxisID:'ads1115', data:[{x:-30,y:level},{x:0,y:level}],
       borderColor:'#ff9b89',borderDash:[5,4],borderWidth:1,pointRadius:0});
     target.data.datasets = [...target.data.datasets.slice(0,baseCount), ...extra];
-    target.options.scales.ads1115 = {type:'linear', position:'right', display:extra.length > 0, ...adcAxis(route, 'filtered_scaled'),
-      title:{display:true,text:'ADS1115 scaled'}, grid:{drawOnChartArea:false}, ticks:{color:'#efcf70'}};
+    target.options.scales.ads1115 = {type:'linear', position:'right', display:extra.length > 0, ...adcAxis(route, 'filtered_volts', route === 'probe' && trigger?.enabled ? level : null),
+      title:{display:true,text:'Sensor voltage (V)'}, grid:{drawOnChartArea:false}, ticks:{color:'#efcf70'}};
   };
   function render() {
     if (!latest) return;
@@ -317,15 +381,15 @@
     renderSensors();
     window.operatorADCFrame?.();
     if (!document.getElementById('settings-dialog').open || document.getElementById('settings-adc').hidden) return;
-    const seconds = Number(el('window').value), quantity = el('quantity').value;
+    const seconds = Number(el('window').value);
     const recent = history.filter(s => now()-s.time <= 2);
     el('rate').textContent = `${(recent.length/2).toFixed(1)} samples/s total · ${latest.config.rate} SPS chip rate shared across enabled inputs`;
     el('readings').innerHTML = latest.config.channels.filter(ch => ch.enabled).map(ch => {
       const samples = history.filter(s => s.mux===ch.mux && now()-s.time<=seconds);
-      const last = samples.at(-1), values = samples.map(s=>s[quantity === 'comparison' ? 'filtered_volts' : quantity]).filter(Number.isFinite);
+      const last = samples.at(-1), values = samples.map(s=>s.filtered_volts).filter(Number.isFinite);
       const fresh = last && latest.running && latest.connected && now()-last.time < Math.max(1, latest.config.interval_ms/1000 + 2);
-      const fmt = n => Number(n).toFixed(4);
-      return `<tr><td>${names[ch.mux]}</td><td>${fresh ? last.raw : '—'}</td><td>${fresh ? fmt(last.volts) : '—'}</td><td>${fresh ? fmt(last.scaled) : '—'}</td><td>${values.length ? [Math.min(...values),Math.max(...values),values.reduce((a,b)=>a+b,0)/values.length].map(fmt).join(' / ') : '—'}</td><td>${!fresh ? 'STALE' : last.clipped ? 'CLIPPED' : 'Live'}</td></tr>`;
+      const fmt = n => Number.isFinite(n) ? n.toFixed(6) : '—';
+      return `<tr><td>${names[ch.mux]}</td><td>${fresh ? fmt(last.filtered_volts) : '—'}</td><td>${values.length ? [Math.min(...values),Math.max(...values),values.reduce((a,b)=>a+b,0)/values.length].map(fmt).join(' / ') : '—'}</td><td>${!fresh ? 'STALE' : last.clipped ? 'CLIPPED' : 'Live'}</td></tr>`;
     }).join('');
     el('registers').textContent = `${latest.applied === latest.revision ? 'Applied' : 'Applying settings'} · revision ${latest.revision}\n` + Object.entries(latest.registers).map(([k,v])=>`${k}: 0x${v.toString(16).padStart(4,'0')}  ${v.toString(2).padStart(16,'0')}`).join('\n');
   }
@@ -353,26 +417,25 @@
       borderColor:getComputedStyle(document.documentElement).getPropertyValue('--warn').trim(),
       borderDash:[7, 3], borderWidth:2, pointRadius:0, spanGaps:false};
   };
-  function previewTraces(seconds) {
+  function boardTraces(seconds, compare) {
     const applied = datasets(null, 'filtered_volts', seconds);
-    const raw = datasets(null, 'volts', seconds);
     const draftMs = field('filter_ms').valueAsNumber;
-    const preview = [];
-    raw.forEach((line, i) => {
-      line.label = line.label.replace('(volts)', '(raw V)');
+    const previewing = field('filter_ms').validity.valid && draftMs !== latest.config.filter_ms;
+    if (!compare && !previewing) return applied;
+    const unfiltered = datasets(null, 'volts', seconds);
+    for (const line of unfiltered) {
       line.borderWidth = 1;
       line.borderDash = [2, 4];
-      applied[i].label = line.label.replace('(raw V)', '(applied V)');
-      if (!field('filter_ms').validity.valid || draftMs === latest.config.filter_ms) return;
-      const data = previewFilter(line.data, draftMs);
-      preview.push({...line, label:line.label.replace('(raw V)', '(preview V)'), data, borderWidth:2, borderDash:[7, 3]});
-    });
-    return [...raw, ...applied, ...preview];
+      if (previewing) {
+        const data = previewFilter(line.data, draftMs);
+        applied.push({...line, label:line.label.replace('unfiltered (V)', 'filter preview (V)'), data, borderWidth:2, borderDash:[7, 3]});
+      }
+    }
+    return compare ? [...unfiltered, ...applied] : applied;
   }
   field('filter_ms').oninput = () => {
     smoothingError = '';
     renderSmoothing();
-    el('quantity').value = 'comparison';
     if (chart) chart.$frameBucket = null;
     window.operatorADCFrame();
   };
@@ -433,8 +496,17 @@
     el('filter-status').textContent = Number.isFinite(applied)
       ? `Applied on car: ${applied ? applied+' ms' : 'off'}` + (field('filter_ms').validity.valid && draft !== applied ? ` · Unsaved preview: ${draft ? draft+' ms' : 'off'}` : '')
       : 'Waiting for filter settings from the car';
-    chart.data.datasets = quantity === 'comparison' ? previewTraces(seconds) : datasets(null,quantity,seconds);
-    chart.options.scales.ads1115 = {type:'linear', position:'left', ...adcAxis(null, quantity)};
+    const compare = quantity === 'comparison';
+    chart.data.datasets = boardTraces(seconds, compare);
+    const bounds = adcAxis(null, quantity);
+    if (!compare && field('filter_ms').validity.valid && draft !== applied && Number.isFinite(bounds.min)) {
+      for (const line of chart.data.datasets) for (const point of line.data) {
+        if (!Number.isFinite(point.y)) continue;
+        bounds.min = Math.min(bounds.min, point.y);
+        bounds.max = Math.max(bounds.max, point.y);
+      }
+    }
+    chart.options.scales.ads1115 = {type:'linear', position:'left', title:{display:true,text:'Voltage (V)'}, ...bounds};
     chart.options.scales.x.min = -seconds; chart.$scrollPixels = 0; chart.$renderedAt = performance.now(); chart.update('none');
   }
 

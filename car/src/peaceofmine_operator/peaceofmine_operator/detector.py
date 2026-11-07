@@ -5,6 +5,16 @@ import math
 import time
 
 
+def calibration_values(value):
+    # The saved format expresses voltage in units of reference_voltage / 255.
+    # ADS1115 differential channels can be negative or exceed that reference.
+    base, full, ref = (value.get(k) for k in ('baseline_adc', 'full_response_adc', 'reference_voltage'))
+    if (not all(type(v) in (float, int) and math.isfinite(v) for v in (base, full, ref))
+            or not 0 < ref <= 5.5 or base == full or max(abs(base), abs(full)) * ref / 255 > 6.144 + 1e-9):
+        raise ValueError('Invalid detector calibration')
+    return base, full, ref
+
+
 class DetectorLowPass:
     def __init__(self, time_constant=.1):
         self.time_constant = time_constant
@@ -45,7 +55,7 @@ class DetectorTelemetry:
             key = (packet.get('seq'), packet.get('uptime_ms'))
             raw = packet.get('precise_adc', packet.get('amplitude_adc'))
             filtered = packet.get('filtered_adc', raw)
-            if (key != self.last_packet and all(type(v) in (int,float) and math.isfinite(v) and 0 <= v <= 255 for v in (raw,filtered))):
+            if key != self.last_packet and all(type(v) in (int,float) and math.isfinite(v) for v in (raw,filtered)):
                 self.history.append((self.updated, raw, filtered))
                 self.last_packet = key
 

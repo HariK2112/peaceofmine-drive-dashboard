@@ -136,8 +136,11 @@ class OperatorWebBridge(Node):
 
     def _adc_state(self, value):
         probe = self._actuators.get('probe', {}).get('probe', {})
-        if time.monotonic()-self._actuator_times.get('probe',0) < .5:
-            value['probe_contact'] = probe.get('adc_contact_state', value.get('probe_contact'))
+        contact = probe.get('adc_contact_state') or {}
+        if (contact and time.monotonic()-self._actuator_times.get('probe',0) < .5
+                and contact.get('source_session', value.get('session')) == value.get('session')
+                and contact.get('source_revision', value.get('saved_config_revision')) == value.get('saved_config_revision')):
+            value['probe_contact'] = contact
         self.adc.update(value)
 
     def _device_result(self, value):

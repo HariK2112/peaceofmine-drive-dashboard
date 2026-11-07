@@ -37,6 +37,7 @@ class ProbeController(ActuatorController):
         self.cycle_target_depth = 80.0
         self.contact_detected = False
         self.contact_depth_mm = None
+        self.contact_volts = None
         self.last_probe_result = None
         super().__init__(**kwargs)
         self.extension = probe_calibration.load(self.config_file,self.simulation)
@@ -103,7 +104,7 @@ class ProbeController(ActuatorController):
         for sample in msg.samples:
             age=time.time()-(sample.stamp.sec+sample.stamp.nanosec/1e9)
             if sample.channel == self.contact.config['mux'] and 0 <= age <= self.contact.max_age:
-                self.contact.sample(sample.scaled, sample.sequence, (msg.session, msg.config_revision))
+                self.contact.sample(sample.scaled, sample.sequence, (msg.session, msg.config_revision), sample.volts)
 
     def interlock(self):
         return super().interlock() and not self.fault
@@ -136,7 +137,7 @@ class ProbeController(ActuatorController):
             self.cycle_active = False
             self.cycle_phase = 'IDLE'
             if not success:
-                self.last_probe_result = dict(status='ABORTED', reason=reason, timestamp=time.time())
+                self.last_probe_result = dict(status='ABORTED', reason=reason, timestamp=time.time(), contact_volts=self.contact_volts)
         if self.motion == 'home' and not success:
             self.home_status = 'Homing stopped · previous zero retained' if self.home_position is not None else 'Waiting for probe encoder'
         self.motion = None
@@ -180,6 +181,7 @@ class ProbeController(ActuatorController):
         self.at_cycle_depth = False
         self.contact_detected = False
         self.contact_depth_mm = None
+        self.contact_volts = None
         self.cycle_timeout = max(60., 10+2*abs(self.operation.target-self.telemetry.position)*360/(4096*self.operation.speed*.684))
 
     def start_target(self, depth, hold=True):
@@ -302,7 +304,7 @@ class ProbeController(ActuatorController):
             if self.cycle_active:
                 self.cycle_active = False
                 self.cycle_phase = 'IDLE'
-                self.last_probe_result = dict(status='TIMEOUT', reason=reason, timestamp=time.time())
+                self.last_probe_result = dict(status='TIMEOUT', reason=reason, timestamp=time.time(), contact_volts=self.contact_volts)
             self.stop(reason)
             return
 
@@ -311,7 +313,7 @@ class ProbeController(ActuatorController):
             if not self.interlock():
                 self.cycle_active = False
                 self.cycle_phase = 'IDLE'
-                self.last_probe_result = dict(status='ABORTED', reason='RC permission or probe connection lost', timestamp=time.time())
+                self.last_probe_result = dict(status='ABORTED', reason='RC permission or probe connection lost', timestamp=time.time(), contact_volts=self.contact_volts)
                 self.stop('Probe cycle aborted: RC permission or probe connection lost')
                 return
 
@@ -332,6 +334,7 @@ class ProbeController(ActuatorController):
                 if detected or (self.target_reached()
                                 and self.extension_sign*(self.telemetry.position-self.home_position) > 0):
                     self.contact_detected = detected
+                    self.contact_volts = contact.get('filtered_volts')
                     self.contact_depth_mm = round(max(0.0, current_depth), 1) if detected else None
                     self.cycle_phase = 'RETRACTING'
                     self.reason = (f'Contact at {self.contact_depth_mm:.1f} mm; retracting' if detected
@@ -348,7 +351,7 @@ class ProbeController(ActuatorController):
                     self.last_probe_result = dict(
                         status=status,
                         contact=self.contact_detected,
-                        contact_depth_mm=self.contact_depth_mm,
+                        contact_depth_mm=self.contact_depth_mm, contact_volts=self.contact_volts,
                         target_depth_mm=self.cycle_target_depth,
                         timestamp=time.time()
                     )
@@ -394,6 +397,8 @@ class ProbeController(ActuatorController):
             self.history.append((now,ratio))
         self.history = [(t,v) for t,v in self.history if now-t<=30][-700:]
         contact = self.contact.snapshot()
+        if isinstance(self.contact.session, tuple):
+            contact['source_session'], contact['source_revision'] = self.contact.session
         msg = ContactState(valid=contact['fresh'], detected=contact['detected'] is True,
             channel=contact['mux'], value=float(contact['value'] or 0), threshold=float(contact['level']),
             reason='Fresh' if contact['fresh'] else 'Contact input disabled or stale')
@@ -412,7 +417,7 @@ class ProbeController(ActuatorController):
                 cycle_goal_id=(bytes(self.action_handle.goal_id.uuid).hex()
                                if self.cycle_active and self.action_probe_cycle and self.action_handle else None),
                 cycle_started_at=self.started if self.cycle_active else None,
-                contact_detected=self.contact_detected, contact_depth_mm=self.contact_depth_mm, last_result=self.last_probe_result,
+                contact_detected=self.contact_detected, contact_depth_mm=self.contact_depth_mm, contact_volts=self.contact_volts, last_result=self.last_probe_result,
                 reason=self.reason, fault=self.fault, pressure_ratio=ratio, pressure_window_s=30,
                 pressure_samples=[dict(x=t-now,y=v*100) for t,v in self.history],
                 **self.load_contact.snapshot(now), adc_contact=contact['detected'], adc_contact_fresh=contact['fresh'], adc_contact_state=contact))

@@ -17,7 +17,7 @@ from sensor_msgs.msg import JointState
 from geometry_msgs.msg import TwistWithCovarianceStamped
 from rclpy.qos import qos_profile_sensor_data
 from peaceofmine_operator.ads1115 import RANGES
-from peaceofmine_operator.detector import DetectorTelemetry, fixture_angle_at
+from peaceofmine_operator.detector import DetectorTelemetry, calibration_values, fixture_angle_at
 from peaceofmine_interfaces.msg import ActuatorStatus, AdcSamples
 from peaceofmine_operator import configuration
 from peaceofmine_operator.actuator_protocol import status_dict
@@ -115,10 +115,7 @@ class DetectorNode(Node):
         previous = (self.baseline, self.full_response, self.reference_voltage, self.adc_channel, self.adc_revision)
         saved = configuration.load(self.config_file)
         value = saved.get('metal_detector', dict(baseline_adc=0., full_response_adc=255., reference_voltage=5.))
-        base, full, ref = (value[k] for k in ('baseline_adc', 'full_response_adc', 'reference_voltage'))
-        if (not all(type(v) in (int, float) and math.isfinite(v) for v in (base, full, ref))
-                or not (0 <= base <= 255 and 0 <= full <= 255 and full != base and 0 < ref <= 5.5)):
-            raise ValueError('Invalid saved detector calibration')
+        base, full, ref = calibration_values(value)
         self.baseline, self.full_response, self.reference_voltage = float(base), float(full), float(ref)
         adc = saved.get('adc', {})
         self.adc_full_scale = RANGES[adc.get('config', {}).get('pga', 1)]
@@ -181,21 +178,21 @@ class DetectorNode(Node):
     def process_adc_sample(self, volts, filtered_volts, seq, now, timestamp):
         self.seq = seq
         self.sample_times.append(now)
-        raw_count = max(0., min(255., volts / self.reference_voltage * 255.))
+        raw_count = volts / self.reference_voltage * 255.
 
         self.last_raw_adc = raw_count
 
-        self.last_filtered_adc = max(0., min(255., filtered_volts / self.reference_voltage * 255.))
+        self.last_filtered_adc = filtered_volts / self.reference_voltage * 255.
         self.recent_samples.append((now, self.last_filtered_adc))
         ratio = (self.last_filtered_adc-self.baseline)/(self.full_response-self.baseline)
         normalized = max(0., min(1., ratio))
-        int_adc = int(round(raw_count))
+        int_adc = max(0, min(255, round(raw_count)))
         rising = normalized >= self.threshold and not self.detected
         self.signal, self.signal_at, self.detected = normalized, now, normalized >= self.threshold
         pose = dict(self.pose) if self.pose_at and abs(now-self.pose_at) < .5 else None
         self.pending_samples.append((now, timestamp, raw_count, self.last_filtered_adc, ratio, rising, pose))
 
-        self.raw_pub.publish(UInt16(data=min(65535, max(0, int_adc))))
+        self.raw_pub.publish(UInt16(data=int_adc))
         self.ratio_pub.publish(Float32(data=normalized))
         self.fresh_pub.publish(Bool(data=True))
 
@@ -417,9 +414,10 @@ class DetectorNode(Node):
             packet=dict(
                 seq=self.seq,
                 uptime_ms=int((now - self.start_time) * 1000),
-                amplitude_adc=int(round(self.last_raw_adc)),
+                amplitude_adc=max(0, min(255, round(self.last_raw_adc))),
                 precise_adc=self.last_raw_adc, filtered_adc=self.last_filtered_adc
             ),
+            input_range_volts=self.adc_full_scale,
             filter_tau_s=self.filter_tau_s,
             baseline_adc=self.baseline,
             full_response_adc=self.full_response,
@@ -453,12 +451,19 @@ class DetectorNode(Node):
         valid = all(type(v) in (int, float) and math.isfinite(v) for v in (raw, filtered, stamp))
         fresh = bool(fresh and valid)
         peak = {**self.latest_peak, 'fresh': fresh and now-self.latest_peak['timestamp'] <= 30} if self.latest_peak else None
+        source = {} if self.use_adc else self.sensor.state
+        reference = source.get('reference_voltage', self.reference_voltage)
+        baseline_v = source.get('baseline_adc', self.baseline) * reference / 255
+        full_v = source.get('full_response_adc', self.full_response) * reference / 255
+        latest_filtered = self.last_filtered_adc if self.use_adc else filtered
         self.control_pub.publish(String(data=json.dumps(dict(fresh=fresh, signal_ratio=self.signal, latest_peak=peak,
             angle_fresh=angle is not None, angle_deg=angle, sample_time=stamp,
             sweep_speed_deg_s=self.sweep_speed,
-            volts=raw*self.reference_voltage/255 if valid else None,
-            filtered_volts=filtered*self.reference_voltage/255 if valid else None,
-            response_direction=1 if self.full_response > self.baseline else -1), allow_nan=False)))
+            volts=raw*reference/255 if valid else None,
+            filtered_volts=filtered*reference/255 if valid else None,
+            latest_filtered_volts=latest_filtered*reference/255 if fresh else None,
+            baseline_volts=baseline_v, full_response_volts=full_v,
+            response_direction=1 if full_v > baseline_v else -1), allow_nan=False)))
 
     def publish(self):
         arm = self.arm if time.monotonic() - self.arm_at < 0.5 else {}
@@ -476,6 +481,7 @@ class DetectorNode(Node):
             rate_hz=rate_hz,
             received=self.seq,
             invalid_lines=0,
+            input_range_volts=self.adc_full_scale,
             filter_tau_s=self.filter_tau_s,
             baseline_adc=self.baseline,
             full_response_adc=self.full_response,
@@ -483,7 +489,7 @@ class DetectorNode(Node):
             packet=dict(
                 seq=self.seq,
                 uptime_ms=int((now - self.start_time) * 1000),
-                amplitude_adc=int(round(self.last_raw_adc)),
+                amplitude_adc=max(0, min(255, round(self.last_raw_adc))),
                 precise_adc=self.last_raw_adc, filtered_adc=self.last_filtered_adc,
                 timestamp_s=self.adc_stamp,
                 angle_deg=self.last_aligned[4] if self.last_aligned and self.last_aligned[1] == self.adc_stamp else None

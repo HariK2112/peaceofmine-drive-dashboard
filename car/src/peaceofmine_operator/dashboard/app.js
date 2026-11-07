@@ -17,47 +17,38 @@ const MAX_ANGULAR_RAD_S = 1.4;
 const DRIVE_EPSILON = 1e-4;
 
 // search-alert:start
-// Operator-side search alert. It only informs the operator; it never moves
-// anything. Levels are percent of the calibrated mine level (signal_ratio).
-const SEARCH_ALERT_DEFAULT_LEVEL = 60;
-const SEARCH_ALERT_MIN_LEVEL = 20;
-const SEARCH_ALERT_MAX_LEVEL = 100;
-const SEARCH_ALERT_HOLD_MS = 150;    // reading must stay above the level this long
-const SEARCH_ALERT_REARM_MS = 1500;  // and fall clearly below it this long before it can fire again
-const SEARCH_ALERT_HYSTERESIS = 5;   // percentage points below the level that count as "clearly below"
-function clampSearchAlertLevel(level) {
-  const value = Number(level);
-  if (!Number.isFinite(value)) return SEARCH_ALERT_DEFAULT_LEVEL;
-  return Math.max(SEARCH_ALERT_MIN_LEVEL, Math.min(SEARCH_ALERT_MAX_LEVEL, Math.round(value / 5) * 5));
-}
+// Used by the preview when the car does not report an alert state.
+const SEARCH_ALERT_HOLD_MS = 150;
+const SEARCH_ALERT_REARM_MS = 1500;
 // Pure step: returns the next alert state and whether it just fired.
 // phase: idle → pending (above level) → active (fired) → cooling (below) → idle.
-function stepSearchAlert(alert, {enabled, level, signal, live, suppressed, now}) {
+function stepSearchAlert(alert, {enabled, level, signal, direction, hysteresis, live, suppressed, now}) {
   const next = {...alert};
   let fired = false;
-  if (!enabled || !live || suppressed || !Number.isFinite(signal)) {
+  if (!enabled || !live || suppressed || ![signal, level, hysteresis].every(Number.isFinite)) {
     if (next.phase === 'active' || next.phase === 'cooling') next.clearedAt = now;
     next.phase = 'idle';
     return {alert: next, fired};
   }
-  if (next.phase === 'active' || next.phase === 'cooling') next.peak = Math.max(next.peak || 0, signal);
+  const distance = (signal - level) * direction;
+  if ((next.phase === 'active' || next.phase === 'cooling') && (signal-next.peak)*direction > 0) next.peak = signal;
   switch (next.phase) {
     case 'pending':
-      if (signal < level) next.phase = 'idle';
+      if (distance < 0) next.phase = 'idle';
       else if (now - next.since >= SEARCH_ALERT_HOLD_MS) {
         Object.assign(next, {phase: 'active', firedAt: now, peak: signal});
         fired = true;
       }
       break;
     case 'active':
-      if (signal < level - SEARCH_ALERT_HYSTERESIS) Object.assign(next, {phase: 'cooling', since: now});
+      if (distance < -hysteresis) Object.assign(next, {phase: 'cooling', since: now});
       break;
     case 'cooling':
-      if (signal >= level) next.phase = 'active';
+      if (distance >= 0) next.phase = 'active';
       else if (now - next.since >= SEARCH_ALERT_REARM_MS) Object.assign(next, {phase: 'idle', clearedAt: now});
       break;
     default:
-      if (signal >= level) Object.assign(next, {phase: 'pending', since: now});
+      if (distance >= 0) Object.assign(next, {phase: 'pending', since: now});
   }
   return {alert: next, fired};
 }
@@ -169,8 +160,7 @@ let selectedPadId = null;
 const keys = new Set();
 const activeSliders = new Set();
 if (!['auto', 'standard', 'xbox360'].includes(preferences.mapping)) preferences.mapping = 'auto';
-preferences.searchAlert = Object.assign({enabled: true, level: SEARCH_ALERT_DEFAULT_LEVEL, sound: true}, preferences.searchAlert);
-preferences.searchAlert.level = clampSearchAlertLevel(preferences.searchAlert.level);
+preferences.searchAlert = Object.assign({enabled: true, level: 60, sound: true}, preferences.searchAlert);
 preferences.searchAlert.enabled = preferences.searchAlert.enabled !== false;
 preferences.searchAlert.sound = preferences.searchAlert.sound !== false;
 const triggerSeen = {lt: false, rt: false};
@@ -669,26 +659,32 @@ function playSearchAlertSound() {
 }
 
 function searchAlertVolts() {
+  const settings = preferences.searchAlert;
+  if (Number.isFinite(settings.volts)) return settings.volts;
   const sensor = state.detector.sensor || {};
-  const reference = sensor.reference_voltage;
-  if (!(reference > 0) || !Number.isFinite(sensor.baseline_adc) || !Number.isFinite(sensor.full_response_adc)) return NaN;
-  const base = sensor.baseline_adc * reference / 255;
-  const full = sensor.full_response_adc * reference / 255;
-  return base + (full - base) * preferences.searchAlert.level / 100;
+  const base = detectorVolts(sensor.baseline_adc, sensor.reference_voltage);
+  const full = detectorVolts(sensor.full_response_adc, sensor.reference_voltage);
+  if (base === null || full === null || !Number.isFinite(settings.level)) return NaN;
+  return base + (full - base) * settings.level / 100;
 }
 
 function renderSearchAlertLevel() {
-  const {enabled, level} = preferences.searchAlert;
+  const {enabled} = preferences.searchAlert;
   const volts = searchAlertVolts();
-  const key = `${enabled}:${level}:${volts}`;
+  const range = detectorVoltageRange(state.detector.sensor || {});
+  const field = $('search-alert-level');
+  const canEdit = state.connected && state.drive.you_control_owner && !!state.settings?.display;
+  field.disabled = !enabled || !canEdit;
+  const key = JSON.stringify([enabled, volts, range, canEdit]);
   if (key === searchAlertLevelKey) return;
   searchAlertLevelKey = key;
-  const text = enabled ? `Alert at ${level}%` : 'Alert off';
-  $('alert-marker').style.left = `${level}%`;
-  $('alert-marker').hidden = !enabled;
-  $('detector-alert-note').textContent = text;
-  $('metal-alert-level').textContent = enabled
-    ? `${level}% of mine level${Number.isFinite(volts) ? ` · ${volts.toFixed(3)} V` : ''}` : 'Off';
+  if (document.activeElement !== field || field.disabled) field.value = Number.isFinite(volts) ? Number(volts.toFixed(6)) : '';
+  const value = voltageLabel(volts);
+  const marker = $('alert-marker');
+  marker.hidden = !enabled || !range || !Number.isFinite(volts) || volts < range.min || volts > range.max;
+  if (!marker.hidden) marker.style.left = (volts - range.min) / (range.max - range.min) * 100 + '%';
+  $('detector-alert-note').textContent = enabled ? 'Alert at ' + value : 'Alert off';
+  $('metal-alert-level').textContent = enabled ? value : 'Off';
 }
 
 function updateSearchAlert(now) {
@@ -696,17 +692,20 @@ function updateSearchAlert(now) {
   const detector = state.detector;
   const live = state.connected && detector.fresh !== false && detector.sensor?.fresh !== false;
   const suppressed = Boolean(state.drive.calibrating || state.inspection?.active || state.probe?.active || state.probe?.cycle_active);
-  const signal = detector.signal_ratio * 100;
+  const sensor = detector.sensor || {};
+  const signal = detectorVolts(sensor.packet?.filtered_adc, sensor.reference_voltage);
+  const span = detectorVolts(sensor.full_response_adc - sensor.baseline_adc, sensor.reference_voltage);
   const shared = state.search_alert;
   if (shared) {
     const fired = shared.fired_at && shared.fired_at !== searchAlert.eventId;
     const first = searchAlert.eventId === undefined;
-    searchAlert = {phase:shared.phase, peak:shared.peak, eventId:shared.fired_at || 0,
+    searchAlert = {phase:shared.phase, peak:shared.peak_volts, eventId:shared.fired_at || 0,
       firedAt:shared.fired_at ? lastTelemetryAt - (shared.server_time-shared.fired_at)*1000 : -Infinity,
       clearedAt:shared.cleared_at ? lastTelemetryAt - (shared.server_time-shared.cleared_at)*1000 : -Infinity};
     if (fired && !first && settings.sound) playSearchAlertSound();
   } else {
-    const step = stepSearchAlert(searchAlert, {enabled:settings.enabled, level:settings.level, signal, live, suppressed, now});
+    const step = stepSearchAlert(searchAlert, {enabled:settings.enabled, level:searchAlertVolts(), signal, direction:Math.sign(span),
+      hysteresis:span === null ? NaN : Math.abs(span)*.05, live, suppressed, now});
     searchAlert = step.alert;
     if (step.fired && settings.sound) playSearchAlertSound();
   }
@@ -720,12 +719,13 @@ function updateSearchAlert(now) {
   if (banner.hidden === shown) banner.hidden = !shown;
   document.body.dataset.searchAlert = active ? 'active' : recent ? 'recent' : '';
   if (!shown) return;
-  const peak = Math.round(searchAlert.peak || 0);
+  const peak = voltageLabel(searchAlert.peak);
+  const reading = voltageLabel(signal);
   banner.dataset.kind = active ? 'active' : 'recent';
   const title = active ? 'Possible metal here' : 'Possible metal behind you';
   const detail = active
-    ? `${Math.round(signal)}% now · peak ${peak}%. Stop and run Confirm arc.`
-    : `Peak ${peak}% ${Math.max(1, Math.round((now - searchAlert.firedAt) / 1000))} s ago. Back up to check it.`;
+    ? `${reading} now · peak ${peak}. Stop and run Confirm arc.`
+    : `Peak ${peak} ${Math.max(1, Math.round((now - searchAlert.firedAt) / 1000))} s ago. Back up to check it.`;
   if ($('search-alert-title').textContent !== title) $('search-alert-title').textContent = title;
   if ($('search-alert-detail').textContent !== detail) $('search-alert-detail').textContent = detail;
 }
@@ -750,7 +750,7 @@ function renderTargetLog() {
   if (!targetLog.length) {
     const row = tbody.insertRow();
     row.className = 'empty-row';
-    const cell = row.insertCell(); cell.colSpan = 6;
+    const cell = row.insertCell(); cell.colSpan = 7;
     cell.textContent = 'No entries yet. Log a pose, activate the marking pump, or run a probe cycle.';
     return;
   }
@@ -762,8 +762,8 @@ function renderTargetLog() {
     const position = Number.isFinite(entry.latitude) && Number.isFinite(entry.longitude)
       ? `${entry.latitude.toFixed(6)}, ${entry.longitude.toFixed(6)} · ${quality} · ${accuracy}`
       : Number.isFinite(entry.x) && Number.isFinite(entry.y) ? `(${entry.x.toFixed(2)}, ${entry.y.toFixed(2)})` : '—';
-    for (const value of [String(entry.id).slice(0, 8), position, entry.metal_signal_pct == null ? '—' : `${entry.metal_signal_pct}%`,
-                         entry.contact_depth_mm ?? '—', [entry.status, entry.latitude == null && entry.gps_status && quality].filter(Boolean).join(' · '), logTime(entry.timestamp)]) {
+    for (const value of [String(entry.id).slice(0, 8), position, Number.isFinite(entry.detector_volts) ? entry.detector_volts.toFixed(4) : '',
+                         entry.contact_depth_mm ?? '—', Number.isFinite(entry.contact_volts) ? entry.contact_volts.toFixed(4) : '', [entry.status, entry.latitude == null && entry.gps_status && quality].filter(Boolean).join(' · '), logTime(entry.timestamp)]) {
       row.insertCell().textContent = value;
     }
   }
@@ -772,8 +772,8 @@ function renderTargetLog() {
 
 function exportTargetLogCsv() {
   if (!targetLog.length) return;
-  const header = ['ID', 'X (m)', 'Y (m)', 'Heading (deg)', 'Metal Signal (%)', 'Contact Depth', 'Status', 'Timestamp', 'Latitude', 'Longitude', 'Horizontal error (m)', 'GNSS status'];
-  const rows = targetLog.map(t => [t.id, t.x, t.y, t.heading_deg, t.metal_signal_pct, t.contact_depth_mm, t.status, t.timestamp, t.latitude ?? '', t.longitude ?? '', t.horizontal_accuracy_m ?? '', t.gps_status ?? '']);
+  const header = ['ID', 'X (m)', 'Y (m)', 'Heading (deg)', 'Filtered detector (V)', 'Contact depth (mm)', 'Filtered probe sensor (V)', 'Status', 'Timestamp', 'Latitude', 'Longitude', 'Horizontal error (m)', 'GNSS status'];
+  const rows = targetLog.map(t => [t.id, t.x ?? '', t.y ?? '', t.heading_deg ?? '', t.detector_volts ?? '', t.contact_depth_mm ?? '', t.contact_volts ?? '', t.status, t.timestamp, t.latitude ?? '', t.longitude ?? '', t.horizontal_accuracy_m ?? '', t.gps_status ?? '']);
   const csv = [header.join(','), ...rows.map(row => row.map(value => '"' + String(value).replaceAll('"', '""') + '"').join(','))].join('\n');
   const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
@@ -877,7 +877,7 @@ function checkProbeCycleState() {
         alertBadge.className = 'badge active';
       }
       if (alertText) {
-        alertText.textContent = `Contact trigger at ${lastRes.contact_depth_mm ?? '—'} mm. Probe retracted.`;
+        alertText.textContent = `Contact trigger at ${lastRes.contact_depth_mm ?? '—'} mm${Number.isFinite(lastRes.contact_volts) ? ` · ${lastRes.contact_volts.toFixed(4)} V` : ''}. Probe retracted.`;
       }
 
     } else if (lastRes.status === 'CLEAR') {
@@ -1250,19 +1250,23 @@ function updateHud() {
 
   $('speed').textContent = `${Math.abs(robot.speed_mps).toFixed(2)} m/s`;
 
-  const signalPercent = detector.signal_ratio * 100;
-  $('signal').textContent = detector.fresh === false ? '--' : Math.round(signalPercent);
-  const rawAdc = detector.sensor?.packet?.precise_adc ?? detector.sensor?.packet?.amplitude_adc;
-  $('detector-raw').textContent = detector.fresh !== false && detector.sensor?.fresh === true && Number.isFinite(rawAdc)
-    ? `${rawAdc.toFixed(3)} ADC` : '-- ADC';
-  $('meter-fill').style.width = `${detector.fresh === false ? 0 : signalPercent}%`;
-  $('meter-fill').style.background = detectorColor(detector.signal_ratio);
-  $('threshold').style.left = `${detector.threshold_ratio * 100}%`;
   const sensor = detector.sensor;
-  const volts = sensor?.packet?.filtered_adc * sensor?.reference_voltage / 255;
-  const detectorLive = state.connected && detector.fresh !== false && sensor?.fresh && Number.isFinite(volts);
-  $('detector-voltage').textContent = detectorLive ? `${volts.toFixed(4)} V` : '— V';
-  $('detector-detail').textContent = `Fixture ${detector.fixture_angle_deg.toFixed(0)}° · Search ${Math.round(detector.sweep_speed_deg_s)}°/s · Filtered signal`;
+  const range = detectorVoltageRange(sensor);
+  const freshSignal = state.connected && detector.fresh !== false && sensor?.fresh === true && range;
+  const volts = freshSignal ? detectorVolts(sensor.packet?.filtered_adc, sensor.reference_voltage) : null;
+  const detectorLive = Number.isFinite(volts);
+  $('signal').textContent = detectorLive ? volts.toFixed(4) : '—';
+  const scalePercent = value => Math.max(0, Math.min(100, (value - range.min) / (range.max - range.min) * 100));
+  $('meter-fill').style.width = `${detectorLive ? scalePercent(volts) : 0}%`;
+  $('meter-fill').style.background = detectorColor(detector.signal_ratio);
+  const mineVolts = detectorMineVolts(sensor, detector.threshold_ratio);
+  $('threshold').hidden = !range || mineVolts === null;
+  if (!$('threshold').hidden) $('threshold').style.left = `${scalePercent(mineVolts)}%`;
+  $('threshold').title = `Mine level ${voltageLabel(mineVolts)}`;
+  $('detector-voltage').textContent = voltageLabel(volts);
+  const measuredAngle = state.safety?.simulated || state.actuators?.arm?.connected || (state.arm_servo?.connected && state.arm_servo?.active_role === 'arm');
+  const fixture = measuredAngle && Number.isFinite(detector.fixture_angle_deg) ? detector.fixture_angle_deg.toFixed(1) + '°' : '—';
+  $('detector-detail').textContent = `Fixture ${fixture} · Search ${Math.round(detector.sweep_speed_deg_s)}°/s · Filtered signal`;
   $('detector-status').textContent = detectorLive ? 'LIVE' : 'NO DATA';
   $('detector-status').className = `badge ${detectorLive ? 'safe' : 'neutral'}`;
 
@@ -1283,7 +1287,7 @@ function updateHud() {
   $('probe-contact-peak').textContent = Number.isFinite(probe.contact_peak_percent) ? `${probe.contact_peak_percent.toFixed(1)}% / ${probe.current_peak_ma.toFixed(1)} mA` : '—';
   $('probe-position-error').textContent = Number.isFinite(probe.position_error_ticks) ? `${(probe.position_error_ticks * 360 / 4096).toFixed(2)}°` : '—';
   $('probe-zero-contact').disabled = !owner || !servoSafe || !probe.contact_can_zero;
-  $('probe-zero-status').textContent = probe.contact_zeroed ? 'Zeroed · the chart shows change from zero' : 'Raw readings · lift the probe clear before zeroing';
+  $('probe-zero-status').textContent = probe.contact_zeroed ? 'Zeroed · the chart shows change from zero' : 'Lift the probe clear to zero the motor load';
   setRange($('probe-slider'), 0, probe.max_depth_mm || 1, .1);
   if (!activeSliders.has('probe-slider')) $('probe-slider').value = probe.target_mm;
   if (!state.connected) drawProbeMotion(probe.depth_mm);
@@ -1801,8 +1805,6 @@ function savePreferences() {
   $('sensitivity-value').textContent = `${preferences.sensitivity}%`;
   $('pad-mapping').disabled = !state.drive.you_control_owner || preferences.input !== 'controller';
   const alertSettings = preferences.searchAlert;
-  if (!activeSliders.has('search-alert-level')) $('search-alert-level').value = alertSettings.level;
-  $('search-alert-value').textContent = alertSettings.enabled ? `${alertSettings.level}%` : 'Off';
   $('search-alert-enabled').checked = alertSettings.enabled;
   $('search-alert-sound').checked = alertSettings.sound;
   $('search-alert-level').disabled = !alertSettings.enabled;
@@ -1811,11 +1813,18 @@ function savePreferences() {
   updateInputHint();
 }
 
-$('search-alert-level').oninput = event => {
-  preferences.searchAlert.level = clampSearchAlertLevel(event.target.value);
-  savePreferences();
+$('search-alert-level').onchange = event => {
+  const field = event.target;
+  if (!field.reportValidity()) return;
+  preferences.searchAlert.volts = field.valueAsNumber;
+  delete preferences.searchAlert.level;
+  renderSearchAlertLevel();
+  storeDisplaySettings();
 };
-$('search-alert-level').onchange = storeDisplaySettings;
+$('search-alert-level').onblur = () => {
+  const volts = searchAlertVolts();
+  $('search-alert-level').value = Number.isFinite(volts) ? Number(volts.toFixed(6)) : '';
+};
 $('search-alert-enabled').onchange = event => {
   preferences.searchAlert.enabled = event.target.checked;
   storeDisplaySettings();
@@ -2774,10 +2783,30 @@ let metalCalibrationKey = '';
 let metalPacketKey = '';
 const metalPackets = [];
 
+function detectorVolts(count, reference) {
+  return Number.isFinite(count) && Number.isFinite(reference) && reference > 0 ? count * reference / 255 : null;
+}
+
+function detectorVoltageRange(sensor) {
+  if (!sensor || !Number.isFinite(sensor.reference_voltage) || sensor.reference_voltage <= 0) return null;
+  const fullScale = sensor.input_range_volts;
+  if (fullScale == null) return {min:0, max:sensor.reference_voltage};
+  return Number.isFinite(fullScale) && fullScale > 0 ? {min:-fullScale, max:fullScale} : null;
+}
+
+function detectorMineVolts(sensor, ratio) {
+  if (!Number.isFinite(sensor?.baseline_adc) || !Number.isFinite(sensor?.full_response_adc) || !Number.isFinite(ratio)) return null;
+  return detectorVolts(sensor.baseline_adc + (sensor.full_response_adc - sensor.baseline_adc) * ratio, sensor.reference_voltage);
+}
+
+function voltageLabel(value, digits = 4) {
+  return Number.isFinite(value) ? `${value.toFixed(digits)} V` : '— V';
+}
+
 function updateMetalSettings() {
   const sensor = state.detector.sensor || {};
   const available = state.connected && sensor.available;
-  const fresh = available && sensor.fresh;
+  const fresh = available && sensor.fresh && state.detector.fresh !== false;
   const owner = state.connected && state.drive.you_control_owner;
   const passes = state.settings?.inspection?.passes;
   if (pendingPasses !== null && (!owner || !passes)) {
@@ -2790,31 +2819,37 @@ function updateMetalSettings() {
   }
   $('confirm-passes').disabled = !owner || !passes || pendingPasses !== null;
   $('confirm-passes').value = pendingPasses ?? passes ?? '';
+  const reference = sensor.reference_voltage;
+  const range = detectorVoltageRange(sensor);
   $('metal-status').textContent = !state.connected ? 'DISCONNECTED' : !available
-    ? (state.detector.fresh ? 'SIMULATED / NO RAW DATA' : 'NO DRIVER') : fresh ? 'LIVE' : 'STALE';
-  $('metal-status').className = `badge ${fresh ? 'safe' : 'neutral'}`;
-  const amplitudeAdc = fresh ? sensor.packet?.precise_adc ?? sensor.packet?.amplitude_adc : null;
-  $('metal-raw').textContent = Number.isFinite(amplitudeAdc) ? `${amplitudeAdc.toFixed(3)} ADC` : '-- ADC';
-  $('metal-response').textContent = fresh ? `${(state.detector.signal_ratio * 100).toFixed(1)} %` : '-- %';
+    ? (state.detector.fresh ? 'NO SENSOR DATA' : 'NO DRIVER') : !fresh ? 'STALE' : range ? 'LIVE' : 'NO VOLTAGE REFERENCE';
+  $('metal-status').className = `badge ${fresh && range ? 'safe' : 'neutral'}`;
+  const rawVolts = fresh && range ? detectorVolts(sensor.packet?.precise_adc ?? sensor.packet?.amplitude_adc, reference) : null;
+  const filteredVolts = fresh && range ? detectorVolts(sensor.packet?.filtered_adc, reference) : null;
+  const baselineVolts = detectorVolts(sensor.baseline_adc, reference);
+  const mineVolts = detectorMineVolts(sensor, state.detector.threshold_ratio);
+  $('metal-raw').textContent = voltageLabel(rawVolts, 6);
+  $('metal-voltage').textContent = voltageLabel(filteredVolts, 6);
+  $('metal-response').textContent = voltageLabel(filteredVolts !== null && baselineVolts !== null ? filteredVolts - baselineVolts : null, 6);
   $('metal-rate').textContent = available ? `${sensor.rate_hz ?? 0} Hz` : '-- Hz';
   $('metal-age').textContent = sensor.age_ms == null ? '-- ms' : `${sensor.age_ms} ms`;
   $('metal-port').textContent = sensor.port || '--';
   $('metal-counts').textContent = `${sensor.received ?? 0} / ${sensor.invalid_lines ?? 0}`;
   $('metal-sequence').textContent = sensor.packet ? `${sensor.packet.seq} / ${sensor.packet.uptime_ms} ms` : '--';
   $('metal-error').textContent = !available ? 'Detector input unavailable' : sensor.error || (fresh ? 'Receiving detector readings' : 'No fresh readings. Check the ADC connection in Setup → Sensor board.');
-  const reference = sensor.reference_voltage;
-  const validReference = Number.isFinite(reference) && reference > 0;
-  const voltage = amplitudeAdc * reference / 255;
-  $('metal-voltage').textContent = fresh && validReference && Number.isFinite(amplitudeAdc) ? `${voltage.toFixed(6)} V` : '-- V';
-  $('metal-voltage-note').textContent = validReference ? `Input range 0–${reference} V. Levels are saved on the vehicle.` : 'Waiting for detector voltage reference.';
-  for (const id of ['metal-baseline', 'metal-full']) $(id).max = validReference ? reference : 0;
-  const threshold = state.detector.threshold_ratio;
-  const key = `${sensor.baseline_adc}:${sensor.full_response_adc}:${reference}:${threshold}`;
-  if (key !== metalCalibrationKey && validReference && Number.isFinite(sensor.baseline_adc) && Number.isFinite(sensor.full_response_adc)) {
+  $('metal-voltage-note').textContent = range ? `Input range ${range.min} to ${range.max} V. Levels are saved on the vehicle.` : 'Waiting for detector voltage reference.';
+  for (const id of ['metal-baseline', 'metal-full']) {
+    $(id).min = range?.min ?? 0;
+    $(id).max = range?.max ?? 0;
+  }
+  const key = JSON.stringify([baselineVolts, mineVolts, range]);
+  if (key !== metalCalibrationKey) {
     metalCalibrationKey = key;
-    $('metal-baseline').value = (sensor.baseline_adc * reference / 255).toFixed(6);
-    $('metal-full').value = ((sensor.baseline_adc + (sensor.full_response_adc - sensor.baseline_adc) * threshold) * reference / 255).toFixed(6);
-    $('metal-launch').value = `<arg name="sensor_baseline_adc" default="${sensor.baseline_adc}"/>\n<arg name="sensor_full_response_adc" default="${sensor.full_response_adc}"/>\n<arg name="sensor_reference_voltage" default="${reference}"/>\n<arg name="detector_threshold_ratio" default="${threshold}"/>`;
+    $('metal-baseline').value = range && baselineVolts !== null ? baselineVolts.toFixed(6) : '';
+    $('metal-full').value = range && mineVolts !== null ? mineVolts.toFixed(6) : '';
+    $('metal-launch').value = range ? `Baseline: ${voltageLabel(baselineVolts, 6)}
+Mine level: ${voltageLabel(mineVolts, 6)}
+Input range: ${range.min} to ${range.max} V` : 'Voltage reference unavailable.';
   }
   if (metalPending && sensor.command_result?.request_id === metalPending.id) {
     metalFeedback = sensor.command_result.message;
@@ -2824,26 +2859,26 @@ function updateMetalSettings() {
     metalPending = null;
   }
   const allowed = owner && !metalPending;
-  $('metal-zero').disabled = !allowed || !fresh;
-  $('metal-apply').disabled = !allowed || !validReference;
+  $('metal-zero').disabled = !allowed || !fresh || !range;
+  $('metal-apply').disabled = !allowed || !range;
   $('metal-reset').disabled = !allowed;
   $('metal-control').hidden = owner;
   $('metal-control').disabled = !state.connected;
   $('metal-feedback').textContent = !state.connected ? 'Connect to save calibration.'
     : !owner ? 'Take control to save calibration.' : metalPending ? 'Saving…'
-    : !validReference ? 'Waiting for detector voltage reference.'
+    : !range ? 'Waiting for detector voltage reference.'
     : metalFeedback || (fresh ? 'Ready' : 'Manual levels can be saved. Measurement needs fresh readings.');
   const packetKey = JSON.stringify(sensor.packet);
   if (fresh && sensor.packet && packetKey !== metalPacketKey) {
     metalPacketKey = packetKey;
     if ($('metal-debug-live').checked) {
-      metalPackets.push(packetKey);
+      metalPackets.push(`#${sensor.packet.seq ?? '—'} · unfiltered ${voltageLabel(rawVolts, 6)} · filtered ${voltageLabel(filteredVolts, 6)}`);
       if (metalPackets.length > 50) metalPackets.shift();
       $('metal-log').value = metalPackets.join('\n');
       $('metal-log').scrollTop = $('metal-log').scrollHeight;
     }
   }
-  $('metal-export').disabled = !(sensor.history?.length);
+  $('metal-export').disabled = !range || !(sensor.history?.length);
   if ($('settings-dialog').open && !$('settings-detector').hidden) drawMetalHistory();
 }
 
@@ -2871,7 +2906,7 @@ const searchAlertLinePlugin = {
     ctx.font = '600 10px system-ui, sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(`Alert ${preferences.searchAlert.level}%`, chartArea.right - 4, py - 2);
+    ctx.fillText(`Alert ${volts.toFixed(4)} V`, chartArea.right - 4, py - 2);
     ctx.restore();
   },
 };
@@ -2888,7 +2923,6 @@ function recordDetectorAngle(now) {
 
 // Use the receiver's full two-minute history to scale the visible trace.
 const SIGNAL_LOOKBACK_S = 120;
-const DETECTOR_MIN_SPAN_ADC = 2.55; // One percent of the detector input span.
 
 function signalBounds(low, high, minSpan, domainLow = -Infinity, domainHigh = Infinity) {
   if (!Number.isFinite(low) || !Number.isFinite(high)) return {};
@@ -2897,15 +2931,17 @@ function signalBounds(low, high, minSpan, domainLow = -Infinity, domainHigh = In
   return {min, max: min + span};
 }
 
-function detectorAxis(sensor, elapsed, factor = 1) {
+function detectorAxis(sensor, elapsed) {
+  const range = detectorVoltageRange(sensor);
+  if (!range) return {min:0, max:1};
   let low = Infinity, high = -Infinity;
   for (const sample of sensor.history || []) {
-    if (sample.age_s + elapsed > SIGNAL_LOOKBACK_S || !Number.isFinite(sample.filtered_adc)) continue;
-    low = Math.min(low, sample.filtered_adc * factor);
-    high = Math.max(high, sample.filtered_adc * factor);
+    const volts = detectorVolts(sample.filtered_adc, sensor.reference_voltage);
+    if (sample.age_s + elapsed > SIGNAL_LOOKBACK_S || volts === null) continue;
+    low = Math.min(low, volts);
+    high = Math.max(high, volts);
   }
-  const full = 255 * factor;
-  return Number.isFinite(low) ? signalBounds(low, high, DETECTOR_MIN_SPAN_ADC * factor, 0, full) : {min: 0, max: full};
+  return Number.isFinite(low) ? signalBounds(low, high, (range.max - range.min) / 100, range.min, range.max) : range;
 }
 
 function setDetectorTrace(dataset, points, gap) {
@@ -2935,7 +2971,7 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
   const sensor = state.detector.sensor || {};
   const elapsed = Math.max(0, (now - detectorHistoryAt) / 1000);
   const reference = sensor.reference_voltage;
-  const samples = Number.isFinite(reference) && reference > 0
+  const samples = detectorVoltageRange(sensor)
     ? (sensor.history || []).filter(p => p.age_s + elapsed <= 30 && Number.isFinite(p.filtered_adc)) : [];
   if (!detectorChart) detectorChart = new Chart($('detector-history'), {
     type: 'line',
@@ -2949,9 +2985,7 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
       }},
   });
   setDetectorTrace(detectorChart.data.datasets[0], samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc * reference / 255})), .25);
-  if (Number.isFinite(reference) && reference > 0) {
-    Object.assign(detectorChart.options.scales.y, detectorAxis(sensor, elapsed, reference / 255));
-  }
+  Object.assign(detectorChart.options.scales.y, detectorAxis(sensor, elapsed));
   detectorChart.$scrollPixels = 0;
   detectorChart.$renderedAt = now;
   detectorChart.update('none');
@@ -2974,51 +3008,67 @@ function nearestDetectorSample(chart, event) {
   return element ? [{element, datasetIndex: 0, index}] : [];
 }
 
+function detectorUtc(seconds) {
+  if (!Number.isFinite(seconds)) return '';
+  const date = new Date(seconds * 1000);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : '';
+}
+
+function detectorVoltagePoints(samples, reference, elapsed) {
+  return samples.map(sample => ({
+    x:-sample.age_s-elapsed, y:detectorVolts(sample.filtered_adc, reference),
+    angle_deg:sample.angle_deg, timestamp_s:sample.timestamp_s,
+  }));
+}
+
+Chart.Interaction.modes.detectorSample = nearestDetectorSample;
+const detectorSampleTooltip = {
+  mode: 'detectorSample', intersect: false,
+  callbacks: {
+    title: items => {
+      const point = items[0]?.raw;
+      if (!point) return '';
+      const utc = detectorUtc(point.timestamp_s);
+      return utc ? utc.slice(11,23) + ' UTC' : (-point.x).toFixed(2) + ' s ago';
+    },
+    label: ({raw}) => [
+      'Filtered: ' + voltageLabel(raw.y, 6),
+      'Fixture angle: ' + (Number.isFinite(raw.angle_deg) ? raw.angle_deg.toFixed(2) + '°' : 'unavailable'),
+    ],
+  },
+};
+
 function drawDetectorDiagnostics(now = performance.now(), animate = false) {
   if (!detectorPlotVisible('detector-diagnostics-history', detectorDiagnosticsChart)) return;
   if (animate && detectorDiagnosticsChart && scrollTimeChart(detectorDiagnosticsChart, now)) return;
   const sensor = state.detector.sensor || {};
   const elapsed = Math.max(0, (now - detectorHistoryAt) / 1000);
-  const samples = (sensor.history || []).filter(p => p.age_s + elapsed <= 30);
-  const zero = sensor.baseline_adc;
-  const trigger = zero + (sensor.full_response_adc - zero) * state.detector.threshold_ratio;
+  const samples = detectorVoltageRange(sensor) ? (sensor.history || []).filter(p => p.age_s + elapsed <= 30 && Number.isFinite(p.filtered_adc)) : [];
+  const zero = detectorVoltageRange(sensor) && detectorVolts(sensor.baseline_adc, sensor.reference_voltage);
+  const trigger = detectorVoltageRange(sensor) && detectorMineVolts(sensor, state.detector.threshold_ratio);
   if (!detectorDiagnosticsChart) {
-    Chart.Interaction.modes.detectorSample = nearestDetectorSample;
     detectorDiagnosticsChart = new Chart($('detector-diagnostics-history'), {
       type: 'line',
       data: {datasets: [
-        {label: 'Filtered ADC', yAxisID: 'adc', borderColor: '#6edcc7', borderWidth: 1.5, pointRadius: 0, data: []},
+        {label: 'Filtered voltage (V)', yAxisID: 'volts', borderColor: '#6edcc7', borderWidth: 1.5, pointRadius: 0, data: []},
         {label: 'Angle (deg)', yAxisID: 'angle', borderColor: '#b9a0ef', borderWidth: 1.5, data: []},
-        {label: 'Zero', yAxisID: 'adc', borderColor: '#efbb63', borderDash: [4, 4], borderWidth: 1, data: []},
-        {label: 'Trigger', yAxisID: 'adc', borderColor: '#ed7770', borderDash: [4, 4], borderWidth: 1, data: []},
+        {label: 'Baseline (V)', yAxisID: 'volts', borderColor: '#efbb63', borderDash: [4, 4], borderWidth: 1, data: []},
+        {label: 'Mine level (V)', yAxisID: 'volts', borderColor: '#ed7770', borderDash: [4, 4], borderWidth: 1, data: []},
       ]},
       options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
         elements: {point: {radius: 0, hitRadius: 6}, line: {spanGaps: .25}},
         plugins: {decimation: {enabled: true, algorithm: 'min-max'}, legend: {labels: {color: '#a4b5bb', boxWidth: 10, font: {size: 9}}},
-          tooltip: {mode: 'detectorSample', intersect: false, callbacks: {
-            title: items => {
-              const point = items[0]?.raw;
-              if (!point) return '';
-              return Number.isFinite(point.timestamp_s)
-                ? new Date(point.timestamp_s * 1000).toISOString().slice(11,23) + ' UTC'
-                : (-point.x).toFixed(2) + ' s ago';
-            },
-            label: ({raw}) => [
-              'Filtered ADC: ' + raw.y.toFixed(3), 'Raw ADC: ' + (Number.isFinite(raw.adc) ? raw.adc.toFixed(3) : '—'),
-              'Fixture angle: ' + (Number.isFinite(raw.angle_deg) ? raw.angle_deg.toFixed(2) + '°' : 'unavailable')
-            ]
-          }}},
+          tooltip: detectorSampleTooltip},
         scales: {
           x: {type: 'linear', min: -30, max: 0, ticks: {color: '#a4b5bb', count: 3, maxRotation: 0,
             callback: v => v === 0 ? 'now' : `${v}s`}, grid: {color: '#2b3d46'}},
-          adc: {position: 'left', ticks: {color: '#6edcc7', maxTicksLimit: 4}, grid: {color: '#2b3d46'}},
+          volts: {position: 'left', title: {display:true,text:'Volts'}, ticks: {color: '#6edcc7', maxTicksLimit: 4}, grid: {color: '#2b3d46'}},
           angle: {position: 'right', suggestedMin: -1, suggestedMax: 1,
             ticks: {color: '#b9a0ef', maxTicksLimit: 4, callback: v => `${v}\u00b0`}, grid: {drawOnChartArea: false}},
         }},
     });
   }
-  const readings = samples.map(p => ({x: -p.age_s-elapsed, y: p.filtered_adc, adc: p.adc,
-    angle_deg: p.angle_deg, timestamp_s: p.timestamp_s}));
+  const readings = detectorVoltagePoints(samples, sensor.reference_voltage, elapsed);
   setDetectorTrace(detectorDiagnosticsChart.data.datasets[0], readings, .25);
   while (detectorAngles.length && now - detectorAngles[0].at > 30000) detectorAngles.shift();
   detectorDiagnosticsChart.data.datasets[1].data = samples.some(p => Object.hasOwn(p, 'angle_deg'))
@@ -3027,8 +3077,7 @@ function drawDetectorDiagnostics(now = performance.now(), animate = false) {
   for (const [index, value] of [[2, zero], [3, trigger]]) {
     detectorDiagnosticsChart.data.datasets[index].data = Number.isFinite(value) ? [{x: -30, y: value}, {x: 0, y: value}] : [];
   }
-  Object.assign(detectorDiagnosticsChart.options.scales.adc, detectorAxis(sensor, elapsed));
-  window.operatorADCOverlay?.(detectorDiagnosticsChart, 'detector', 4);
+  Object.assign(detectorDiagnosticsChart.options.scales.volts, detectorAxis(sensor, elapsed));
   detectorDiagnosticsChart.$scrollPixels = 0;
   detectorDiagnosticsChart.$renderedAt = now;
   detectorDiagnosticsChart.update('none');
@@ -3042,13 +3091,12 @@ function drawMetalHistory(animate = false) {
   const elapsed = Math.max(0, (performance.now()-detectorHistoryAt)/1000);
   const sensor = state.detector.sensor || {};
   const reference = sensor.reference_voltage;
-  if (!Number.isFinite(reference) || reference <= 0) return;
-  const samples = (sensor.history || []).filter(sample => sample.age_s + elapsed <= seconds);
-  const values = samples.map(sample => sample.filtered_adc * reference / 255).filter(Number.isFinite);
-  const baseline = sensor.baseline_adc * reference / 255;
-  const trigger = baseline + (sensor.full_response_adc * reference / 255 - baseline) * state.detector.threshold_ratio;
-  const {min: low, max: high} = $('metal-autoscale').checked
-    ? detectorAxis(sensor, elapsed, reference / 255) : {min: 0, max: reference};
+  const range = detectorVoltageRange(sensor);
+  const samples = range ? (sensor.history || []).filter(sample => sample.age_s + elapsed <= seconds && Number.isFinite(sample.filtered_adc)) : [];
+  const values = samples.map(sample => detectorVolts(sample.filtered_adc, reference));
+  const baseline = range && detectorVolts(sensor.baseline_adc, reference);
+  const trigger = range && detectorMineVolts(sensor, state.detector.threshold_ratio);
+  const {min: low, max: high} = $('metal-autoscale').checked || !range ? detectorAxis(sensor, elapsed) : range;
   if (!metalChart) {
     metalChart = new Chart(canvas, {
       type: 'line',
@@ -3064,20 +3112,18 @@ function drawMetalHistory(animate = false) {
       ]},
       options: {
         responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
-        plugins: {legend: {display: true, labels: {color: '#a4b5bb', boxWidth: 16}}, tooltip: {callbacks: {
-          title: items => items.length ? `${(-items[0].parsed.x).toFixed(2)} seconds ago` : '',
-        }}},
+        plugins: {legend: {display: true, labels: {color: '#a4b5bb', boxWidth: 16}}, tooltip: detectorSampleTooltip},
         scales: {
           x: {type: 'linear', min: -30, max: 0, grid: {color: '#2b3d46'},
             ticks: {color: '#a4b5bb', maxRotation: 0, count: 4,
               callback: value => value === 0 ? 'now' : `${value}s`}},
-          y: {min: 0, max: reference, grid: {color: '#2b3d46'},
+          y: {title:{display:true,text:'Volts'}, min: low, max: high, grid: {color: '#2b3d46'},
             ticks: {color: '#a4b5bb', callback: value => Number(value).toFixed(4), maxTicksLimit: 6}},
         },
       },
     });
   }
-  setDetectorTrace(metalChart.data.datasets[0], samples.map(sample => ({x: -sample.age_s - elapsed, y: sample.filtered_adc * reference / 255})), .5);
+  setDetectorTrace(metalChart.data.datasets[0], detectorVoltagePoints(samples, reference, elapsed), .5);
   metalChart.data.datasets[1].data = Number.isFinite(baseline)
     ? [{x: -seconds, y: baseline}, {x: 0, y: baseline}] : [];
   metalChart.data.datasets[2].data = Number.isFinite(trigger)
@@ -3086,7 +3132,7 @@ function drawMetalHistory(animate = false) {
   metalChart.data.datasets[3].data = Number.isFinite(alertVolts) && alertVolts >= low && alertVolts <= high
     ? [{x: -seconds, y: alertVolts}, {x: 0, y: alertVolts}] : [];
   metalChart.options.scales.x.min = -seconds;
-  const preview = window.operatorDetectorFilterPreview?.(seconds);
+  const preview = range && window.operatorDetectorFilterPreview?.(seconds);
   let lower = low, upper = high;
   if (preview) {
     Object.assign(metalChart.data.datasets[4] ??= {}, preview);
@@ -3105,7 +3151,7 @@ function drawMetalHistory(animate = false) {
   canvas.setAttribute('aria-label', `Filtered metal detector voltage over the last ${seconds} seconds`);
   $('metal-range').textContent = values.length
     ? `Min ${Math.min(...values).toFixed(6)} V · Max ${Math.max(...values).toFixed(6)} V · Peak-to-peak ${(Math.max(...values) - Math.min(...values)).toFixed(6)} V`
-    : `No filtered readings in the last ${seconds} seconds`;
+    : range ? `No filtered readings in the last ${seconds} seconds` : 'Voltage reference unavailable.';
 }
 
 function detectorColor(signalRatio) {
@@ -3120,10 +3166,11 @@ function initializeMetalSettings() {
     if (action === 'apply') {
       if (!$('metal-baseline').value || !$('metal-full').value) { metalFeedback = 'Enter a baseline and mine level in volts.'; updateMetalSettings(); return; }
       const reference = state.detector.sensor?.reference_voltage;
-      if (!Number.isFinite(reference) || reference <= 0) { metalFeedback = 'Detector voltage reference is unavailable.'; updateMetalSettings(); return; }
+      const range = detectorVoltageRange(state.detector.sensor);
+      if (!range) { metalFeedback = 'Detector voltage reference is unavailable.'; updateMetalSettings(); return; }
       const baseline = Number($('metal-baseline').value), mine = Number($('metal-full').value);
-      if (![baseline, mine].every(v => Number.isFinite(v) && v >= 0 && v <= reference) || baseline === mine) {
-        metalFeedback = `Baseline and mine level must be different values between 0 and ${reference} V.`; updateMetalSettings(); return;
+      if (![baseline, mine].every(v => Number.isFinite(v) && v >= range.min && v <= range.max) || baseline === mine) {
+        metalFeedback = `Baseline and mine level must be different values between ${range.min} and ${range.max} V.`; updateMetalSettings(); return;
       }
       payload.baseline_adc = baseline / reference * 255;
       payload.full_response_adc = mine / reference * 255;
@@ -3145,7 +3192,15 @@ function initializeMetalSettings() {
   $('metal-autoscale').onchange = drawMetalHistory;
   $('metal-time-range').onchange = drawMetalHistory;
   $('metal-export').onclick = () => {
-    const rows = ['age_seconds,amplitude_adc', ...(state.detector.sensor?.history || []).map(s => `${s.age_s},${s.adc}`)];
+    const sensor = state.detector.sensor;
+    if (!detectorVoltageRange(sensor) || !sensor.history?.length) return;
+    const rows = ['age_seconds,timestamp_utc,unfiltered_voltage_v,filtered_voltage_v,fixture_angle_deg',
+      ...sensor.history.map(sample => {
+        const age = Number.isFinite(sample.age_s) ? sample.age_s + Math.max(0, (performance.now() - detectorHistoryAt) / 1000) : '';
+        return [age, detectorUtc(sample.timestamp_s),
+          detectorVolts(sample.adc, sensor.reference_voltage), detectorVolts(sample.filtered_adc, sensor.reference_voltage),
+          Number.isFinite(sample.angle_deg) ? sample.angle_deg : ''].join(',');
+      })];
     const url = URL.createObjectURL(new Blob([rows.join('\n')], {type: 'text/csv'}));
     const link = document.createElement('a'); link.href = url; link.download = 'detector-readings.csv'; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);

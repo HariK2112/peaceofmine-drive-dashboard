@@ -23,6 +23,13 @@
       capture:{forward:{...capture},auxiliary:{...capture}}}
   };
   mock.fieldEntries = [];
+  function previewLog(event) {
+    const mux = adcConfig.channels.find(ch => ch.enabled && ['detector','both'].includes(routes[ch.mux]))?.mux;
+    mock.fieldEntries.unshift({id:String(++logSequence), timestamp:Date.now()/1000,
+      x:mock.pose.x, y:mock.pose.y, heading_deg:mock.pose.yaw*180/Math.PI,
+      detector_volts:adcFiltered.get(mux) ?? null, ...event});
+  }
+  let logSequence = 0;
   const pump = {mode:'idle', until:0, output:0, lastRequest:null};
   function stopPump() {
     pump.mode = 'idle';
@@ -39,17 +46,33 @@
       if (i.completed >= i.total) Object.assign(i, {phase: 'CONFIRMED', active: false, message: '', confirmed_angle_deg: 6, probe_reachable: true, progress:i.total});
     } else if (i.phase === 'PROBING') {
       const point = Math.floor(dt / 2), within = (dt % 2) / 2;
-      mock.cycle = point < i.total;
-      const downstrokeDepth = point === 2 ? Math.min(38, i.probe_target_depth_mm / 2) : i.probe_target_depth_mm;
-      mock.depth = mock.cycle ? downstrokeDepth * Math.sin(Math.PI * within) : 0;
-      mock.cyclePhase = within < 0.5 ? 'DESCENDING' : 'RETRACTING';
-      i.probe_goal_id = mock.cycle ? `preview-${mock.phaseAt}-${point}` : null;
+      const contact = mockContact();
       while (i.points.length < Math.min(point, i.total)) {
         const n = i.points.length;
-        i.points.push({angle_deg: i.probe_angles_deg[n], status: n === 2 ? 'CONTACT' : 'CLEAR', contact_depth_mm: n === 2 ? Math.min(38, i.probe_target_depth_mm / 2) : null});
+        const result = mock.pointResult?.index === n ? mock.pointResult : {status:'UNKNOWN'};
+        i.points.push({angle_deg:i.probe_angles_deg[n], status:result.status, contact_depth_mm:result.contact_depth_mm ?? null});
+        previewLog({status:result.status === 'CONTACT' ? 'CONTACT TRIGGER' : 'PROBE ' + result.status,
+          statusType:result.status.toLowerCase(), contact_volts:result.contact_volts ?? null,
+          contact_depth_mm:result.contact_depth_mm ?? null});
       }
       i.completed = i.points.length; i.progress = i.completed;
-      if (point >= i.total) Object.assign(i, {phase: 'COMPLETE', active: false, message: 'Probe scan complete · 1 contact.'});
+      mock.cycle = point < i.total;
+      if (!mock.cycle) {
+        mock.depth = 0; i.probe_goal_id = null;
+        const count = i.points.filter(point => point.status === 'CONTACT').length;
+        Object.assign(i, {phase:'COMPLETE', active:false, message:`Probe scan complete · ${count} contact${count === 1 ? '' : 's'}.`});
+        return;
+      }
+      i.probe_goal_id = `preview-${mock.phaseAt}-${point}`;
+      if (mock.pointResult?.index !== point) mock.pointResult = null;
+      mock.depth = i.probe_target_depth_mm * Math.sin(Math.PI * within);
+      if (!mock.pointResult && (within >= .5 || contact.detected === true)) {
+        const hit = within < .5 && contact.detected === true;
+        mock.pointResult = {index:point, within, depth:mock.depth, status:hit ? 'CONTACT' : contact.fresh ? 'CLEAR' : 'UNKNOWN',
+          contact_depth_mm:hit ? mock.depth : null, contact_volts:contact.filtered_volts};
+      }
+      mock.cyclePhase = mock.pointResult ? 'RETRACTING' : 'DESCENDING';
+      if (mock.pointResult) mock.depth = mock.pointResult.depth * (1-within)/(1-mock.pointResult.within);
     }
   }
 
@@ -90,12 +113,12 @@
         sweep_enabled: mock.sweep, sweep_speed_deg_s: 36, sweep_speed_min: 5, sweep_speed_max: 180, beam_half_angle_deg: 45,
         beam_min_angle_deg: -45, beam_max_angle_deg: 45, beam: [],
         sensor: {available: true, fresh: true, age_ms: 20, rate_hz: 50, received: Math.round(t * 50), invalid_lines: 0,
-          reference_voltage: 3.3, baseline_adc: 40, packet: {filtered_adc: filtered, precise_adc: raw, amplitude_adc: Math.round(raw)}, full_response_adc: 160, port: '/dev/ttyMOCK',
+          reference_voltage: 3.3, input_range_volts:[6.144,4.096,2.048,1.024,.512,.256][adcConfig.pga], baseline_adc: 40, packet: {filtered_adc: filtered, precise_adc: raw, amplitude_adc: Math.round(raw)}, full_response_adc: 160, port: '/dev/ttyMOCK',
           history_age_s: 0, history: detectorHistory.map(p => ({age_s: +(t - p.at).toFixed(3), adc: p.adc, filtered_adc: p.filtered_adc, angle_deg: p.angle_deg, timestamp_s: p.timestamp_s}))}},
       probe: {depth_mm: mock.depth, target_mm: mock.cycle ? 60 : 0, max_depth_mm: 110, pressure_ratio: mock.cycle ? 0.1 + mock.depth / 200 : 0.05,
         pressure_history: pressureHistory.slice(), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, cycle_goal_id: mock.inspection.probe_goal_id,
-        contact_detected: mock.cycle && mock.cyclePhase === 'RETRACTING' && mock.inspection.completed === 2,
-        contact_depth_mm: mock.inspection.completed === 2 ? Math.min(38, mock.inspection.probe_target_depth_mm / 2) : null, holding: false,
+        contact_detected: mock.cycle && mock.pointResult?.status === 'CONTACT',
+        contact_depth_mm: mock.cycle ? mock.pointResult?.contact_depth_mm : null, contact_volts: mock.cycle ? mock.pointResult?.contact_volts : null, holding: false,
         adc_contact_state: mockContact()},
       power: {battery: {available: true, present: true, stale: false, power_w: 38 + 6 * Math.sin(t / 3) + mock.linear * 40,
           current_a: 3.2, voltage_v: 11.9, remaining_pct: 72, temperature_c: 31, cell_delta_v: 0.012},
@@ -131,7 +154,7 @@
         Object.assign(pump, {mode:'shot', output:settings.active_percent,
           until:performance.now() + settings.duration_s * 1000, lastRequest:m.request_id});
         const within = fix && Number.isFinite(fix.horizontal_accuracy_m) && fix.horizontal_accuracy_m <= mock.settings.gnss.target_accuracy_m;
-        mock.fieldEntries.unshift({id:m.request_id || String(Date.now()), timestamp:Date.now()/1000,
+        previewLog({id:m.request_id || String(Date.now()), timestamp:Date.now()/1000,
           kind:'pump_mark', status:'SHOT COMMANDED', statusType:'marked', ...settings, ...fix,
           x:mock.pose.x, y:mock.pose.y, heading_deg:mock.pose.yaw * 180 / Math.PI,
           gps_status:within ? 'within_target' : fix ? 'uncertain' : 'unavailable'});
@@ -150,6 +173,7 @@
         routes = m.settings.routes;
         probeTrigger = m.settings.probe_trigger;
         adcFiltered.clear();
+        resetContact();
         adcRevision++;
         this.emit({type:'adc_result',ok:true,message:'Applied in preview.'});
         return;
@@ -160,7 +184,7 @@
         return;
       }
       if (m.type === 'clear_log') mock.fieldEntries.length = 0;
-      if (m.type === 'log_pose') mock.fieldEntries.unshift({...mock.pose,id:crypto.randomUUID(),timestamp:Date.now()/1000,status:'POSE LOGGED'});
+      if (m.type === 'log_pose') previewLog({status:'POSE LOGGED'});
       if (m.type === 'drive' && mock.owner && !mock.calibrating) {
         mock.linear = m.deadman ? m.linear_x : 0;
         mock.angular = m.deadman ? m.angular_z : 0;
@@ -179,6 +203,7 @@
         const t = (performance.now() - started) / 1000;
         if (m.action === 'stop') Object.assign(mock.inspection, {phase: 'STOPPED', active: false, message: 'Inspection stopped.'}), mock.cycle = false, mock.depth = 0;
         if (m.action === 'confirm') Object.assign(mock.inspection, {phase: 'CONFIRMING', active: true, total: mock.settings.inspection.passes, completed: 0, progress: 0, points: [], probe_angles_deg: [], probe_target_depth_mm: null, probe_target_bearing_deg:null, probe_arm_center_deg:null, message: ''});
+        if (m.action === 'probe_scan') mock.pointResult = null;
         if (m.action === 'probe_scan') Object.assign(mock.inspection, {phase: 'PROBING', active: true, total: 7, completed: 0, progress: 0, points: [], probe_angles_deg: [-15,-10,-5,0,5,10,15].map(offset => mock.inspection.confirmed_angle_deg + offset), probe_target_bearing_deg: mock.inspection.confirmed_angle_deg, probe_arm_center_deg:mock.inspection.confirmed_angle_deg-45, probe_target_depth_mm: m.depth_mm, message: ''});
         mock.phaseAt = t;
       }
@@ -195,13 +220,19 @@
   let routes = ['none','none','none','none','probe','none','detector','none'];
   let probeTrigger = {enabled:true, mux:4, level:1, direction:'above', hysteresis:0, debounce_ms:0};
   const adcFiltered = new Map();
+  let contactDetected = false, candidate = null, candidateSince = 0;
+  function resetContact() { contactDetected = false; candidate = null; }
+  function sampleContact(scaled, t) {
+    const sign = probeTrigger.direction === 'above' ? 1 : -1;
+    const next = sign*(scaled-probeTrigger.level) >= (contactDetected ? -probeTrigger.hysteresis : 0);
+    if (next !== candidate) { candidate = next; candidateSince = t; }
+    if ((t-candidateSince)*1000 >= probeTrigger.debounce_ms) contactDetected = next;
+  }
   function mockContact() {
-    const channel = adcConfig.channels[probeTrigger.mux];
-    const filtered = adcFiltered.get(probeTrigger.mux);
+    const channel = adcConfig.channels[probeTrigger.mux], filtered = adcFiltered.get(probeTrigger.mux);
     const fresh = probeTrigger.enabled && channel.enabled && Number.isFinite(filtered);
-    const value = fresh ? filtered * channel.multiplier + channel.offset : null;
-    return {...probeTrigger, fresh, value, detected:fresh
-      ? (probeTrigger.direction === 'above' ? value >= probeTrigger.level : value <= probeTrigger.level) : null};
+    return {...probeTrigger, fresh, filtered_volts:fresh ? filtered : null,
+      value:fresh ? filtered*channel.multiplier+channel.offset : null, detected:fresh ? contactDetected : null};
   }
   let adcSeq = 0, adcLast = performance.now() / 1000;
   const fieldTrail = [];
@@ -225,11 +256,15 @@
     const now = performance.now() / 1000, samples = [];
     for (let t = adcLast + 0.02; t <= now; t += 0.02) {
       const volts = detectorVoltage(t - started / 1000);
+      // A physical fixture presses the preview probe sensor on the third stroke.
+      const scanTime = t-started/1000-mock.phaseAt;
+      const pressing = mock.inspection.phase === 'PROBING' && scanTime >= 4.35 && scanTime < 5;
       for (const ch of adcConfig.channels.filter(ch => ch.enabled)) {
-        const value = ch.mux === 6 ? volts : .2;
+        const value = ch.mux === 6 ? volts : (ch.mux === 4 && pressing ? 1.5 : .2);
         const old = adcFiltered.get(ch.mux);
         const filtered = old == null || !adcConfig.filter_ms ? value : old - Math.expm1(-20 / adcConfig.filter_ms) * (value-old);
         adcFiltered.set(ch.mux, filtered);
+        if (ch.mux === probeTrigger.mux) sampleContact(filtered*ch.multiplier+ch.offset, t);
         samples.push({seq:++adcSeq, time:t, mux:ch.mux, raw:Math.round(value*8000), volts:value, scaled:value*ch.multiplier+ch.offset,
           filtered_volts:filtered, filtered_scaled:filtered*ch.multiplier+ch.offset, clipped:false});
       }

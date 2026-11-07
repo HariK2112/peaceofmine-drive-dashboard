@@ -39,5 +39,5 @@ class ADCTelemetry:
                           dropped=max(0, samples[0]['seq'] - after - 1) if samples and after else 0)
             if not fresh:
                 result.update(connected=False, error='ADC ROS node unavailable')
-                result['probe_contact'].update(fresh=False, detected=None, value=None)
+                result['probe_contact'].update(fresh=False, detected=None, value=None, filtered_volts=None)
             return result

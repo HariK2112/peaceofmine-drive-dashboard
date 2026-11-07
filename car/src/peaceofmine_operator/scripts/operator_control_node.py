@@ -174,33 +174,39 @@ class OperatorControl(Node):
 
     def _update_search_alert(self, now):
         reading = self._inspection_detector
-        ratio = reading.get('signal_ratio')
+        volts = reading.get('latest_filtered_volts')
+        base, full = reading.get('baseline_volts'), reading.get('full_response_volts')
         alert = self._search_alert
-        level = self._alert_options['level']
         live = (self._alert_options['enabled'] and now - self._inspection_detector_at < .5 and
-                reading.get('fresh') and isinstance(ratio,(int,float)) and math.isfinite(ratio) and
-                not self._calibrating and not self._inspection.active and not self._probe_active())
+                reading.get('fresh') and all(type(v) in (int, float) and math.isfinite(v) for v in (volts, base, full))
+                and full != base and not self._calibrating and not self._inspection.active and not self._probe_active())
         if not live:
             if alert['phase'] in ('active', 'cooling'):
                 alert['cleared_at'] = time.time()
             alert['phase'] = 'idle'
             return
-        signal = ratio * 100
+        limit = self._alert_options.get('volts')
+        if limit is None:
+            limit = base + (full - base) * self._alert_options['level'] / 100
+        direction = 1 if full > base else -1
+        distance = (volts - limit) * direction
+        rearm_margin = abs(full - base) * .05
         phase = alert['phase']
-        if phase == 'idle' and signal >= level:
+        if phase == 'idle' and distance >= 0:
             alert.update(phase='pending', since=now)
         elif phase == 'pending':
-            if signal < level:
+            if distance < 0:
                 alert['phase'] = 'idle'
             elif now - alert['since'] >= .15:
-                alert.update(phase='active', fired_at=time.time(), peak=signal)
+                alert.update(phase='active', fired_at=time.time(), peak_volts=volts)
                 self._log_field_event('SEARCH ALERT', 'alert')
         elif phase in ('active', 'cooling'):
-            alert['peak'] = max(alert['peak'], signal)
-            if phase == 'active' and signal < level - 5:
+            if (volts - alert['peak_volts']) * direction > 0:
+                alert['peak_volts'] = volts
+            if phase == 'active' and distance < -rearm_margin:
                 alert.update(phase='cooling', since=now)
             elif phase == 'cooling':
-                if signal >= level:
+                if distance >= 0:
                     alert['phase'] = 'active'
                 elif now - alert['since'] >= 1.5:
                     alert.update(phase='idle', cleared_at=time.time())
@@ -480,11 +486,9 @@ class OperatorControl(Node):
             request = payload.get('request_id')
             self._last_shot_request = request if isinstance(request, str) and len(request) <= 100 else None
             pose = self._pose if self._pose_at and now - self._pose_at < .5 else {}
-            detector = self._inspection_detector
-            ratio = detector.get('signal_ratio') if detector.get('fresh') and now - self._inspection_detector_at < .5 else None
             self._mark_pub.publish(String(data=json.dumps(dict(
                 x=pose.get('x'), y=pose.get('y'), heading_deg=math.degrees(pose['yaw']) if pose else None,
-                metal_signal_pct=round(100 * ratio) if type(ratio) in (int, float) and math.isfinite(ratio) else None,
+                **self._log_detector_reading(),
                 id=uuid.uuid4().hex, timestamp=time.time(), duration_s=duration,
                 active_percent=output, idle_percent=self._marking['idle_percent']))))
 
@@ -679,15 +683,21 @@ class OperatorControl(Node):
             self._pump_tick(now, safety)
         self._emit_cmd_vel()
 
-    def _log_field_event(self, status, kind='marked', depth=None, event_id=None, timestamp=None):
+    def _log_detector_reading(self, recent=True):
+        detector = self._inspection_detector
+        fresh = recent and detector.get('fresh') and time.monotonic()-self._inspection_detector_at < .5
+        volts = detector.get('latest_filtered_volts', detector.get('filtered_volts')) if fresh else None
+        ratio = detector.get('signal_ratio') if fresh else None
+        return dict(detector_volts=volts if type(volts) in (int, float) and math.isfinite(volts) else None,
+                    metal_signal_pct=round(ratio*100) if type(ratio) in (int, float) and math.isfinite(ratio) else None)
+
+    def _log_field_event(self, status, kind='marked', depth=None, event_id=None, timestamp=None, contact_volts=None):
         recent = timestamp is None or 0 <= time.time() - timestamp < 1.
         pose_fresh = recent and self._pose_at > 0 and time.monotonic() - self._pose_at < .5
-        detector = self._inspection_detector
-        ratio = detector.get('signal_ratio') if recent and detector.get('fresh') and time.monotonic()-self._inspection_detector_at < .5 else None
         value = dict(id=event_id or uuid.uuid4().hex, timestamp=timestamp or time.time(),
                      x=self._pose['x'] if pose_fresh else None, y=self._pose['y'] if pose_fresh else None,
                      heading_deg=round(math.degrees(self._pose['yaw']) % 360) if pose_fresh else None,
-                     metal_signal_pct=round(ratio*100) if isinstance(ratio,(float,int)) else None,
+                     **self._log_detector_reading(recent), contact_volts=contact_volts,
                      contact_depth_mm=depth, status=status, statusType=kind)
         self._field_log.publish(String(data=json.dumps(value, allow_nan=False)))
 
@@ -701,7 +711,7 @@ class OperatorControl(Node):
             status = result.get('status', 'UNKNOWN')
             self._log_field_event('CONTACT TRIGGER' if result.get('contact') else 'PROBE ' + status,
                                   'contact' if result.get('contact') else 'clear' if status == 'CLEAR' else 'unknown', result.get('contact_depth_mm'),
-                                  f'probe-{stamp}', stamp)
+                                  f'probe-{stamp}', stamp, contact_volts=result.get('contact_volts'))
         except (TypeError, ValueError, AttributeError):
             self.get_logger().warning('Invalid probe result')
 

@@ -24,6 +24,23 @@ class DetectorTest(unittest.TestCase):
     def tearDown(self):
         self.node.destroy_node()
 
+    def test_signed_volts_survive_detection_history_and_control(self):
+        from peaceofmine_operator.detector import calibration_values
+        self.node.baseline, self.node.full_response, self.node.reference_voltage = calibration_values(
+            dict(baseline_adc=0., full_response_adc=-51., reference_voltage=5.))
+        now = time.monotonic()
+        self.node.control_pub.publish = Mock()
+        self.node.raw_pub.publish = Mock()
+        self.node.process_adc_sample(-.97, -.95, 1, now, time.time())
+        self.node.flush_spatial_samples(now+.21)
+        self.node.publish_control_state()
+        status = json.loads(self.node.control_pub.publish.call_args.args[0].data)
+        self.assertAlmostEqual(status['filtered_volts'], -.95)
+        self.assertAlmostEqual(status['latest_filtered_volts'], -.95)
+        self.assertAlmostEqual(status['signal_ratio'], .95)
+        self.assertAlmostEqual(self.node.sensor.history[-1][2]*5/255, -.95)
+        self.assertEqual(self.node.raw_pub.publish.call_args.args[0].data, 0)
+
     def test_adc_uses_A2_once_and_rejects_stale_or_replayed_samples(self):
         from peaceofmine_interfaces.msg import AdcSample, AdcSamples
         packet = AdcSamples(valid=True, session='sensor', config_revision=self.node.adc_revision)

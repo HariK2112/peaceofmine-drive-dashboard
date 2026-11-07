@@ -31,6 +31,19 @@ class ContactTest(unittest.TestCase):
         self.assertFalse(self.sample(.6, 3)['detected'])
 
 
+    def test_scaled_comparison_preserves_measured_volts(self):
+        # A 0.2 scaled-unit hysteresis corresponds to 0.1 V with gain -2.
+        self.contact.configure(dict(self.contact.config, direction='below', level=1., hysteresis=.2, debounce_ms=0))
+        for seq, (volts, detected) in enumerate(((.4, False), (.6, True), (.41, True), (.39, False))):
+            scaled = 2.-2.*volts
+            self.contact.sample(scaled, seq, 'sensor', volts)
+            state = self.contact.snapshot()
+            self.assertEqual((state['detected'], state['value'], state['filtered_volts']), (detected, scaled, volts))
+        self.contact.sample(-99., 1, 'sensor', 99.)
+        self.assertEqual(self.contact.snapshot()['filtered_volts'], .39)
+        self.now += 1
+        self.assertIsNone(self.contact.snapshot()['filtered_volts'])
+
     def test_reordered_packets_do_not_refresh_input(self):
         self.sample(1.1,4)
         self.now+=.6

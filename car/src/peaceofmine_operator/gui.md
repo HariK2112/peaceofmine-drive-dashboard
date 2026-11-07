@@ -28,7 +28,7 @@ Driving or starting a new search invalidates the previous probe target.
 Both cameras are optional with the normal launch command. An enabled camera
 retries independently when disconnected. During a
 probe scan the dashboard promotes the probe feed only when it has frames.
-The ADC preview shows raw voltage beside the filtered voltage used by the car. Setup retains input, camera and hardware calibration.
+ADC graphs show the filtered voltage used by the car. Calibration can also show unfiltered voltage. Setup retains input, camera and hardware calibration.
 
 ## Field map and GNSS
 
@@ -314,20 +314,17 @@ The filtered detector voltage and both saved levels share the same graph. You ca
 enter levels without fresh readings; **Measure baseline** needs recent samples and
 updates only the baseline. The filter never estimates or changes these levels.
 
-The Detector tab gives the signal and arm-angle chart most of the dock. **Expand chart** uses the workspace, and **Restore chart** or Escape returns to the normal layout. Detector voltage, ADC counts and routed ADC traces use up to two minutes of measured readings to scale the vertical axis. A minimum span of 1% of the input range keeps small fluctuations readable in context. Thresholds and calibration lines appear when they fall within the measured range. In Setup, turn off **Auto scale** to view the full detector voltage range.
+The Detector tab gives the signal and arm-angle chart most of the dock. **Expand chart** uses the workspace, and **Restore chart** or Escape returns to the normal layout. The voltage axis scales using up to two minutes of detector readings. Hover a sample to read its filtered voltage and fixture angle. A minimum span of 1% of the input range keeps small fluctuations readable in context. Thresholds and calibration lines appear when they fall within the measured range. In Setup, turn off **Auto scale** to view the full detector voltage range.
 
-Setup → Metal detector shows a filtered voltage graph with selectable history, receive rate, packet
-log, rejected-line count, freshness and estimated peak voltage. Only the control
-owner can zero or apply calibration. Zero averages the available readings from
-the last 10 seconds; the mine trigger maps to 100%. The meter and sweep trace
-blend from green at zero through yellow to red at the trigger. ADC reference
-voltage is hardware configuration, not a dashboard input. Changes affect the ROS
-signal-ratio topic for all clients. The hardware node
-saves Zero, Apply and Reset changes to the shared `operator_config.json`. With a 5 V reference, 20 ADC is about
-0.392 V peak and 150 ADC about 2.941 V peak. This is the firmware's sine-equivalent
-AC amplitude, not DC pin voltage; values above half the reference warrant
-checking waveform shape or clipping. Set the reference to measured AVcc for
-better conversion accuracy. Simulated payloads do not provide raw ADC readings.
+Setup → Metal detector shows filtered input voltage. Measure averages recent
+filtered samples for the baseline. Save writes the baseline and mine level to the car.
+In Mission → Sweep and alert, enter an alert voltage. The alert follows the direction
+from baseline toward the mine level, including detectors whose voltage falls over metal.
+Older percentage-based alert settings display their equivalent voltage until you edit the limit.
+
+Setup → Sensor board shows filtered voltage for each enabled channel. Select the unfiltered voltage comparison when tuning the filter.
+The hardware comparator limits are entered in volts at the selected input range.
+ADC CSV exports report voltages in V.
 
 ## Files
 
