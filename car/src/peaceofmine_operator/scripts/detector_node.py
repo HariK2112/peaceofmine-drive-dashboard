@@ -117,7 +117,7 @@ class DetectorNode(Node):
         routes = adc.get('routes', ['none'] * 8)
         assigned = [c['mux'] for c in channels if c['enabled'] and routes[c['mux']] in ('detector', 'both')] if 'adc' in saved else [6]
         if self.use_adc and len(assigned) != 1:
-            raise ValueError('Assign exactly one enabled ADC input to the metal detector in Settings')
+            raise ValueError('Assign exactly one enabled ADC input to the metal detector in Setup')
         if assigned:
             self.adc_channel = assigned[0]
         self.adc_revision = saved.get('section_revisions', {}).get('adc', 0)

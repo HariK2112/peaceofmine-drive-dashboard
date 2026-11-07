@@ -23,13 +23,13 @@
   function contactConfigError() {
     if (!latest?.probe_trigger) return 'Waiting for contact settings.';
     const mux = latest.probe_trigger.mux;
-    if (!Number.isInteger(mux) || mux < 0 || mux >= names.length) return 'Contact input is invalid. Check Settings → ADS1115.';
-    if (!Number.isFinite(latest.probe_trigger.level) || !['above', 'below'].includes(latest.probe_trigger.direction)) return 'Contact trigger is invalid. Check Settings → ADS1115.';
+    if (!Number.isInteger(mux) || mux < 0 || mux >= names.length) return 'Contact input is invalid. Check Setup → Sensor board.';
+    if (!Number.isFinite(latest.probe_trigger.level) || !['above', 'below'].includes(latest.probe_trigger.direction)) return 'Contact trigger is invalid. Check Setup → Sensor board.';
     const channel = latest.config.channels.find(channel => channel.mux === mux);
-    if (!channel?.enabled) return `Enable ${names[mux]} in Settings → ADS1115.`;
-    if (!['probe', 'both'].includes(latest.routes[mux])) return `Assign ${names[mux]} to Probe in Settings → ADS1115.`;
-    if (!Number.isFinite(channel.multiplier) || channel.multiplier === 0) return 'Contact input multiplier must be nonzero. Check Settings → ADS1115.';
-    if (!Number.isFinite(channel.offset)) return 'Contact input offset is invalid. Check Settings → ADS1115.';
+    if (!channel?.enabled) return `Enable ${names[mux]} in Setup → Sensor board.`;
+    if (!['probe', 'both'].includes(latest.routes[mux])) return `Assign ${names[mux]} to Probe in Setup → Sensor board.`;
+    if (!Number.isFinite(channel.multiplier) || channel.multiplier === 0) return 'Contact input multiplier must be nonzero. Check Setup → Sensor board.';
+    if (!Number.isFinite(channel.offset)) return 'Contact input offset is invalid. Check Setup → Sensor board.';
     return '';
   }
   window.operatorContactBlock = () => contactConfigError() || (pending ? 'Wait for ADC settings to finish saving.' : contactDirty ? 'Save the contact limit first.' : '');

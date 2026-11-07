@@ -28,6 +28,12 @@
   });
   selectTab('overview');
 
+  /* ------------------------------------------- Setup cross-links --- */
+  // Jump to another Setup section without reopening the window.
+  document.querySelectorAll('[data-goto-settings]').forEach(link => {
+    link.addEventListener('click', () => document.querySelector(`[data-settings-tab="${link.dataset.gotoSettings}"]`)?.click());
+  });
+
   /* ------------------------------------------------------- Mission stage ---
    * Drive & search: forward camera large, probe camera small, detector chart.
    * Probe (confirmed target, scan, or a probe cycle): probe camera large and

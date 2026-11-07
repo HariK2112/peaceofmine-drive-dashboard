@@ -237,7 +237,7 @@ class OperatorControl(Node):
             raise ValueError('Finish the active probe or marking operation first')
         calibration = self._arm_state.get('calibration')
         if time.monotonic()-self._arm_state_at >= .5 or not self._arm_state.get('connected') or not calibration:
-            raise ValueError('Connect and calibrate the arm in Settings')
+            raise ValueError('Connect and calibrate the arm in Setup')
         offset = float(self.get_parameter('fixture_angle_offset_deg').value)
         lower = (calibration['minimum']-calibration['center'])*360/4096+offset
         upper = (calibration['maximum']-calibration['center'])*360/4096+offset
@@ -741,9 +741,9 @@ class OperatorControl(Node):
                     return {'type': 'error', 'message': 'Stop the active probe or marking operation before sweeping.'}
                 if payload.get('enabled') and not self._rc_safety.simulation:
                     if time.monotonic() - self._arm_state_at >= 1 or not self._arm_state.get('connected'):
-                        return {'type': 'error', 'message': 'Select a connected arm servo in Settings first.'}
+                        return {'type': 'error', 'message': 'Select a connected arm servo in Setup first.'}
                     if not self._arm_state.get('calibration'):
-                        return {'type': 'error', 'message': 'Record and apply arm limits in Settings before sweeping.'}
+                        return {'type': 'error', 'message': 'Record and apply arm limits in Setup before sweeping.'}
                 # Publish permission before the sweep request; separate topics may
                 # still arrive out of order, so the periodic watchdog renews it.
                 self._permission_pub.publish(Bool(data=True))
@@ -755,14 +755,14 @@ class OperatorControl(Node):
                 self._sweep_speed_pub.publish(Float32(data=speed))
             elif message_type == 'align_probe':
                 if self._calibrating:
-                    return {'type': 'error', 'message': 'Close settings before aligning.'}
+                    return {'type': 'error', 'message': 'Close Setup before aligning.'}
                 if self._pump_active or self._probe_active():
                     return {'type': 'error', 'message': 'Stop the active probe or marking operation before aligning.'}
                 if not self._rc_safety.simulation:
                     if time.monotonic() - self._arm_state_at >= 1 or not self._arm_state.get('connected'):
-                        return {'type': 'error', 'message': 'Select a connected arm servo in Settings first.'}
+                        return {'type': 'error', 'message': 'Select a connected arm servo in Setup first.'}
                     if not self._arm_state.get('calibration'):
-                        return {'type': 'error', 'message': 'Record and apply arm limits in Settings before positioning arm.'}
+                        return {'type': 'error', 'message': 'Record and apply arm limits in Setup before positioning arm.'}
                 angle = float(payload.get('angle_deg', 0.0))
                 if not math.isfinite(angle):
                     return {'type': 'error', 'message': 'Target angle must be finite'}
@@ -773,7 +773,7 @@ class OperatorControl(Node):
                 if not math.isfinite(duration) or duration <= 0 or duration > 10.0:
                     return {'type': 'error', 'message': 'Invalid pump mark duration.'}
                 if self._calibrating:
-                    return {'type': 'error', 'message': 'Close settings before marking.'}
+                    return {'type': 'error', 'message': 'Close Setup before marking.'}
                 if self._probe_active():
                     return {'type': 'error', 'message': 'Stop the active probe operation before marking.'}
                 if self._pump_active:

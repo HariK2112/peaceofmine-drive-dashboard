@@ -3,7 +3,7 @@
   const slots = ['forward','auxiliary'];
   let latest = null, signature = null;
   const capture = document.getElementById('camera-capture-settings');
-  capture.innerHTML = slots.map(slot => `<fieldset><legend>${slot === 'forward' ? 'Main' : 'Inset'} robot camera capture</legend>
+  capture.innerHTML = slots.map(slot => `<fieldset><legend>${slot === 'forward' ? 'Front' : 'Probe'} camera</legend>
     <label>Device<input id="${slot}-capture-device" type="text" placeholder="auto or /dev/v4l/by-id/…"></label>
     <label>Width<input id="${slot}-capture-width" type="number" min="16" max="4096"></label>
     <label>Height<input id="${slot}-capture-height" type="number" min="16" max="4096"></label>

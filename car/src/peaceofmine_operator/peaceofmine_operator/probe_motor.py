@@ -63,7 +63,7 @@ class ProbeMotor(ServoMotor):
         if self.home_position is None:
             raise ValueError('Home the probe first')
         if not calibration or calibration['servo_id'] != self.ident:
-            raise ValueError('Save maximum probe extension in Settings first')
+            raise ValueError('Save maximum probe extension in Setup first')
         maximum = calibration['max_extension_mm']
         if isinstance(depth, bool) or not isinstance(depth, (int, float)) or not math.isfinite(depth) or not 0 <= depth <= maximum:
             raise ValueError('Probe target exceeds saved maximum extension')

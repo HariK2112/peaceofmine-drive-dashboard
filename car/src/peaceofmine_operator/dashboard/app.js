@@ -536,7 +536,7 @@ function operationBlock(allowManualTarget = false) {
   if (!state.connected) return 'Connect to the operator stack.';
   if (!state.drive.you_control_owner) return 'Take control first.';
   if (!state.safety?.servo_allowed || !state.drive.armed) return state.safety?.servo_reason || 'RC must permit servo motion.';
-  if (state.drive.calibrating) return 'Close Settings before operating.';
+  if (state.drive.calibrating) return 'Close Setup before operating.';
   if (state.inspection?.active) return 'A scan is running. Stop it first.';
   if (state.probe.cycle_active) return 'Probe cycle is running. Stop probe to cancel.';
   if (!allowManualTarget && (state.probe.active || state.probe.holding)) return 'Stop probe before starting another action.';
@@ -547,8 +547,8 @@ function operationBlock(allowManualTarget = false) {
 function probeActionBlock(allowManualTarget = false) {
   const blocked = operationBlock(allowManualTarget);
   if (blocked) return blocked;
-  if (state.probe.ready !== true || !Number.isFinite(state.probe.depth_mm) || !Number.isFinite(state.probe.max_depth_mm) || state.probe.max_depth_mm <= 0) return 'Home and calibrate the probe in Settings → Probe.';
-  if (state.probe.fault) return 'Clear the probe fault in Settings → Probe.';
+  if (state.probe.ready !== true || !Number.isFinite(state.probe.depth_mm) || !Number.isFinite(state.probe.max_depth_mm) || state.probe.max_depth_mm <= 0) return 'Home and calibrate the probe in Setup → Probe.';
+  if (state.probe.fault) return 'Clear the probe fault in Setup → Probe.';
   return '';
 }
 
@@ -712,8 +712,8 @@ function getProbeAlignment() {
 
 function armSetupBlock() {
   const arm = state.actuators?.arm;
-  if (arm?.connected !== true) return arm?.reason || 'Connect the arm in Settings → Arm.';
-  if (!arm.arm_calibration && !arm.calibration) return 'Calibrate the arm in Settings → Arm.';
+  if (arm?.connected !== true) return arm?.reason || 'Connect the arm in Setup → Arm.';
+  if (!arm.arm_calibration && !arm.calibration) return 'Calibrate the arm in Setup → Arm.';
   return '';
 }
 
@@ -930,7 +930,7 @@ function updateHud() {
   setRange($('sweep-speed'), detector.sweep_speed_min, detector.sweep_speed_max, 'any');
   if (!activeSliders.has('sweep-speed')) $('sweep-speed').value = detector.sweep_speed_deg_s;
   $('sweep-speed-value').textContent = `${Math.round(detector.sweep_speed_deg_s)}°/s`;
-  $('sweep-speed').title = `Configured maximum: ${detector.sweep_speed_max.toFixed(1)}°/s. Change in Settings → Arm. Actual speed also depends on acceleration and load.`;
+  $('sweep-speed').title = `Configured maximum: ${detector.sweep_speed_max.toFixed(1)}°/s. Change in Setup → Arm. Actual speed also depends on acceleration and load.`;
 
   $('probe-depth').textContent = Number.isFinite(probe.depth_mm) ? `${Math.round(probe.depth_mm)} mm` : '—';
   $('probe-target').textContent = `${Math.round(probe.target_mm)} mm`;
@@ -2321,7 +2321,7 @@ function updateMetalSettings() {
   $('metal-port').textContent = sensor.port || '--';
   $('metal-counts').textContent = `${sensor.received ?? 0} / ${sensor.invalid_lines ?? 0}`;
   $('metal-sequence').textContent = sensor.packet ? `${sensor.packet.seq} / ${sensor.packet.uptime_ms} ms` : '--';
-  $('metal-error').textContent = !available ? 'Detector input unavailable' : sensor.error || (fresh ? 'Receiving detector readings' : 'No fresh readings. Check the ADC connection in Settings → ADS1115.');
+  $('metal-error').textContent = !available ? 'Detector input unavailable' : sensor.error || (fresh ? 'Receiving detector readings' : 'No fresh readings. Check the ADC connection in Setup → Sensor board.');
   const reference = sensor.reference_voltage;
   const validReference = Number.isFinite(reference) && reference > 0;
   const voltage = amplitudeAdc * reference / 255;
@@ -2555,7 +2555,7 @@ function initializeInputs() {
     tab.tabIndex = tab.getAttribute('aria-selected') === 'true' ? 0 : -1;
     tab.onkeydown = event => {
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
-        : event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : null;
+        : ['ArrowRight', 'ArrowDown'].includes(event.key) ? (index + 1) % tabs.length : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? (index + tabs.length - 1) % tabs.length : null;
       if (next === null) return;
       event.preventDefault(); tabs[next].click(); tabs[next].focus();
     };
@@ -2665,7 +2665,7 @@ function renderInputs(pads, target) {
   document.querySelectorAll('[data-code]').forEach(el => el.classList.toggle('pressed', keys.has(el.dataset.code)));
   const preview = target;
   $('steering-preview').setAttribute('transform', `rotate(${-preview.angular / MAX_ANGULAR_RAD_S * 100} 80 80)`);
-  $('mapped-input').textContent = `Forward / reverse: ${preview.linear.toFixed(3)} m/s\nSteering: ${preview.angular.toFixed(3)} rad/s\nDeadman: ${preview.deadman ? 'HELD' : 'released'}\nDrive output: stopped in Settings`;
+  $('mapped-input').textContent = `Forward / reverse: ${preview.linear.toFixed(3)} m/s\nSteering: ${preview.angular.toFixed(3)} rad/s\nDeadman: ${preview.deadman ? 'HELD' : 'released'}\nDrive output: paused while Setup is open`;
   const axes = keyboard ? [] : gamepad?.axes ?? [];
   const buttons = keyboard ? [] : gamepad?.buttons ?? [];
   const axisRows = $('raw-axes'), buttonRows = $('raw-buttons');

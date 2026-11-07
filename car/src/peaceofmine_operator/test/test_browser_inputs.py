@@ -654,7 +654,7 @@ $('probe-servo-save-extension').click();
 assert(sent.at(-1).action === 'save_probe_extension' && sent.at(-1).max_extension_mm === 90, 'save maximum extension reaches driver');
 state.drive.calibrating = false;
 state.probe.ready = false; state.probe.reason = 'Stopped; torque released'; updateHud();
-assert($('probe-slider').disabled && $('probe-status').textContent === 'SETUP REQUIRED' && $('start-probing').title.includes('Home and calibrate the probe in Settings') && !$('start-probing').title.includes('torque released'), 'unready probe shows setup action instead of unrelated lifecycle reason');
+assert($('probe-slider').disabled && $('probe-status').textContent === 'SETUP REQUIRED' && $('start-probing').title.includes('Home and calibrate the probe in Setup') && !$('start-probing').title.includes('torque released'), 'unready probe shows setup action instead of unrelated lifecycle reason');
 state.probe.ready = true; state.probe.depth_mm = 25; state.probe.max_depth_mm = 90; state.probe.target_mm = 50; updateHud();
 assert(!$('probe-slider').disabled && Number($('probe-slider').max) === 90, 'main probe uses saved extension limit');
 assert($('probe-depth').textContent === '25 mm', 'main probe shows actual calibrated travel');
