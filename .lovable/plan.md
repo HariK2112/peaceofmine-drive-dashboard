@@ -1,7 +1,7 @@
 # Redesign the PeaceOfMine car dashboard for laptop
 
 ## Goal
-Bring your car dashboard (`src/peaceofmine_operator/dashboard/`) into this project and redesign it. You'll get one consistent visual style and a single-screen laptop layout with no page scrolling. All existing controls and safety behavior stay the same. Afterwards, you can link this project to a new GitHub repository and copy the dashboard folder back into PeaceOfMine.
+Make this project the dashboard for PeaceOfMine, linked into it as a git submodule. Redesign the dashboard so it uses one consistent look and fits a laptop screen with no scrolling. All existing controls and safety behavior stay the same.
 
 ## What changes
 - **One screen, no scrolling (1280×720 and larger):** a fixed grid.
@@ -13,23 +13,41 @@ Bring your car dashboard (`src/peaceofmine_operator/dashboard/`) into this proje
 - **Less confusing:** related controls are grouped under clear headings. Every button shows its blocking reason in the same place and the same way. Diagnostics (drive, probe, detector) fold into tabs inside one panel instead of three separate panels.
 - **Settings dialog:** restyled to match, with the same tabs and fields.
 
-## Syncing with your repository
-- Lovable can't sync with PeaceOfMine directly. Connecting to GitHub always creates a brand-new repository.
-- I'll keep a read-only copy of the whole repo in this project. That way I can read the ROS nodes, topics, `web_bridge.py` and message formats, and the dashboard and pretend-car data will match what the car actually sends.
-- Getting changes back: connect this project to a new GitHub repository, then copy `public/dashboard/` into `src/peaceofmine_operator/dashboard/` in PeaceOfMine. One `cp`, or a small script I can add.
-- Testing on the real car: copy the folder over, then run `util/build`, `util/run` and the launch command. Open the usual Tailscale URL on port 8080. The car's own server hosts the new dashboard with live data. The Lovable preview can't reach the car.
-- I'll add `tools/sync-dashboard.sh <path-to-PeaceOfMine>` to do the copy in one command.
+## Repository setup (submodule)
+```text
+PeaceOfMine/                         (parent repo, on the car)
+  src/peaceofmine_operator/
+    dashboard/  -> submodule = this Lovable project's GitHub repo
+      public/dashboard/index.html, app.js, style.css ...   (what the car serves)
+```
+1. Connect this project to GitHub. That creates a new repository.
+2. In PeaceOfMine:
+   - Remove the old dashboard folder.
+   - Run `git submodule add <new-repo-url> src/peaceofmine_operator/dashboard`.
+   - Point `web_bridge.py`, and the install path in `setup.py`/the Dockerfile, at `dashboard/public/dashboard`. I'll give you the exact lines, since I can't edit PeaceOfMine myself.
+3. Updating later: run `git submodule update --remote`, then commit in PeaceOfMine.
+
+I'll read the ROS nodes, topics and `web_bridge.py` straight from your GitHub repo. That way the dashboard and pretend-car data match what the car really sends, and none of that code gets copied in here.
+
+## Testing on the real car
+1. Update the submodule on the car.
+2. Run `util/build`, `util/run` and the launch command.
+3. Open the usual Tailscale URL on port 8080. The car serves the new dashboard with live data.
+
+The Lovable preview itself can't reach the car.
+
+## Preview here
+I'll add a pretend-car data source with realistic sample data, so every panel shows something. It only switches on in the Lovable preview, never on the car.
 
 ## Out of scope
 The car-side Python/ROS code, message formats and safety logic. No behavior changes, only layout, styling and presentation markup.
 
-## How preview works here
-The dashboard needs the car's live data connection. For this preview, I'll add a pretend-car data source that sends realistic sample data, so every panel shows something. It's only for the preview and never ships to the car.
-
 ## Technical details
-- Copy `index.html`, `style.css`, `app.js`, `adc.js`, `actuator-settings.js`, `camera-config.js` and the vendor files (Chart.js, keydrown) unchanged into `public/dashboard/`. Then edit only `index.html` structure and `style.css`. Keep every element `id` and `data-*` hook that `app.js` uses, so the JS keeps working with `web_bridge.py`.
-- Rewrite `style.css` around CSS custom properties (color, spacing, radius, type scale) and a `100vh` CSS grid. Panels use `min-height: 0; overflow: auto`.
-- Mock: `public/dashboard/mock-car.js`, loaded only when not served by the car (e.g. host isn't the car / `?mock=1`). It patches `WebSocket` for the `/ws` URL and emits sample telemetry messages in the shapes `app.js` expects.
-- Change `src/routes/index.tsx` to a full-screen page that embeds `/dashboard/index.html?mock=1`, and give it a proper title and meta.
-- Check with Playwright at 1280×720 and 1920×1080: no document scroll, no overlapping panels, no console errors.
-- Record in `AGENTS.md` that the dashboard lives as static files in `public/dashboard` and must keep the DOM hooks `app.js` uses.
+- Copy the current `index.html`, `style.css`, `app.js`, `adc.js`, `actuator-settings.js`, `camera-config.js` and the vendor files (Chart.js, keydrown) into `public/dashboard/`. Edit only the `index.html` structure and `style.css`. Keep every `id`/`data-*` hook that `app.js` uses, so it keeps working with `web_bridge.py`.
+- Rewrite `style.css` around CSS custom properties and a `100vh` grid, with `min-height: 0; overflow: auto` on the panels.
+- Add `public/dashboard/mock-car.js`, which loads only with `?mock=1`. It patches `WebSocket` for `/ws` and emits telemetry shaped like what `web_bridge.py` sends.
+- Change `src/routes/index.tsx` to a full-screen page embedding `/dashboard/index.html?mock=1`, with a proper title and meta.
+- Check with Playwright at 1280×720 and 1920×1080: no document scroll, no overlaps, no console errors.
+- Record in `AGENTS.md`:
+  - `public/dashboard` is the deliverable consumed as a submodule.
+  - The DOM hooks that `app.js` uses must be preserved.
