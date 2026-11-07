@@ -456,7 +456,15 @@ class DetectorNode(Node):
         baseline_v = source.get('baseline_adc', self.baseline) * reference / 255
         full_v = source.get('full_response_adc', self.full_response) * reference / 255
         latest_filtered = self.last_filtered_adc if self.use_adc else filtered
+        # The control timer and ADC run at different rates. Overlap batches
+        # up to the existing freshness deadline so a late tick loses no crest.
+        sweep_samples = None
+        if self.use_adc:
+            sweep_samples = [(at, angle_deg, filtered_adc * reference / 255)
+                             for at, _, filtered_adc, angle_deg, _ in self.sensor.recent_points(.5)
+                             if angle_deg is not None]
         self.control_pub.publish(String(data=json.dumps(dict(fresh=fresh, signal_ratio=self.signal, latest_peak=peak,
+            sweep_samples=sweep_samples,
             angle_fresh=angle is not None, angle_deg=angle, sample_time=stamp,
             sweep_speed_deg_s=self.sweep_speed,
             volts=raw*reference/255 if valid else None,

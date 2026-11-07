@@ -28,6 +28,7 @@ def sweep_arc(samples, polarity=1):
     center = median(differences)
     noise = median(abs(d-center) for d in differences)/(.6744897501960817*math.sqrt(2))
     candidates = []
+    strongest_gap = None
     i = 1
     while i < len(y)-1:
         end = i
@@ -52,7 +53,11 @@ def sweep_arc(samples, polarity=1):
                 left_cross = x[lo]+(half-y[lo])*(x[lo+1]-x[lo])/(y[lo+1]-y[lo])
                 right_cross = x[hi-1]+(half-y[hi-1])*(x[hi]-x[hi-1])/(y[hi]-y[hi-1])
                 width = right_cross-left_cross
-                if width >= 3 and all(b-a <= max_gap for a,b in zip(x[lo:hi],x[lo+1:hi+1])):
+                gap = max(b-a for a,b in zip(x[lo:hi],x[lo+1:hi+1]))
+                if width >= 3 and gap > max_gap:
+                    if strongest_gap is None or prominence > strongest_gap[0]:
+                        strongest_gap = prominence, x[peak], gap
+                elif width >= 3:
                     weights = [(x[j], y[j]-half) for j in range(lo+1,hi) if y[j] > half]
                     angle = sum(a*w for a,w in weights)/sum(w for _,w in weights)
                     candidates.append(dict(angle_deg=round(angle, 4), prominence_v=prominence,
@@ -60,5 +65,8 @@ def sweep_arc(samples, polarity=1):
                                            left_deg=left_cross, right_deg=right_cross))
         i = end+1
     if not candidates:
-        raise ValueError('No clear arc above local noise; sweep across both sides of the target and confirm again')
+        if strongest_gap:
+            _, angle, gap = strongest_gap
+            raise ValueError(f'Peak near {angle:.1f}° had a {gap:.1f}° gap in the measured sweep. Repeat confirmation.')
+        raise ValueError('No clear arc with both shoulders, at least 3° wide and above local noise.')
     return max(candidates, key=lambda item:item['prominence_v'])

@@ -208,7 +208,8 @@ class DetectorControlTest(unittest.TestCase):
             node.reference_voltage=5.
             node.baseline=0.
             node.full_response=255.
-            node.sensor=SimpleNamespace(state=dict(fresh=True,packet=dict(amplitude_adc=125.7)),updated=99.9)
+            node.sensor=SimpleNamespace(state=dict(fresh=True,packet=dict(amplitude_adc=125.7)),updated=99.9,
+                recent_points=lambda seconds:[(99.9,125.7,125.6,5.,1700000000.)])
             node.signal=.6
             node.signal_at=99.9
             node.configuration_error=None
@@ -221,6 +222,7 @@ class DetectorControlTest(unittest.TestCase):
             self.assertEqual(value['sweep_speed_deg_s'],36.)
             self.assertEqual(value['latest_peak']['angle_deg'],5.)
             self.assertTrue(value['latest_peak']['fresh'])
+            self.assertEqual(value['sweep_samples'], [[99.9,5.,125.6*5/255]] if adc else None)
             self.assertNotIn('history',value)
 
 

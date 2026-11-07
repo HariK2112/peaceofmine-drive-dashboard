@@ -161,27 +161,36 @@ class InspectionWorkflow:
         if active:
             self.cancel_io()
 
-    def tick(self, idle, sample):
+    def record_detector(self, sample):
+        if self.pending != 'pass' or not sample or not sample.get('fresh'):
+            return
+        readings = sample.get('sweep_samples')
+        if readings is None:  # Legacy and simulated detectors publish individual readings.
+            if not sample.get('angle_fresh'):
+                return
+            readings = [(sample.get('sample_time'), sample.get('angle_deg'),
+                         sample.get('filtered_volts', sample.get('volts')))]
+        for stamp, angle, voltage in readings:
+            if (not all(type(v) in (float, int) and math.isfinite(v) for v in (stamp, angle, voltage))
+                    or stamp < self.pass_started or (self.samples and stamp <= self.samples[-1]['sample_time'])):
+                continue
+            polarity = sample.get('response_direction')
+            if polarity not in (-1, 1):
+                self.stop('Detector response direction unavailable', error=True)
+                return
+            if self.pass_polarity is not None and polarity != self.pass_polarity:
+                self.stop('Detector response direction changed; confirm again', error=True)
+                return
+            self.pass_polarity = polarity
+            self.samples.append(dict(angle_deg=angle, volts=voltage, sample_time=stamp))
+            fraction = (angle-self.pass_from)/(self.pass_to-self.pass_from)
+            self.progress = max(self.progress, self.completed+max(0., min(.999, fraction)))
+
+    def tick(self, idle, sample=None):
+        if sample:
+            self.record_detector(sample)
         if not self.active:
             return
-        if self.pending == 'pass' and sample and sample.get('fresh') and sample.get('angle_fresh'):
-            stamp = sample.get('sample_time')
-            voltage = sample.get('filtered_volts', sample.get('volts'))
-            if (type(stamp) in (int, float) and math.isfinite(stamp) and stamp >= self.pass_started
-                    and all(type(v) in (int, float) and math.isfinite(v) for v in (voltage, sample.get('angle_deg')))
-                    and (not self.samples or stamp > self.samples[-1]['sample_time'])):
-                polarity = sample.get('response_direction')
-                if polarity not in (-1, 1):
-                    self.stop('Detector response direction unavailable', error=True)
-                    return
-                if self.pass_polarity is not None and polarity != self.pass_polarity:
-                    self.stop('Detector response direction changed; confirm again', error=True)
-                    return
-                self.pass_polarity = polarity
-                self.samples.append(dict(angle_deg=sample['angle_deg'], volts=voltage, sample_time=stamp))
-                fraction = (sample['angle_deg']-self.pass_from)/(self.pass_to-self.pass_from)
-                # Reserve completion for the action result and arc validation.
-                self.progress = max(self.progress, self.completed+max(0., min(.999, fraction)))
         if self.pending is not None:
             return
         if not idle:

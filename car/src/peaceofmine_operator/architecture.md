@@ -105,7 +105,7 @@ Probe ADC contact consumes `adc/filtered_samples`, not a plot. Disabled, unavail
 configuration-mismatched or stale measurements produce unknown contact. Hysteresis
 and debounce avoid threshold chatter; plot routing never changes detection input.
 
-Confirmation uses a three-point median curve of the applied filtered voltage in one-degree angle bins.
+Confirmation receives overlapping batches of the same timestamped angle and filtered voltage samples used by the graph. Each pass keeps each acquisition once and uses a three-point median curve in one-degree angle bins.
 Peak prominence is measured above both local shoulders and must exceed three times
 the noise estimated from differences between consecutive filtered samples. A qualifying arc spans
 at least 3° at half prominence. Each pass estimates its own baseline, amplitude and weighted center above half prominence.

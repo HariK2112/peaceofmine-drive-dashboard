@@ -48,6 +48,26 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(self.flow.completed,2)
         self.assertFalse(self.flow.active)
 
+    def test_confirmation_uses_each_aligned_reading_once_between_control_ticks(self):
+        self.flow.confirm(-90., 90., 36.)
+        self.tick()
+        self.complete()
+        for direction in (1, -1):
+            self.tick()
+            batch = []
+            for index in range(181):
+                angle = direction * (index - 90)
+                self.now += .02
+                volts = 2.46 + .015 * math.exp(-.5*((angle + 28)/14)**2)
+                batch.append([self.now, angle, volts])
+                if index % 9 == 0:
+                    self.flow.record_detector(dict(fresh=True, angle_fresh=False,
+                                                   sweep_samples=batch[-20:], response_direction=1))
+            self.assertEqual(len(self.flow.samples), 181)
+            self.complete()
+        self.assertEqual(self.flow.phase, 'CONFIRMED')
+        self.assertAlmostEqual(self.flow.confirmed_angle, -28., delta=.1)
+
     def test_selected_search_speed_is_used_for_all_confirmation_moves(self):
         self.flow.confirm(-90.,90.,24.)
         self.tick();self.complete()

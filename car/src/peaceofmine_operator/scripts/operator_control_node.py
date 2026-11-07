@@ -222,6 +222,7 @@ class OperatorControl(Node):
                 with self._lock:
                     self._inspection_detector = value
                     self._inspection_detector_at = time.monotonic()
+                    self._inspection.record_detector(value)
         except (ValueError, TypeError):
             self._inspection_detector = {}
 
@@ -302,7 +303,7 @@ class OperatorControl(Node):
             return
         idle = (not self._arm_state.get('torque') and self._arm_state.get('lifecycle') == 'IDLE'
                 and (not self._probe_state.get('connected') or (not self._probe_state.get('torque') and self._probe_state.get('lifecycle') == 'IDLE')))
-        self._inspection.tick(idle, detector)
+        self._inspection.tick(idle)
 
     def _start_inspection(self, payload):
         action = payload.get('action')
