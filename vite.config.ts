@@ -8,7 +8,7 @@
 // hosting already compresses at the edge.
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import type { Plugin } from "vite";
 
@@ -51,6 +51,24 @@ function carDashboard(): Plugin {
   };
 }
 
+// Build: copy the same dashboard files into the client output so the published
+// preview serves /dashboard/ too (dev middleware above only runs in `vite dev`).
+function carDashboardBuild(): Plugin {
+  return {
+    name: "car-dashboard-build",
+    apply: "build",
+    applyToEnvironment: (env) => env.name === "client",
+    generateBundle() {
+      for (const name of readdirSync(DASHBOARD_DIR)) {
+        const file = join(DASHBOARD_DIR, name);
+        if (!statSync(file).isFile() || !TYPES[extname(file)]) continue;
+        const fileName = name === "index.html" ? "dashboard/index.html" : `dashboard/assets/${name}`;
+        this.emitFile({ type: "asset", fileName, source: readFileSync(file) });
+      }
+    },
+  };
+}
+
 export default defineConfig({
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
@@ -58,7 +76,7 @@ export default defineConfig({
     server: { entry: "server" },
   },
   vite: {
-    plugins: [carDashboard()],
+    plugins: [carDashboard(), carDashboardBuild()],
     server: { watch: { ignored: ["**/car/**"] } },
   },
 });
