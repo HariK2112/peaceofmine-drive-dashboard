@@ -5,3 +5,5 @@
 - [x] Pretend-car data for the preview
 - [x] Copy-back script for the original repo (`scripts/push-car.sh`)
 - [ ] Test on the real car (needs the user and the hardware)
+- [x] Layout pass 2: front + probe cameras side by side, phase-aware focus (drive → probe), compact battery in header, even spacing, numbered workflow steps
+- [ ] Run the dashboard browser tests (`test_browser_inputs`, `test_browser_adc`) on a dev machine; they can't run here (they time out in this sandbox on the original dashboard too)
