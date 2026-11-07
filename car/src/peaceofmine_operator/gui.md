@@ -344,11 +344,10 @@ better conversion accuracy. Simulated payloads do not provide raw ADC readings.
 
 ### Detector smoothing
 
-Setup → Sensor board → Live readings lets you preview a low-pass time constant
-before applying it. The solid trace shows the car’s applied filter. Changing
-the value adds a dashed preview. Apply & save updates every viewer and the
-detector, arc confirmation and probe contact logic. The time constant defaults
-to 100 ms; 0 disables smoothing. Larger values delay contact response.
+Setup → Metal detector shows the applied detector voltage and a dashed preview when you edit smoothing.
+Save smoothing applies the same time constant to the car’s ADC channels, including probe contact.
+Setup → Sensor board → Live readings exposes the same setting and previews every enabled input.
+The default is 100 ms. Zero disables smoothing. Larger values suppress more noise and delay the response.
 Raw counts, volts and scaled ROS topics remain available. Each input is filtered
 independently; `adc/filtered_samples` carries its filtered volts and scaled
 value with the original raw count and timestamp.
@@ -356,11 +355,11 @@ value with the original raw count and timestamp.
 ### Confirm and probe scan
 
 Search sweeping defaults to 36°/s. Use the main actions in order: Search, Confirm arc, Probe scan. Confirmation
-uses two full passes at the selected search speed. It compares a broad arc against each pass's
-local noise and compares their measured half-height footprints. At least 50%
-shared overlap is required; the probe scan covers the confirmed target in 5° steps
-over ±10°, clipped to the saved arm limits and corrected for the detector/probe
-mounting offset. Contact or maximum depth ends each descent; the probe retracts
+uses the even pass count saved under Setup → Metal detector (2 by default) at the selected search speed. It compares a broad arc against each pass's
+local noise and compares their measured half-height footprints. A majority must share at least 50% overlap and include both sweep directions.
+The result averages their forward and return median centers. The probe scan covers the confirmed target in 5° steps
+over ±15°, clipped to the saved arm limits and corrected for the detector/probe
+mounting offset. The scan map labels the confirmed bearing and the commanded arm center. Each completed marker shows measured contact depth or the configured target depth reached. A dash indicates an unavailable depth. Contact or maximum depth ends each descent; the probe retracts
 before the next angle. Stop inspection cancels the sequence while retaining the
 dashboard control lease. Global STOP and RC/session loss cancel outstanding goals.
 

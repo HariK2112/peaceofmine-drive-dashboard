@@ -13,10 +13,10 @@ from peaceofmine_operator import configuration, camera_settings
 from peaceofmine_operator.node_runner import run_node
 
 
-from peaceofmine_operator import display_settings, driving_settings, field_gnss, marking_settings
+from peaceofmine_operator import display_settings, driving_settings, field_gnss, inspection, marking_settings
 
 SHARED = dict(cameras=camera_settings, display=display_settings, driving=driving_settings,
-              gnss=field_gnss, marking=marking_settings)
+              gnss=field_gnss, inspection=inspection, marking=marking_settings)
 
 
 class OperatorSettings(Node):

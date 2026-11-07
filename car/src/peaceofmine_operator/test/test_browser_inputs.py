@@ -958,9 +958,16 @@ assert(returningProbePoint(state.inspection,latchFixture).contact_depth_mm === 9
 assert(returningProbePoint({...state.inspection,phase:'ERROR',active:false},latchFixture) === null,'failed or stopped return stays unknown');
 const scanMap = $('probe-scan-map');
 assert(!scanMap.hasAttribute('hidden') && scanMap.querySelectorAll('[data-result="unknown"]').length === 4 && scanMap.querySelectorAll('[data-result="contact"]').length === 1, 'planned scan shows one contact and four pending points');
-assert(scanMap.getAttribute('aria-label').includes('35°: Early contact at 12.3 mm') && $('probe-map-depth').textContent === 'Target 60 mm', 'map describes angle, contact depth and target depth');
+assert(scanMap.getAttribute('aria-label').includes('35°: Early contact at 12.3 mm') && $('probe-map-depth').textContent === 'Target depth 60 mm', 'map describes angle, contact depth and target depth');
 renderProbeScanMap({phase:'STOPPED',probe_angles_deg:[0,5,10,15]}, [{angle_deg:0,status:'CONTACT',contact_depth_mm:0},{angle_deg:5,status:'CLEAR'},{angle_deg:10,status:'CONTACT',contact_depth_mm:null}]);
 assert(scanMap.querySelectorAll('[data-result="clear"]').length === 1 && scanMap.querySelectorAll('[data-result="unknown"]').length === 2 && !scanMap.getAttribute('aria-label').includes('Pending'), 'zero-depth contact, target reached, invalid result and interrupted points stay distinct');
+const sevenAngles = [-15,-10,-5,0,5,10,15];
+renderProbeScanMap({phase:'PROBING',probe_angles_deg:sevenAngles,probe_target_depth_mm:80,probe_arm_center_deg:-45,probe_target_bearing_deg:0},
+  [{angle_deg:-15,status:'CONTACT',contact_depth_mm:0},{angle_deg:-10,status:'CONTACT',contact_depth_mm:13.2},{angle_deg:-5,status:'CLEAR'}]);
+assert([...scanMap.querySelectorAll('.scan-depth')].map(node=>node.textContent).join('|') === '0 mm|13.2 mm|80 mm|—|—|—|—', 'visible point labels distinguish measured contact, reached target and missing depths');
+assert($('probe-map-bearing').textContent === '0°' && $('probe-map-arm-center').textContent === '-45°', 'confirmed bearing and commanded arm center have separate labels');
+renderProbeScanMap({phase:'STOPPED',probe_angles_deg:[35,40,45,50,55],confirmed_angle_deg:45},[]);
+assert(scanMap.querySelectorAll('[data-result]').length === 5 && $('probe-map-arm-center').textContent === '—', 'legacy five-bearing scan stays intact without an invented arm command');
 renderProbeScanMap(state.inspection,state.inspection.points);
 assert($('probe-diagnostics').contains($('pressure-history')) && $('probe-diagnostics').contains($('probe-zero-contact')), 'motor readings and tare are grouped under optional diagnostics');
 assert($('inspection-points').textContent.includes('12.3 mm') && $('inspection-progress').value===1,'actual per-point contact depth and progress are visible');

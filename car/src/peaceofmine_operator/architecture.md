@@ -106,18 +106,17 @@ configuration-mismatched or stale measurements produce unknown contact. Hysteres
 and debounce avoid threshold chatter; plot routing never changes detection input.
 
 Confirmation uses a three-point median curve of the applied filtered voltage in one-degree angle bins.
-Peak
-prominence is measured above both local shoulders and must exceed three times
-the noise estimated from median raw-sample differences. A qualifying arc spans
-at least 3° at half prominence. Each opposed pass estimates its own baseline and
-amplitude. Their measured half-height intervals must have intersection-over-union
-of at least 50%, so broad matching arcs can tolerate more center variation than
-narrow arcs. The scan center is the mean of the two arc centers. Absolute Baseline/Mine settings still
+Peak prominence is measured above both local shoulders and must exceed three times
+the noise estimated from differences between consecutive filtered samples. A qualifying arc spans
+at least 3° at half prominence. Each pass estimates its own baseline, amplitude and weighted center above half prominence.
+Confirmation selects the largest group with a shared intersection covering at least half its combined span.
+The group must include both directions and a majority of all requested passes. The final bearing
+averages the median centers of the forward and reverse passes in that group. Absolute Baseline/Mine settings still
 control the search meter and manual peak detection, not confirmation. Search
 sweeps default to 36°/s; confirmation uses the selected search sweep speed.
 
-The control node owns `InspectionWorkflow`: two opposed confirmation passes,
-then a sequential five-position probe scan. It uses the existing ROS action
+The control node owns `InspectionWorkflow`: 2, 4, 6 or 8 alternating confirmation passes,
+then a sequential seven-position probe scan. It uses the existing ROS action
 servers, waits for stopped/torque-off telemetry between operations, and cancels
 on permission/session loss or actuator failure. Detector/probe mounting geometry
 is applied before commanding arm angles. Browser state exposes phase, progress

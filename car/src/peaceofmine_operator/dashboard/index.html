@@ -129,9 +129,13 @@
             </div>
           </section>
           <section class="pane-section probe-load" aria-labelledby="probe-map-heading">
-            <div class="section-head"><h2 id="probe-map-heading">Probe scan map <span class="tip" data-tip="Each marker represents one planned probe position. Positions are spaced in angle order, with positive angles to the left as on the detector radar."></span></h2><span id="probe-map-depth" class="head-note"></span></div>
+            <div class="section-head"><h2 id="probe-map-heading">Probe scan map <span class="tip" data-tip="Each marker represents one planned probe position. The upper label is the bearing. The lower label shows measured contact depth or the depth target reached. A dash means depth is unknown. Positive bearings are on the left."></span></h2><span id="probe-map-depth" class="head-note"></span></div>
+            <dl id="probe-map-centers" class="probe-map-centers" hidden>
+              <div><dt>Target bearing</dt><dd id="probe-map-bearing">—</dd></div>
+              <div><dt>Commanded arm center</dt><dd id="probe-map-arm-center">—</dd></div>
+            </dl>
             <div class="probe-scan-plot">
-              <svg id="probe-scan-map" role="img" viewBox="0 0 360 130" aria-label="Probe scan positions" hidden></svg>
+              <svg id="probe-scan-map" role="img" viewBox="0 0 460 134" aria-label="Probe scan positions" hidden></svg>
               <span id="probe-map-empty" class="note">Waiting for a probe scan.</span>
             </div>
             <div class="probe-map-legend" aria-label="Scan result legend"><span class="map-contact">◆ Early contact</span><span class="map-clear">● Target reached</span><span class="map-unknown">○ Pending / unknown</span></div>
@@ -227,15 +231,15 @@
               <small id="mode-sweep-help" class="step-note"></small>
             </div>
             <div class="operation-action">
-              <button id="mode-align-btn" type="button" class="mode-btn" disabled title="Sweep the hit twice to confirm where it is">
-                <span class="mode-num">2</span><span class="mode-copy"><span class="mode-text">Confirm arc</span><span class="mode-desc">Sweep the hit twice to pin it down</span></span>
-                <span id="mode-align-pill" class="badge neutral">2 PASSES</span>
+              <button id="mode-align-btn" type="button" class="mode-btn" disabled title="Confirm the hit with repeated sweeps">
+                <span class="mode-num">2</span><span class="mode-copy"><span class="mode-text">Confirm arc</span><span class="mode-desc">Compare repeated sweeps over the hit</span></span>
+                <span id="mode-align-pill" class="badge neutral">WAITING</span>
               </button>
               <small id="mode-align-help" class="step-note"></small>
             </div>
             <div class="operation-action">
-              <button id="mode-probe-btn" type="button" class="mode-btn" disabled title="Probe five spots, 5° apart, around the confirmed hit">
-                <span class="mode-num">3</span><span class="mode-copy"><span class="mode-text">Probe scan</span><span class="mode-desc">Probe 5 spots around the hit</span></span>
+              <button id="mode-probe-btn" type="button" class="mode-btn" disabled title="Probe up to seven spots at 5° intervals across ±15° of the confirmed bearing">
+                <span class="mode-num">3</span><span class="mode-copy"><span class="mode-text">Probe scan</span><span class="mode-desc">Probe up to 7 spots around the hit</span></span>
                 <span id="mode-probe-pill" class="badge neutral">SETUP REQUIRED</span>
               </button>
               <small id="mode-probe-help" class="step-note"></small>
@@ -693,6 +697,9 @@
             </header>
             <div class="metal-chart-container"><canvas id="metal-history" role="img" aria-label="Filtered metal detector voltage over the last 30 seconds"></canvas></div>
             <p id="metal-range" class="meta">No readings</p>
+            <label class="field"><span class="field-name">Smoothing <span class="unit">ms</span> <span class="tip" data-tip="0 turns smoothing off. A longer time reduces noise and delays the response. Preview the dashed line before saving. This filter also applies to probe contact."></span></span>
+              <span class="input-with-btn"><input id="metal-smoothing" type="number" min="0" max="2000" step="1" required><button type="button" id="metal-smoothing-save" disabled>Save smoothing</button></span></label>
+            <p id="metal-smoothing-feedback" class="status-msg" role="status">Waiting for ADC settings.</p>
           </section>
           <section class="set-card">
             <header class="card-head"><h4>Calibrate <span class="tip" data-tip="Levels are saved on the car and used by every operator."></span></h4></header>
@@ -711,6 +718,9 @@
               <button id="metal-reset" type="button" class="quiet push-right" data-tip="Go back to the values the car started with.">Reset</button>
             </div>
             <p id="metal-voltage-note" class="meta">Estimated ADC input voltage.</p>
+            <label class="field"><span class="field-name">Confirmation passes <span class="tip" data-tip="The car counts each sweep across the target as one pass. Saved for the next confirmation."></span></span>
+              <select id="confirm-passes" disabled><option>2</option><option>4</option><option>6</option><option>8</option></select></label>
+            <p id="confirm-passes-feedback" class="status-msg" role="status"></p>
             <div class="kv-row">
               <span class="field-name">Search alert <span class="tip" data-tip="Warns the operator during the search. Change it on the main screen under Mission → Sweep and alert. Saved on the car."></span></span>
               <output id="metal-alert-level">60% of mine level</output>

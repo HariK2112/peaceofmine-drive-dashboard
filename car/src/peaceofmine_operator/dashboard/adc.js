@@ -15,6 +15,9 @@
   const hysteresis = el('trigger-hysteresis'), debounce = el('trigger-debounce');
   const detectorInput = document.getElementById('metal-adc-input');
   const detectorSave = document.getElementById('metal-adc-save');
+  const smoothingInput = document.getElementById('metal-smoothing');
+  const smoothingSave = document.getElementById('metal-smoothing-save');
+  let smoothingError = '';
   const detectorFeedback = document.getElementById('metal-adc-feedback');
   muxInput.innerHTML = inputOptions;
   detectorInput.innerHTML = '<option value="">Unassigned</option>' + inputOptions;
@@ -44,7 +47,35 @@
     : inputProblem(latest.probe_trigger.mux) || (pending ? 'Wait for ADC settings to finish saving.'
     : contactDirty ? 'Save or undo your edits in Setup → Probe contact.' : '');
 
+  function renderSmoothing() {
+    const filter = field('filter_ms');
+    if (smoothingInput.value !== filter.value) smoothingInput.value = filter.value;
+    const applied = latest?.config.filter_ms;
+    const draft = smoothingInput.valueAsNumber;
+    const valid = smoothingInput.validity.valid;
+    const dirty = valid && draft !== applied;
+    const running = latest?.connected && latest.running && latest.applied === latest.revision;
+    smoothingSave.disabled = !adcOnline || !state.connected || !state.drive.you_control_owner || Boolean(pending) || !dirty;
+    document.getElementById('metal-smoothing-feedback').textContent = !adcOnline ? 'Waiting for ADC settings.'
+      : pending === 'smoothing' ? 'Saving smoothing…' : smoothingError
+      || (!valid ? 'Enter a whole number from 0 to 2000 ms.'
+        : `${running ? 'Applied' : 'Configured'}: ${applied} ms${dirty ? ' · Preview: ' + draft + ' ms' : ''}`);
+  }
+  smoothingInput.oninput = () => {
+    field('filter_ms').value = smoothingInput.value;
+    smoothingError = '';
+    renderSmoothing();
+    drawMetalHistory();
+  };
+  smoothingSave.onclick = () => {
+    if (smoothingSave.disabled || !smoothingInput.reportValidity()) return;
+    const settings = savedSettings();
+    settings.config.filter_ms = smoothingInput.valueAsNumber;
+    command({action:'settings', settings}, 'smoothing');
+    renderSmoothing();
+  };
   function renderSensors() {
+    renderSmoothing();
     const trigger = latest?.probe_trigger;
     const owner = adcOnline && state.connected && state.drive.you_control_owner;
     if (!trigger) return;
@@ -170,12 +201,14 @@
     if (source === 'contact') {
       if (message.ok) contactDirty = false;
       contactMessage = message.ok ? 'Contact settings saved.' : message.message;
+    } else if (source === 'smoothing') {
+      smoothingError = message.ok ? '' : message.message || 'Smoothing could not be saved.';
     } else if (source === 'detector') {
       if (message.ok) detectorDirty = false;
       detectorMessage = message.ok ? 'Sensor input saved.' : message.message;
     } else {
       el('feedback').textContent = message.message || (message.ok ? 'Saved' : 'Save failed');
-      if (message.ok) importedSettings = null;
+      if (message.ok) { importedSettings = null; smoothingError = ''; }
     }
     render();
   };
@@ -297,6 +330,29 @@
     el('registers').textContent = `${latest.applied === latest.revision ? 'Applied' : 'Applying settings'} · revision ${latest.revision}\n` + Object.entries(latest.registers).map(([k,v])=>`${k}: 0x${v.toString(16).padStart(4,'0')}  ${v.toString(2).padStart(16,'0')}`).join('\n');
   }
   // Plot refresh follows the display; acquisition and table updates do not.
+  function previewFilter(points, draftMs) {
+    let lastTime = null, filtered = 0;
+    return points.map(({x, y}) => {
+      if (y === null) { lastTime = null; return {x, y}; }
+      const dt = x - lastTime;
+      filtered = !draftMs || lastTime === null || dt > .5 ? y : filtered - Math.expm1(-dt * 1000 / draftMs) * (y - filtered);
+      lastTime = x;
+      return {x, y: filtered};
+    });
+  }
+  window.operatorDetectorFilterPreview = seconds => {
+    const draft = smoothingInput.valueAsNumber;
+    if (!adcOnline || !smoothingInput.validity.valid || draft === latest.config.filter_ms) return null;
+    // Warm the filter using samples preceding the visible window when available.
+    const raw = datasets('detector', 'volts', seconds + 10);
+    const reference = state.detector.sensor?.reference_voltage;
+    if (raw.length !== 1 || !Number.isFinite(reference) || reference <= 0) return null;
+    const data = previewFilter(raw[0].data, draft).filter(point => point.x >= -seconds);
+    for (const point of data) if (Number.isFinite(point.y)) point.y = Math.max(0, Math.min(reference, point.y));
+    return {label:`Preview (${draft} ms)`, data,
+      borderColor:getComputedStyle(document.documentElement).getPropertyValue('--warn').trim(),
+      borderDash:[7, 3], borderWidth:2, pointRadius:0, spanGaps:false};
+  };
   function previewTraces(seconds) {
     const applied = datasets(null, 'filtered_volts', seconds);
     const raw = datasets(null, 'volts', seconds);
@@ -308,19 +364,14 @@
       line.borderDash = [2, 4];
       applied[i].label = line.label.replace('(raw V)', '(applied V)');
       if (!field('filter_ms').validity.valid || draftMs === latest.config.filter_ms) return;
-      let lastTime = null, filtered = 0;
-      const data = line.data.map(({x, y}) => {
-        if (y === null) { lastTime = null; return {x, y}; }
-        const dt = x - lastTime;
-        filtered = !draftMs || lastTime === null || dt > .5 ? y : filtered - Math.expm1(-dt * 1000 / draftMs) * (y - filtered);
-        lastTime = x;
-        return {x, y: filtered};
-      });
+      const data = previewFilter(line.data, draftMs);
       preview.push({...line, label:line.label.replace('(raw V)', '(preview V)'), data, borderWidth:2, borderDash:[7, 3]});
     });
     return [...raw, ...applied, ...preview];
   }
   field('filter_ms').oninput = () => {
+    smoothingError = '';
+    renderSmoothing();
     el('quantity').value = 'comparison';
     if (chart) chart.$frameBucket = null;
     window.operatorADCFrame();

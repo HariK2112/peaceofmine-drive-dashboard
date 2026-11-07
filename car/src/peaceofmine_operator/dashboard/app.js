@@ -363,7 +363,8 @@ function receiveDetectorStream(sensor, now) {
   while (liveDetectorPoints.length && liveDetectorPoints[0].age_s > 120) liveDetectorPoints.shift();
   const age = Math.max(0, sensor.age_ms / 1000);
   if (!liveDetectorPoints.length || age < liveDetectorPoints.at(-1).age_s) {
-    liveDetectorPoints.push({age_s: age, adc, filtered_adc: packet.filtered_adc});
+    liveDetectorPoints.push({age_s: age, adc, filtered_adc: packet.filtered_adc,
+      ...(Object.hasOwn(packet, 'angle_deg') ? {angle_deg: packet.angle_deg, timestamp_s: packet.timestamp_s} : {})});
   }
   sensor.history = liveDetectorPoints;
   liveReceivedAt = detectorHistoryAt = now;
@@ -386,9 +387,10 @@ async function refreshDetectorHistory() {
     const elapsed = batch.now - historyTime;
     detectorPoints = detectorPoints.filter(p => p.age_s + elapsed <= 120);
     for (const point of detectorPoints) point.age_s += elapsed;
-    for (const [stamp, adc, filtered_adc] of batch.points) {
+    for (const [stamp, adc, filtered_adc, angle_deg, timestamp_s] of batch.points) {
       if (stamp <= historyCursor || ![stamp, adc, filtered_adc].every(Number.isFinite)) continue;
-      detectorPoints.push({age_s:batch.now-stamp, adc, filtered_adc});
+      detectorPoints.push({age_s:batch.now-stamp, adc, filtered_adc,
+        ...(timestamp_s === undefined ? {} : {angle_deg, timestamp_s})});
       historyCursor = stamp;
     }
     historyTime = batch.now;
@@ -457,6 +459,14 @@ function connect() {
     }
     if (message.type === 'latency_pong') {
       recordLatency(message.probe_id);
+      return;
+    }
+    if (message.type === 'settings_result' && message.section === 'inspection') {
+      if (!message.ok) {
+        pendingPasses = null;
+        $('confirm-passes-feedback').textContent = message.message || 'Confirmation settings could not be saved.';
+      }
+      updateMetalSettings();
       return;
     }
     if (message.type === 'settings_result' && message.section === 'gnss') {
@@ -971,7 +981,7 @@ function inspectionBlock(action) {
   if (action === 'confirm') return state.detector.fresh === true ? '' : 'Wait for fresh detector readings before confirming.';
   const probeBlocked = probeActionBlock();
   if (probeBlocked) return probeBlocked;
-  if (!['CONFIRMED', 'COMPLETE'].includes(state.inspection?.phase) || !Number.isFinite(state.inspection?.confirmed_angle_deg)) return 'Confirm the location with two passes first.';
+  if (!['CONFIRMED', 'COMPLETE'].includes(state.inspection?.phase) || !Number.isFinite(state.inspection?.confirmed_angle_deg)) return 'Confirm the location first.';
   if (state.inspection?.probe_reachable === false) return 'Confirmed target is outside probe reach. Reposition the rover and confirm again.';
   const contact = state.probe.adc_contact_state;
   if (!contact?.enabled || !contact.fresh) return 'Save a contact limit and wait for a fresh reading.';
@@ -1008,7 +1018,12 @@ function renderProbeScanMap(inspection, points) {
   const plan = Array.isArray(inspection.probe_angles_deg) && inspection.probe_angles_deg.length
     ? inspection.probe_angles_deg : points.map(point => point?.angle_deg);
   const target = inspection.probe_target_depth_mm;
-  $('probe-map-depth').textContent = Number.isFinite(target) ? `Target ${Number(target.toFixed(1))} mm` : '';
+  const bearing = inspection.probe_target_bearing_deg ?? inspection.confirmed_angle_deg;
+  const angleLabel = value => Number.isFinite(value) ? `${Number(value.toFixed(1))}°` : '—';
+  $('probe-map-centers').hidden = !plan.length;
+  $('probe-map-bearing').textContent = angleLabel(bearing);
+  $('probe-map-arm-center').textContent = angleLabel(inspection.probe_arm_center_deg);
+  $('probe-map-depth').textContent = Number.isFinite(target) ? `Target depth ${Number(target.toFixed(1))} mm` : '';
   map.toggleAttribute('hidden', !plan.length);
   $('probe-map-empty').hidden = !!plan.length;
   map.replaceChildren();
@@ -1022,10 +1037,11 @@ function renderProbeScanMap(inspection, points) {
   };
   // Discrete samples are spread across the fan in angle order, as in the legend.
   const at = (index, radius) => {
-    const direction = plan.length === 1 ? 0 : (0.5 - index / (plan.length - 1)) * 1.9;
-    return [180 + radius * Math.sin(direction), 164 - radius * Math.cos(direction)];
+    const horizontal = plan.length === 1 ? 0 : (1 - 2 * index / (plan.length - 1)) * 186;
+    const angle = Math.asin(horizontal / 310);
+    return [230 + radius * Math.sin(angle), 345 - radius * Math.cos(angle)];
   };
-  for (const radius of [86, 108, 130]) {
+  for (const radius of [275, 292, 310]) {
     const from = at(0, radius), to = at(plan.length - 1, radius);
     map.append(make('path', {class:'scan-ring', d:`M${from} A${radius} ${radius} 0 0 0 ${to}`}));
   }
@@ -1036,18 +1052,21 @@ function renderProbeScanMap(inspection, points) {
     const matches = validAngle && Number.isFinite(point?.angle_deg) && Math.abs(angle - point.angle_deg) < .001;
     const hit = matches && point.status === 'CONTACT' && Number.isFinite(point.contact_depth_mm) && point.contact_depth_mm >= 0;
     const clear = matches && point.status === 'CLEAR';
-    const status = hit ? `Early contact at ${point.contact_depth_mm.toFixed(1)} mm` : clear ? 'Target reached'
+    const depth = hit ? point.contact_depth_mm : clear && Number.isFinite(target) ? target : null;
+    const depthLabel = Number.isFinite(depth) ? `${Number(depth.toFixed(1))} mm` : '—';
+    const status = hit ? `Early contact at ${depthLabel}` : clear ? (depth === null ? 'Target reached' : `Target reached at ${depthLabel}`)
       : !point && inspection.phase === 'PROBING' ? 'Pending' : 'Unknown';
-    const label = validAngle ? `${Number(angle.toFixed(1))}°` : '—';
+    const label = angleLabel(angle);
     const description = `${validAngle ? label : 'Angle unavailable'}: ${status}${point?.returning ? ' · retracting' : ''}`;
     legend.push(description);
-    const [x, y] = at(index, 130);
+    const [x, y] = at(index, 310);
     const mark = make('g', {'data-result': hit ? 'contact' : clear ? 'clear' : 'unknown'});
     mark.append(make('title', {}, description));
-    mark.append(make('path', {class:'scan-ray', d:`M${at(index, 72)} L${x},${y}`}));
+    mark.append(make('path', {class:'scan-ray', d:`M${at(index, 264)} L${x},${y}`}));
     mark.append(hit ? make('path', {class:'map-contact', d:`M${x},${y-6} l6,6 -6,6 -6,-6 z`})
       : make('circle', {class:clear ? 'map-clear' : 'map-unknown', cx:x, cy:y, r:5}));
     mark.append(make('text', {x, y:y-12}, label));
+    mark.append(make('text', {class:'scan-depth', x, y:y+20}, depthLabel));
     map.append(mark);
   });
   map.setAttribute('aria-label', 'Probe scan map. ' + legend.join('. '));
@@ -1058,7 +1077,7 @@ let inspectionTaskKey = '';
 function renderInspection() {
   const inspection = state.inspection;
   const phase = inspection.phase || 'IDLE';
-  $('inspection-status').textContent = inspection.message || ({IDLE: 'Sweep to find a hit, then confirm, probe and mark it.', CONFIRMING: 'Comparing the arc on two passes at search speed…', CONFIRMED: 'Two passes complete. Ready for probe scan.', PROBING: 'Probe scan in progress…', COMPLETE: 'Probe scan complete.', STOPPED: 'Inspection stopped.', ERROR: 'Inspection stopped. Check actuator status.'})[phase];
+  $('inspection-status').textContent = inspection.message || ({IDLE: 'Sweep to find a hit, then confirm, probe and mark it.', CONFIRMING: 'Comparing sweeps across the target…', CONFIRMED: 'Confirmation complete. Ready for probe scan.', PROBING: 'Probe scan in progress…', COMPLETE: 'Probe scan complete.', STOPPED: 'Inspection stopped.', ERROR: 'Inspection stopped. Check actuator status.'})[phase];
   const total = Number.isFinite(inspection.total) && inspection.total > 0 ? inspection.total : 0;
   const completed = Number.isFinite(inspection.completed) ? inspection.completed : 0;
   const probe = state.probe;
@@ -1096,7 +1115,7 @@ function renderInspection() {
   $('inspection-points').parentElement.hidden = !points.length;
   const returning = returningProbePoint(inspection, probe);
   const mapPoints = returning ? [...points, returning] : points;
-  const key = JSON.stringify([mapPoints, inspection.probe_angles_deg, inspection.probe_target_depth_mm, phase]);
+  const key = JSON.stringify([mapPoints, inspection.probe_angles_deg, inspection.probe_target_depth_mm, inspection.probe_target_bearing_deg, inspection.probe_arm_center_deg, inspection.confirmed_angle_deg, phase]);
   if (key === inspectionPointsKey) return;
   inspectionPointsKey = key;
   renderProbeScanMap(inspection, mapPoints);
@@ -1178,9 +1197,9 @@ function updateHud() {
   $('detector-align-probe').title = alignBlock || align.reason;
   $('align-probe-hint').textContent = alignBlock || align.reason;
   $('mode-align-btn').disabled = Boolean(confirmBlock);
-  $('mode-align-btn').title = confirmBlock || 'Compare the arc on two passes at search speed.';
+  $('mode-align-btn').title = confirmBlock || `Compare ${state.settings?.inspection?.passes ?? 2} passes across the target.`;
   $('mode-align-btn').querySelector('.mode-text').textContent = state.inspection.phase === 'CONFIRMING' ? 'Confirming…' : 'Confirm arc';
-  $('mode-align-pill').textContent = state.inspection.phase === 'CONFIRMING' ? 'RUNNING' : confirmBlock ? 'BLOCKED' : '2 PASSES';
+  $('mode-align-pill').textContent = state.inspection.phase === 'CONFIRMING' ? `${state.inspection.completed || 0}/${state.inspection.total}` : confirmBlock ? 'BLOCKED' : `${state.settings?.inspection?.passes ?? 2} PASSES`;
   $('start-probing').disabled = Boolean(cycleBlock);
   $('start-probing').title = cycleBlock;
   $('start-probing').textContent = probe.cycle_active ? (probe.cycle_phase === 'DESCENDING' ? 'Probing…' : 'Retracting…') : 'Probe once';
@@ -2749,6 +2768,7 @@ function initializeCameraSettings() {
 }
 
 let metalPending = null;
+let pendingPasses = null;
 let metalFeedback = '';
 let metalCalibrationKey = '';
 let metalPacketKey = '';
@@ -2759,6 +2779,17 @@ function updateMetalSettings() {
   const available = state.connected && sensor.available;
   const fresh = available && sensor.fresh;
   const owner = state.connected && state.drive.you_control_owner;
+  const passes = state.settings?.inspection?.passes;
+  if (pendingPasses !== null && (!owner || !passes)) {
+    pendingPasses = null;
+    $('confirm-passes-feedback').textContent = 'Waiting for car settings.';
+  }
+  if (pendingPasses !== null && pendingPasses === passes) {
+    pendingPasses = null;
+    $('confirm-passes-feedback').textContent = 'Saved on car.';
+  }
+  $('confirm-passes').disabled = !owner || !passes || pendingPasses !== null;
+  $('confirm-passes').value = pendingPasses ?? passes ?? '';
   $('metal-status').textContent = !state.connected ? 'DISCONNECTED' : !available
     ? (state.detector.fresh ? 'SIMULATED / NO RAW DATA' : 'NO DRIVER') : fresh ? 'LIVE' : 'STALE';
   $('metal-status').className = `badge ${fresh ? 'safe' : 'neutral'}`;
@@ -2926,6 +2957,23 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
   detectorChart.update('none');
 }
 
+// Other overlays can have different sample rates. Hover selects the nearest
+// measured detector sample in time, regardless of which y-axis is under it.
+function nearestDetectorSample(chart, event) {
+  const samples = chart.data.datasets[0].data;
+  if (!samples.length || !chart.isDatasetVisible(0)) return [];
+  const x = chart.scales.x.getValueForPixel(event.x);
+  let low = 0, high = samples.length - 1;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (samples[mid].x < x) low = mid+1;
+    else high = mid;
+  }
+  const index = low && x-samples[low-1].x < samples[low].x-x ? low-1 : low;
+  const element = chart.getDatasetMeta(0).data[index];
+  return element ? [{element, datasetIndex: 0, index}] : [];
+}
+
 function drawDetectorDiagnostics(now = performance.now(), animate = false) {
   if (!detectorPlotVisible('detector-diagnostics-history', detectorDiagnosticsChart)) return;
   if (animate && detectorDiagnosticsChart && scrollTimeChart(detectorDiagnosticsChart, now)) return;
@@ -2935,6 +2983,7 @@ function drawDetectorDiagnostics(now = performance.now(), animate = false) {
   const zero = sensor.baseline_adc;
   const trigger = zero + (sensor.full_response_adc - zero) * state.detector.threshold_ratio;
   if (!detectorDiagnosticsChart) {
+    Chart.Interaction.modes.detectorSample = nearestDetectorSample;
     detectorDiagnosticsChart = new Chart($('detector-diagnostics-history'), {
       type: 'line',
       data: {datasets: [
@@ -2945,7 +2994,20 @@ function drawDetectorDiagnostics(now = performance.now(), animate = false) {
       ]},
       options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
         elements: {point: {radius: 0, hitRadius: 6}, line: {spanGaps: .25}},
-        plugins: {decimation: {enabled: true, algorithm: 'min-max'}, legend: {labels: {color: '#a4b5bb', boxWidth: 10, font: {size: 9}}}},
+        plugins: {decimation: {enabled: true, algorithm: 'min-max'}, legend: {labels: {color: '#a4b5bb', boxWidth: 10, font: {size: 9}}},
+          tooltip: {mode: 'detectorSample', intersect: false, callbacks: {
+            title: items => {
+              const point = items[0]?.raw;
+              if (!point) return '';
+              return Number.isFinite(point.timestamp_s)
+                ? new Date(point.timestamp_s * 1000).toISOString().slice(11,23) + ' UTC'
+                : (-point.x).toFixed(2) + ' s ago';
+            },
+            label: ({raw}) => [
+              'Filtered ADC: ' + raw.y.toFixed(3), 'Raw ADC: ' + (Number.isFinite(raw.adc) ? raw.adc.toFixed(3) : '—'),
+              'Fixture angle: ' + (Number.isFinite(raw.angle_deg) ? raw.angle_deg.toFixed(2) + '°' : 'unavailable')
+            ]
+          }}},
         scales: {
           x: {type: 'linear', min: -30, max: 0, ticks: {color: '#a4b5bb', count: 3, maxRotation: 0,
             callback: v => v === 0 ? 'now' : `${v}s`}, grid: {color: '#2b3d46'}},
@@ -2955,9 +3017,13 @@ function drawDetectorDiagnostics(now = performance.now(), animate = false) {
         }},
     });
   }
-  setDetectorTrace(detectorDiagnosticsChart.data.datasets[0], samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc})), .25);
+  const readings = samples.map(p => ({x: -p.age_s-elapsed, y: p.filtered_adc, adc: p.adc,
+    angle_deg: p.angle_deg, timestamp_s: p.timestamp_s}));
+  setDetectorTrace(detectorDiagnosticsChart.data.datasets[0], readings, .25);
   while (detectorAngles.length && now - detectorAngles[0].at > 30000) detectorAngles.shift();
-  detectorDiagnosticsChart.data.datasets[1].data = detectorAngles.map(p => ({x: (p.at - now) / 1000, y: p.angle}));
+  detectorDiagnosticsChart.data.datasets[1].data = samples.some(p => Object.hasOwn(p, 'angle_deg'))
+    ? readings.map(p => ({x:p.x, y:Number.isFinite(p.angle_deg) ? p.angle_deg : null}))
+    : detectorAngles.map(p => ({x:(p.at-now)/1000, y:p.angle}));
   for (const [index, value] of [[2, zero], [3, trigger]]) {
     detectorDiagnosticsChart.data.datasets[index].data = Number.isFinite(value) ? [{x: -30, y: value}, {x: 0, y: value}] : [];
   }
@@ -3020,8 +3086,18 @@ function drawMetalHistory(animate = false) {
   metalChart.data.datasets[3].data = Number.isFinite(alertVolts) && alertVolts >= low && alertVolts <= high
     ? [{x: -seconds, y: alertVolts}, {x: 0, y: alertVolts}] : [];
   metalChart.options.scales.x.min = -seconds;
-  metalChart.options.scales.y.min = low;
-  metalChart.options.scales.y.max = high;
+  const preview = window.operatorDetectorFilterPreview?.(seconds);
+  let lower = low, upper = high;
+  if (preview) {
+    Object.assign(metalChart.data.datasets[4] ??= {}, preview);
+    if ($('metal-autoscale').checked) for (const point of preview.data) {
+      if (!Number.isFinite(point.y)) continue;
+      lower = Math.min(lower, point.y);
+      upper = Math.max(upper, point.y);
+    }
+  } else if (metalChart.data.datasets.length > 4) metalChart.data.datasets.length = 4;
+  metalChart.options.scales.y.min = lower;
+  metalChart.options.scales.y.max = upper;
   metalChart.resize();
   metalChart.$scrollPixels = 0;
   metalChart.$renderedAt = performance.now();
@@ -3054,6 +3130,13 @@ function initializeMetalSettings() {
     }
     metalPending = {id, at: performance.now()};
     send(payload); updateMetalSettings();
+  };
+  $('confirm-passes').onchange = () => {
+    if ($('confirm-passes').disabled) return;
+    pendingPasses = Number($('confirm-passes').value);
+    $('confirm-passes-feedback').textContent = 'Saving…';
+    send({type:'settings', section:'inspection', value:{passes:pendingPasses}});
+    updateMetalSettings();
   };
   $('metal-zero').onclick = () => command('zero');
   $('metal-apply').onclick = () => command('apply');

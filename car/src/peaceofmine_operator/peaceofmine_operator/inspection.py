@@ -1,5 +1,7 @@
-"""Two confirmation passes followed by a small, sequential probe scan."""
+"""Confirm a detector target over opposing sweeps, then probe around it."""
 from collections import deque
+from itertools import combinations
+from statistics import median
 import math
 import time
 from .sweep_arc import sweep_arc
@@ -7,6 +9,37 @@ from .sweep_arc import sweep_arc
 
 # Fixed mounting geometry already used by manual detector-to-probe alignment.
 PROBE_OFFSET_DEG = 45.
+
+
+DEFAULTS = {'passes': 2}
+
+
+def validate(value):
+    passes = value.get('passes') if isinstance(value, dict) else None
+    if type(passes) is not int or passes not in (2, 4, 6, 8):
+        raise ValueError('Choose 2, 4, 6 or 8 confirmation passes')
+    return {'passes': passes}
+
+
+def matching_arcs(passes):
+    """Find the largest majority with a common footprint and both sweep directions."""
+    valid = [arc for arc in passes if 'angle_deg' in arc]
+    best_overlap = 0.
+    for count in range(len(valid), len(passes)//2, -1):
+        matches = []
+        for group in combinations(valid, count):
+            if len({p['direction'] for p in group}) != 2:
+                continue
+            common = min(p['right_deg'] for p in group) - max(p['left_deg'] for p in group)
+            span = max(p['right_deg'] for p in group) - min(p['left_deg'] for p in group)
+            overlap = max(0., common) / span
+            best_overlap = max(best_overlap, overlap)
+            if overlap >= .5:
+                matches.append((overlap, group))
+        if matches:
+            overlap, group = max(matches, key=lambda match: match[0])
+            return group, overlap
+    return (), best_overlap
 
 
 class InspectionWorkflow:
@@ -23,6 +56,7 @@ class InspectionWorkflow:
         self.points, self.passes = [], []
         self.probe_angles = []
         self.probe_depth = None
+        self.probe_arm_center = None
         self.arc_overlap = None
         self.queue = deque()
         self.pending = None
@@ -41,9 +75,13 @@ class InspectionWorkflow:
                     completed=self.completed, total=self.total, progress=self.progress,
                     confirmed_angle_deg=self.confirmed_angle, arc_overlap_ratio=self.arc_overlap,
                     probe_angles_deg=list(self.probe_angles), probe_target_depth_mm=self.probe_depth,
+                    probe_arm_center_deg=self.probe_arm_center,
+                    probe_target_bearing_deg=(self.probe_arm_center + PROBE_OFFSET_DEG
+                                              if self.probe_arm_center is not None else None),
                     probe_reachable=self.confirmed_angle is not None and self.lower <= self.confirmed_angle-PROBE_OFFSET_DEG <= self.upper, points=list(self.points), passes=list(self.passes))
 
-    def confirm(self, lower, upper, speed):
+    def confirm(self, lower, upper, speed, passes=2):
+        validate({'passes': passes})
         if not all(math.isfinite(v) for v in (lower, upper)) or lower >= upper:
             raise ValueError('Calibrated arm limits are required')
         if type(speed) not in (int, float) or not math.isfinite(speed) or speed <= 0:
@@ -57,8 +95,10 @@ class InspectionWorkflow:
         self.passes, self.points = [], []
         self.probe_angles = []
         self.probe_depth = None
-        self.total = 2
-        self.queue.extend([('start', lower), ('pass', upper), ('pass', lower)])
+        self.probe_arm_center = None
+        self.total = passes
+        self.queue.append(('start', lower))
+        self.queue.extend(('pass', upper if index % 2 == 0 else lower) for index in range(passes))
         self.message = f'Moving to sweep start at {speed:g}°/s.'
 
     def probe(self, lower, upper, depth):
@@ -70,12 +110,13 @@ class InspectionWorkflow:
         if not lower <= center <= upper:
             raise ValueError('Confirmed target is outside probe reach. Reposition the rover and confirm again.')
         angles = sorted({round(max(lower, min(upper, center+offset)), 4)
-                         for offset in (-10, -5, 0, 5, 10)})
+                         for offset in range(-15, 16, 5)})
         self._begin('PROBING')
         self.lower, self.upper = lower, upper
         self.points = []
         self.probe_angles = [angle + PROBE_OFFSET_DEG for angle in angles]
         self.probe_depth = depth
+        self.probe_arm_center = center
         self.total = len(angles)
         for angle in angles:
             self.queue.extend([('position', angle), ('probe', depth)])
@@ -141,10 +182,10 @@ class InspectionWorkflow:
             self.clear_peak()
             self.pass_started = self.clock()
             self.samples, self.pass_polarity = [], None
-            self.pass_from = self.lower if self.completed == 0 else self.upper
+            self.pass_from = self.lower if self.completed % 2 == 0 else self.upper
             self.pass_to = target
             self.progress = float(self.completed)
-            self.message = f'Confirmation pass {self.completed+1} of 2 at {self.confirm_speed:g}°/s.'
+            self.message = f'Confirmation pass {self.completed+1} of {self.total} at {self.confirm_speed:g}°/s.'
         elif kind == 'position':
             self.angle = target
             self.message = f'Position {self.completed+1} of {self.total}: moving to {target+PROBE_OFFSET_DEG:.1f}°.'
@@ -164,22 +205,26 @@ class InspectionWorkflow:
                 try:
                     arc = sweep_arc(self.samples, self.pass_polarity)
                 except ValueError as exc:
-                    self.stop(f'Pass {self.completed+1}: {exc}', error=True)
-                    return
+                    if self.total == 2:
+                        self.stop(f'Pass {self.completed+1}: {exc}', error=True)
+                        return
+                    arc = {'reason': str(exc)}
+                arc['direction'] = 1 if self.pass_to > self.pass_from else -1
                 self.passes.append(arc)
                 self.completed += 1
-                if self.completed == 2:
-                    left = max(p['left_deg'] for p in self.passes)
-                    right = min(p['right_deg'] for p in self.passes)
-                    span = max(p['right_deg'] for p in self.passes)-min(p['left_deg'] for p in self.passes)
-                    # Match relative footprint overlap instead of a fixed angular cutoff.
-                    self.arc_overlap = max(0., right-left)/span
-                    if self.arc_overlap < .5:
-                        self.stop(f'The two arcs have only {self.arc_overlap:.0%} overlap. Reposition or repeat confirmation.', error=True)
+                if self.completed == self.total:
+                    group, self.arc_overlap = matching_arcs(self.passes)
+                    if not group:
+                        self.stop(f'No majority of passes matched in both directions (best overlap {self.arc_overlap:.0%}). Repeat confirmation.', error=True)
                         return
-                    self.confirmed_angle = sum(p['angle_deg'] for p in self.passes)/2
+                    # Equal weight per direction cancels opposing time-filter lag even
+                    # when one noisy pass was discarded from a larger scan.
+                    centers = [median(p['angle_deg'] for p in group if p['direction'] == direction)
+                               for direction in (1, -1)]
+                    self.confirmed_angle = sum(centers) / 2
                     self.phase = 'CONFIRMED'
-                    self.message = f'Arc matched at {self.confirmed_angle:.1f}° ({self.arc_overlap:.0%} overlap across both passes).'
+                    self.message = (f'Arc centered at {self.confirmed_angle:.1f}° · {len(group)}/{self.total} '
+                                    f'passes matched · {self.arc_overlap:.0%} overlap.')
                 self.progress = float(self.completed)
             elif kind == 'probe':
                 contact = result.get('contact') is True

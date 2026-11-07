@@ -13,10 +13,11 @@ import time
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String, UInt16
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import JointState
 from geometry_msgs.msg import TwistWithCovarianceStamped
 from rclpy.qos import qos_profile_sensor_data
 from peaceofmine_operator.ads1115 import RANGES
-from peaceofmine_operator.detector import DetectorTelemetry
+from peaceofmine_operator.detector import DetectorTelemetry, fixture_angle_at
 from peaceofmine_interfaces.msg import ActuatorStatus, AdcSamples
 from peaceofmine_operator import configuration
 from peaceofmine_operator.actuator_protocol import status_dict
@@ -48,6 +49,9 @@ class DetectorNode(Node):
         self.initial_calibration = (self.baseline, self.full_response, self.reference_voltage)
 
         self.sensor = DetectorTelemetry()
+        self.fixture_samples = deque(maxlen=48)
+        self.pending_samples = deque()
+        self.last_aligned = None
         self.signal = self.angle = self.speed = 0.0
         self.signal_at = 0.0
         self.angle_at = 0.0
@@ -62,6 +66,7 @@ class DetectorNode(Node):
         self.detected = False
         self.hits = []
         self.latest_peak = None
+        self.peak_after = 0.
         self.threshold_request = None
 
         # Sample tracking for zeroing and rate statistics
@@ -93,6 +98,8 @@ class DetectorNode(Node):
         if not self.use_adc:
             self.create_subscription(Float32, 'detector/signal_ratio', self.signal_cb, 10)
         self.create_subscription(Float32, 'fixture/angle_deg', self.angle_cb, 10)
+        if self.use_adc:
+            self.create_subscription(JointState, 'fixture/joint_states', self.fixture_cb, 10)
         self.create_subscription(Bool, 'fixture/sweep_enabled_state', lambda msg: setattr(self, 'sweep', msg.data), 10)
         self.create_subscription(Float32, 'fixture/sweep_speed_deg_s_state', lambda msg: setattr(self, 'sweep_speed', msg.data), 10)
         self.create_subscription(Odometry, self.odometry_topic, self.odometry_cb, 10)
@@ -126,11 +133,16 @@ class DetectorNode(Node):
         self.adc_revision = saved.get('section_revisions', {}).get('adc', 0)
         self.configuration_error = None
         if previous != (self.baseline, self.full_response, self.reference_voltage, self.adc_channel, self.adc_revision) and hasattr(self, 'latest_peak'):
-            self.latest_peak = None
-            self.signal_at = 0.
-            self.detected = False
+            self.reset_adc(clear_history=True)
+
+    def reset_adc(self, clear_history=False):
+        self.latest_peak = self.last_aligned = self.adc_stamp = None
+        self.pending_samples.clear()
+        self.signal_at = 0.
+        self.detected = False
+        if clear_history:
             self.recent_samples.clear()
-            self.adc_stamp = None
+            self.sample_times.clear()
             self.sensor.history.clear()
             self.beam = [0.] * len(self.beam)
 
@@ -139,14 +151,12 @@ class DetectorNode(Node):
             self.load_calibration()
         except (ValueError, KeyError, TypeError, OSError) as exc:
             self.configuration_error = str(exc)
-            self.signal_at = 0.
-            self.detected = False
+            if hasattr(self, 'pending_samples'):
+                self.reset_adc()
 
     def adc_samples_cb(self, msg: AdcSamples):
         if not msg.valid:
-            self.adc_stamp = None
-            self.signal_at = 0.
-            self.detected = False
+            self.reset_adc()
             return
         if msg.config_revision != self.adc_revision:
             self.reload_calibration()
@@ -154,21 +164,21 @@ class DetectorNode(Node):
             return
         if msg.session != self.adc_session:
             self.adc_session, self.adc_sequence = msg.session, -1
-            self.sensor.history.clear()
-            self.adc_stamp = None
+            self.reset_adc(clear_history=True)
+        wall_now, mono_now = time.time(), time.monotonic()
         for sample in msg.samples:
             timestamp = sample.stamp.sec + sample.stamp.nanosec / 1e9
-            age = time.time() - timestamp
+            age = wall_now - timestamp
             if sample.channel != self.adc_channel or not 0 <= age < .5 or sample.sequence <= self.adc_sequence:
                 continue
             if not math.isfinite(sample.volts) or (self.adc_stamp is not None and timestamp <= self.adc_stamp):
                 continue
             self.adc_sequence = sample.sequence
             self.adc_stamp = timestamp
-            self.process_adc_sample(sample.raw * self.adc_full_scale / 32768., sample.volts, sample.sequence)
+            self.process_adc_sample(sample.raw * self.adc_full_scale / 32768., sample.volts, sample.sequence, mono_now-age, timestamp)
+        self.flush_spatial_samples(mono_now)
 
-    def process_adc_sample(self, volts, filtered_volts, seq):
-        now = time.monotonic()
+    def process_adc_sample(self, volts, filtered_volts, seq, now, timestamp):
         self.seq = seq
         self.sample_times.append(now)
         raw_count = max(0., min(255., volts / self.reference_voltage * 255.))
@@ -180,17 +190,37 @@ class DetectorNode(Node):
         ratio = (self.last_filtered_adc-self.baseline)/(self.full_response-self.baseline)
         normalized = max(0., min(1., ratio))
         int_adc = int(round(raw_count))
-        self.sensor.update(dict(
-            fresh=True,
-            age_ms=0,
-            packet=dict(seq=self.seq, uptime_ms=int((now - self.start_time) * 1000), amplitude_adc=int_adc, precise_adc=raw_count, filtered_adc=self.last_filtered_adc)
-        ))
+        rising = normalized >= self.threshold and not self.detected
+        self.signal, self.signal_at, self.detected = normalized, now, normalized >= self.threshold
+        pose = dict(self.pose) if self.pose_at and abs(now-self.pose_at) < .5 else None
+        self.pending_samples.append((now, timestamp, raw_count, self.last_filtered_adc, ratio, rising, pose))
 
         self.raw_pub.publish(UInt16(data=min(65535, max(0, int_adc))))
         self.ratio_pub.publish(Float32(data=normalized))
         self.fresh_pub.publish(Bool(data=True))
 
-        self._update_signal(ratio, now)
+    def fixture_cb(self, msg):
+        if msg.name != ['detector_fixture'] or len(msg.position) != 1 or not math.isfinite(msg.position[0]):
+            return
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
+        if stamp <= 0 or (self.fixture_samples and stamp <= self.fixture_samples[-1][0]):
+            return
+        self.fixture_samples.append((stamp, math.degrees(msg.position[0])))
+        self.flush_spatial_samples(time.monotonic())
+
+    def flush_spatial_samples(self, now):
+        # Wait briefly for the following encoder reading. Voltage telemetry is
+        # already live. A missing encoder leaves an explicit angle gap.
+        while self.pending_samples:
+            at, stamp, raw, filtered, ratio, rising, pose = self.pending_samples[0]
+            if now-at < .2 and (not self.fixture_samples or self.fixture_samples[-1][0] < stamp):
+                break
+            self.pending_samples.popleft()
+            angle = fixture_angle_at(self.fixture_samples, stamp)
+            self.sensor.record_aligned(at, raw, filtered, angle, stamp)
+            self.last_aligned = (at, stamp, raw, filtered, angle)
+            if angle is not None:
+                self.record_spatial(ratio, at, angle, rising, pose)
 
     def command_cb(self, msg):
         request_id = None
@@ -202,6 +232,7 @@ class DetectorNode(Node):
             action = value.get('action')
 
             if action == 'clear_peak':
+                self.peak_after = time.monotonic()
                 self.latest_peak = None
                 self.beam = [0.] * len(self.beam)
                 self.command_result = dict(request_id=request_id, ok=True, message='Peak cleared')
@@ -287,6 +318,9 @@ class DetectorNode(Node):
         try:
             value = status_dict(msg)
             calibration = value.get('arm_calibration') or value.get('calibration')
+            if self.arm.get('connected') and not value.get('connected'):
+                self.fixture_samples.clear()
+                self.last_aligned = self.latest_peak = None
             self.arm, self.arm_at = value, time.monotonic()
             if calibration:
                 low, center, high = (calibration.get(k) for k in ('minimum', 'center', 'maximum'))
@@ -294,6 +328,9 @@ class DetectorNode(Node):
                     lower, upper = (low-center)*360/4096, (high-center)*360/4096
                     if (lower, upper) != (self.lower, self.upper):
                         self.lower, self.upper = lower, upper
+                        self.fixture_samples.clear()
+                        self.pending_samples.clear()
+                        self.last_aligned = self.latest_peak = None
                         self.beam = [0.] * (math.ceil(upper-lower)+1)
         except (ValueError, TypeError, AttributeError):
             pass
@@ -329,30 +366,35 @@ class DetectorNode(Node):
     def _update_signal(self, value, now):
         self.signal = max(0., min(1., float(value)))
         self.signal_at = now
-        if self.lower <= self.angle <= self.upper and len(self.beam) > 1:
-            idx = round((self.angle - self.lower) / (self.upper - self.lower) * (len(self.beam) - 1))
+        rising = self.signal >= self.threshold and not self.detected
+        self.detected = self.signal >= self.threshold
+        pose = dict(self.pose) if now-self.pose_at < .5 else None
+        self.record_spatial(value, now, self.angle, rising, pose, now-self.angle_at < .5)
+
+    def record_spatial(self, value, now, angle, rising, pose, angle_fresh=True):
+        if self.lower <= angle <= self.upper and len(self.beam) > 1:
+            idx = round((angle - self.lower) / (self.upper - self.lower) * (len(self.beam) - 1))
             if 0 <= idx < len(self.beam):
-                self.beam[idx] = self.signal
-        detected = self.signal >= self.threshold
-        if detected and now - self.angle_at < .5:
+                self.beam[idx] = max(0., min(1., value))
+        detected = max(0., min(1., value)) >= self.threshold
+        if detected and angle_fresh and now >= self.peak_after:
             # Keep peak strength unclipped so 100% saturation does not pin its angle.
             strength = max(0., float(value))
             if not self.latest_peak or strength > self.latest_peak.get('signal', 0.0) or (now - self.latest_peak.get('timestamp', 0) > 30.0):
                 self.latest_peak = dict(
-                    angle_deg=round(self.angle, 1),
+                    angle_deg=round(angle, 1),
                     signal=strength,
-                    timestamp=now, pose=dict(self.pose)
+                    timestamp=now, pose=pose or dict(self.pose)
                 )
-        if detected and not self.detected and now - self.pose_at < 0.5:
+        if rising and pose is not None:
             self.hits.append(dict(
-                x=self.pose['x'],
-                y=self.pose['y'],
-                heading_deg=math.degrees(self.pose['yaw']) + self.angle,
-                fixture_angle_deg=round(self.angle, 1),
-                signal=round(self.signal, 3)
+                x=pose['x'],
+                y=pose['y'],
+                heading_deg=math.degrees(pose['yaw']) + angle,
+                fixture_angle_deg=round(angle, 1),
+                signal=round(max(0., min(1., value)), 3)
             ))
             self.hits = self.hits[-20:]
-        self.detected = detected
 
     def _publish_detector_state(self):
         if not self.use_adc:
@@ -391,8 +433,16 @@ class DetectorNode(Node):
         self._publish_detector_state()
         now = time.monotonic()
         fresh = bool(self.signal_at and now-self.signal_at < .5 and not self.configuration_error)
+        self.flush_spatial_samples(now)
         raw, filtered, stamp = self.last_raw_adc, self.last_filtered_adc, self.signal_at
-        if not self.use_adc:
+        angle = self.angle if now-self.angle_at < .5 else None
+        if self.use_adc:
+            angle = None
+            if self.last_aligned:
+                stamp, _, raw, filtered, angle = self.last_aligned
+                if now-stamp >= .5:
+                    angle = None
+        else:
             packet = self.sensor.state.get('packet')
             if not isinstance(packet, dict):
                 packet = {}
@@ -404,7 +454,7 @@ class DetectorNode(Node):
         fresh = bool(fresh and valid)
         peak = {**self.latest_peak, 'fresh': fresh and now-self.latest_peak['timestamp'] <= 30} if self.latest_peak else None
         self.control_pub.publish(String(data=json.dumps(dict(fresh=fresh, signal_ratio=self.signal, latest_peak=peak,
-            angle_fresh=now-self.angle_at < .5, angle_deg=self.angle, sample_time=stamp,
+            angle_fresh=angle is not None, angle_deg=angle, sample_time=stamp,
             sweep_speed_deg_s=self.sweep_speed,
             volts=raw*self.reference_voltage/255 if valid else None,
             filtered_volts=filtered*self.reference_voltage/255 if valid else None,
@@ -434,7 +484,9 @@ class DetectorNode(Node):
                 seq=self.seq,
                 uptime_ms=int((now - self.start_time) * 1000),
                 amplitude_adc=int(round(self.last_raw_adc)),
-                precise_adc=self.last_raw_adc, filtered_adc=self.last_filtered_adc
+                precise_adc=self.last_raw_adc, filtered_adc=self.last_filtered_adc,
+                timestamp_s=self.adc_stamp,
+                angle_deg=self.last_aligned[4] if self.last_aligned and self.last_aligned[1] == self.adc_stamp else None
             ),
             command_result=self.command_result, error=self.configuration_error or (None if fresh else 'No fresh ADC samples; check ADS1115 status and wiring')
         )

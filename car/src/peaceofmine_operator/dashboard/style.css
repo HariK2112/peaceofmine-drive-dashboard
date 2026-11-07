@@ -551,11 +551,17 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 #radar-view { display: block; flex: 1 1 auto; width: 100%; min-height: 3rem; border-radius: var(--radius-sm); background: var(--bg-sunken); }
 
 /* probe */
+.probe-map-centers { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s4); margin: 0; font-size: var(--fs-xs); }
+.probe-map-centers[hidden] { display: none; }
+.probe-map-centers > div { display: flex; gap: var(--s1); }
+.probe-map-centers dt { color: var(--muted); }
+.probe-map-centers dd { margin: 0; color: var(--text); font-family: var(--mono); }
 .probe-scan-plot { display: grid; place-items: center; flex: 1 0 auto; min-height: 6rem; background: var(--bg-sunken); border-radius: var(--radius-sm); }
 #probe-scan-map { display: block; width: 100%; height: clamp(7rem, 17vh, 12rem); }
 #probe-scan-map[hidden], #probe-map-empty[hidden] { display: none; }
 #probe-scan-map .scan-ring, #probe-scan-map .scan-ray { fill: none; stroke: var(--line-strong); stroke-width: 1; }
 #probe-scan-map text { fill: var(--text); font: 12px var(--mono); text-anchor: middle; }
+#probe-scan-map .scan-depth { font-weight: 700; paint-order: stroke; stroke: var(--bg-sunken); stroke-width: 3px; }
 #probe-scan-map .map-contact { fill: var(--danger); }
 #probe-scan-map .map-clear { fill: var(--accent); }
 #probe-scan-map .map-unknown { fill: var(--bg-sunken); stroke: var(--muted); stroke-width: 2; }

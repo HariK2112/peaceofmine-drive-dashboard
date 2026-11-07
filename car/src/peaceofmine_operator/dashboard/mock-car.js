@@ -14,6 +14,7 @@
   const capture = {device:'auto', width:640, height:480, framerate:30, pixel_format:'mjpeg2rgb'};
   mock.settings = {
     gnss: {max_wait_s: 5, target_accuracy_m: 1},
+    inspection:{passes:2},
     marking:{duration_s:2, idle_percent:0, active_percent:100, manual_percent:0},
     saved:true, driving:{input:'controller',forward_percent:100,reverse_percent:100},
     display:{mapping:'auto',sensitivity:100,wheel:{steering:0,throttle:1,brake:2,deadman:0,invertSteering:false,
@@ -29,33 +30,42 @@
     pump.output = mock.owner && mock.armed ? mock.settings.marking.idle_percent : 0;
   }
 
-  // Pretend inspection: confirm takes 4 s, then 5 probe points of 2 s each.
+  // Simulate two seconds per confirmation pass and per probe point.
   function stepInspection(t) {
     const i = mock.inspection, dt = t - mock.phaseAt;
     if (i.phase === 'CONFIRMING') {
-      i.progress = Math.min(2, dt / 2);
-      if (dt >= 4) Object.assign(i, {phase: 'CONFIRMED', active: false, message: '', confirmed_angle_deg: 6, probe_reachable: true, progress: 2});
+      i.progress = Math.min(i.total, dt / 2);
+      i.completed = Math.floor(i.progress);
+      if (i.completed >= i.total) Object.assign(i, {phase: 'CONFIRMED', active: false, message: '', confirmed_angle_deg: 6, probe_reachable: true, progress:i.total});
     } else if (i.phase === 'PROBING') {
       const point = Math.floor(dt / 2), within = (dt % 2) / 2;
-      mock.cycle = point < 5;
-      mock.depth = mock.cycle ? i.probe_target_depth_mm * Math.sin(Math.PI * within) : 0;
+      mock.cycle = point < i.total;
+      const downstrokeDepth = point === 2 ? Math.min(38, i.probe_target_depth_mm / 2) : i.probe_target_depth_mm;
+      mock.depth = mock.cycle ? downstrokeDepth * Math.sin(Math.PI * within) : 0;
       mock.cyclePhase = within < 0.5 ? 'DESCENDING' : 'RETRACTING';
       i.probe_goal_id = mock.cycle ? `preview-${mock.phaseAt}-${point}` : null;
-      while (i.points.length < Math.min(point, 5)) {
+      while (i.points.length < Math.min(point, i.total)) {
         const n = i.points.length;
-        i.points.push({angle_deg: i.confirmed_angle_deg - 10 + 5 * n, status: n === 2 ? 'CONTACT' : 'CLEAR', contact_depth_mm: n === 2 ? Math.min(38, i.probe_target_depth_mm / 2) : null});
+        i.points.push({angle_deg: i.probe_angles_deg[n], status: n === 2 ? 'CONTACT' : 'CLEAR', contact_depth_mm: n === 2 ? Math.min(38, i.probe_target_depth_mm / 2) : null});
       }
       i.completed = i.points.length; i.progress = i.completed;
-      if (point >= 5) Object.assign(i, {phase: 'COMPLETE', active: false, message: 'Probe scan complete · 1 contact.'});
+      if (point >= i.total) Object.assign(i, {phase: 'COMPLETE', active: false, message: 'Probe scan complete · 1 contact.'});
     }
   }
 
+  function detectorVoltage(t) {
+    const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : 0;
+    const nearTarget = Math.exp(-((mock.pose.x - 8) ** 2) / 2);
+    return (40 + 120 * nearTarget * Math.cos(angle * Math.PI / 180) ** 2 + 4 * Math.sin(t * 7)) * 3.3 / 255;
+  }
   function telemetry() {
     const t = (performance.now() - started) / 1000;
     const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : 0;
-    const nearTarget = Math.exp(-((mock.pose.x - 8) ** 2) / 2);
-    const filtered = 40 + 120 * nearTarget * Math.cos(angle * Math.PI / 180) ** 2 + 4 * Math.sin(t * 7);
-    detectorHistory.push({at: t, adc: Math.round(filtered + 3 * Math.random()), filtered_adc: Math.round(filtered)});
+    const assigned = adcConfig.channels.find(channel => channel.enabled && ['detector','both'].includes(routes[channel.mux]));
+    const rawVolts = assigned?.mux === 6 ? detectorVoltage(t) : .2;
+    const raw = rawVolts * 255 / 3.3;
+    const filtered = (adcFiltered.get(assigned?.mux) ?? rawVolts) * 255 / 3.3;
+    detectorHistory.push({at:t, adc:raw, filtered_adc:filtered, angle_deg:angle, timestamp_s:Date.now()/1000});
     while (detectorHistory.length && t - detectorHistory[0].at > 120) detectorHistory.shift();
     const dt = 0.1;
     mock.pose.yaw += mock.angular * dt;
@@ -80,8 +90,8 @@
         sweep_enabled: mock.sweep, sweep_speed_deg_s: 36, sweep_speed_min: 5, sweep_speed_max: 180, beam_half_angle_deg: 45,
         beam_min_angle_deg: -45, beam_max_angle_deg: 45, beam: [],
         sensor: {available: true, fresh: true, age_ms: 20, rate_hz: 50, received: Math.round(t * 50), invalid_lines: 0,
-          reference_voltage: 3.3, baseline_adc: 40, packet: {filtered_adc: filtered, precise_adc: filtered, amplitude_adc: filtered}, full_response_adc: 160, port: '/dev/ttyMOCK',
-          history_age_s: 0, history: detectorHistory.map(p => ({age_s: +(t - p.at).toFixed(3), adc: p.adc, filtered_adc: p.filtered_adc}))}},
+          reference_voltage: 3.3, baseline_adc: 40, packet: {filtered_adc: filtered, precise_adc: raw, amplitude_adc: Math.round(raw)}, full_response_adc: 160, port: '/dev/ttyMOCK',
+          history_age_s: 0, history: detectorHistory.map(p => ({age_s: +(t - p.at).toFixed(3), adc: p.adc, filtered_adc: p.filtered_adc, angle_deg: p.angle_deg, timestamp_s: p.timestamp_s}))}},
       probe: {depth_mm: mock.depth, target_mm: mock.cycle ? 60 : 0, max_depth_mm: 110, pressure_ratio: mock.cycle ? 0.1 + mock.depth / 200 : 0.05,
         pressure_history: pressureHistory.slice(), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, cycle_goal_id: mock.inspection.probe_goal_id,
         contact_detected: mock.cycle && mock.cyclePhase === 'RETRACTING' && mock.inspection.completed === 2,
@@ -144,7 +154,7 @@
         this.emit({type:'adc_result',ok:true,message:'Applied in preview.'});
         return;
       }
-      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking'].includes(m.section)) {
+      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection'].includes(m.section)) {
         mock.settings[m.section] = m.value;
         this.emit({type:'settings_result',section:m.section,ok:true,message:'Saved in preview.'});
         return;
@@ -168,8 +178,8 @@
       if (m.type === 'inspection') {
         const t = (performance.now() - started) / 1000;
         if (m.action === 'stop') Object.assign(mock.inspection, {phase: 'STOPPED', active: false, message: 'Inspection stopped.'}), mock.cycle = false, mock.depth = 0;
-        if (m.action === 'confirm') Object.assign(mock.inspection, {phase: 'CONFIRMING', active: true, total: 2, completed: 0, progress: 0, points: [], probe_angles_deg: [], probe_target_depth_mm: null, message: ''});
-        if (m.action === 'probe_scan') Object.assign(mock.inspection, {phase: 'PROBING', active: true, total: 5, completed: 0, progress: 0, points: [], probe_angles_deg: [-10,-5,0,5,10].map(offset => mock.inspection.confirmed_angle_deg + offset), probe_target_depth_mm: m.depth_mm, message: ''});
+        if (m.action === 'confirm') Object.assign(mock.inspection, {phase: 'CONFIRMING', active: true, total: mock.settings.inspection.passes, completed: 0, progress: 0, points: [], probe_angles_deg: [], probe_target_depth_mm: null, probe_target_bearing_deg:null, probe_arm_center_deg:null, message: ''});
+        if (m.action === 'probe_scan') Object.assign(mock.inspection, {phase: 'PROBING', active: true, total: 7, completed: 0, progress: 0, points: [], probe_angles_deg: [-15,-10,-5,0,5,10,15].map(offset => mock.inspection.confirmed_angle_deg + offset), probe_target_bearing_deg: mock.inspection.confirmed_angle_deg, probe_arm_center_deg:mock.inspection.confirmed_angle_deg-45, probe_target_depth_mm: m.depth_mm, message: ''});
         mock.phaseAt = t;
       }
     }
@@ -214,9 +224,7 @@
     if (!url.startsWith('/api/adc')) return realFetch(input, init);
     const now = performance.now() / 1000, samples = [];
     for (let t = adcLast + 0.02; t <= now; t += 0.02) {
-      const near = Math.exp(-((mock.pose.x - 8) ** 2) / 2);
-      const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : 0;
-      const volts = 0.45 + 1.4 * near * Math.cos(angle * Math.PI / 180) ** 2 + 0.03 * Math.sin(t * 9);
+      const volts = detectorVoltage(t - started / 1000);
       for (const ch of adcConfig.channels.filter(ch => ch.enabled)) {
         const value = ch.mux === 6 ? volts : .2;
         const old = adcFiltered.get(ch.mux);

@@ -187,6 +187,8 @@ class DetectorControlTest(unittest.TestCase):
         for adc in (False,True):
             node=kind.__new__(kind)
             node.use_adc=adc
+            node.pending_samples=[]
+            node.last_aligned=(99.9, 1700000000., 125.7, 125.6, 5.) if adc else None
             node.angle_at=99.9
             node.angle=5.
             node.sweep_speed=36.

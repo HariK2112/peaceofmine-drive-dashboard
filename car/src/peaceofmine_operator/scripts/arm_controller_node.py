@@ -3,6 +3,7 @@
 import math
 import time
 from std_msgs.msg import Bool, Float32
+from sensor_msgs.msg import JointState
 from peaceofmine_interfaces.msg import ServoCommand
 from peaceofmine_operator.actuator_controller import ActuatorController
 from peaceofmine_operator.node_runner import run_node
@@ -24,6 +25,7 @@ class ArmController(ActuatorController):
         acceleration = self.declare_parameter('sweep_acceleration_deg_s2', 34.332).value
         self.apply_motion(self.saved.get('arm_motion', dict(max_speed_deg_s=self.motion_speed*.684, acceleration_deg_s2=acceleration)))
         self.angle_pub = self.create_publisher(Float32, 'fixture/angle_deg', 10)
+        self.joint_pub = self.create_publisher(JointState, 'fixture/joint_states', 10)
         self.sweep_pub = self.create_publisher(Bool, 'fixture/sweep_enabled_state', 1)
         self.speed_pub = self.create_publisher(Float32, 'fixture/sweep_speed_deg_s_state', 1)
         self.create_subscription(Float32, 'fixture/sweep_speed_deg_s', self.speed_cb, 1)
@@ -142,7 +144,10 @@ class ArmController(ActuatorController):
     def behavior_state(self):
         calibration = self.calibration()
         if self.connected() and calibration:
-            self.angle_pub.publish(Float32(data=(self.telemetry.position-calibration['center'])*360/4096+self.offset))
+            angle = (self.telemetry.position-calibration['center'])*360/4096+self.offset
+            self.angle_pub.publish(Float32(data=angle))
+            self.joint_pub.publish(JointState(header=self.driver.header, name=['detector_fixture'],
+                                              position=[math.radians(angle)]))
         self.sweep_pub.publish(Bool(data=self.sweeping))
         self.speed_pub.publish(Float32(data=self.sweep_speed))
         return dict(sweeping=self.sweeping, sweep_acceleration_deg_s2=self.acceleration*8.583,

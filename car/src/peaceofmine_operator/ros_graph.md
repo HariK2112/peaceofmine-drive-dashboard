@@ -50,6 +50,7 @@ flowchart TD
 | `servo/configure` | `peaceofmine_interfaces/srv/ServoConfigure` | driver | actuator controllers |
 | `arm/execute`, `probe/execute` | `peaceofmine_interfaces/action/ActuatorOperation` | respective controller | ROS clients |
 | `fixture/angle_deg` | `std_msgs/Float32` | arm | detector, simulated environment |
+| `fixture/joint_states` | `sensor_msgs/JointState` | arm | Detector interpolates the measured fixture angle at each ADS1115 sample timestamp. Position is in radians. |
 | `fixture/sweep_enabled_state` | `std_msgs/Bool` | arm | detector |
 | `fixture/sweep_speed_deg_s` | `std_msgs/Float32` | control | arm |
 | `fixture/sweep_speed_deg_s_state` | `std_msgs/Float32` | arm | detector |

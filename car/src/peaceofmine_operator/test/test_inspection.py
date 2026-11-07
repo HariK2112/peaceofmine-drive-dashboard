@@ -21,7 +21,7 @@ class InspectionTest(unittest.TestCase):
         self.execute.call_args.args[-1](dict(success=True, **result))
 
     def feed_arc(self, center, baseline=2.45, height=.015, sigma=6.):
-        angles=range(-90,91) if not self.flow.passes else range(90,-91,-1)
+        angles=range(-90,91) if len(self.flow.passes) % 2 == 0 else range(90,-91,-1)
         for angle in angles:
             self.now+=.01
             volts=baseline+height*math.exp(-.5*((angle-center)/sigma)**2)
@@ -54,6 +54,19 @@ class InspectionTest(unittest.TestCase):
         for _ in range(2):
             self.tick();self.feed_arc(17.);self.complete()
         self.assertEqual([call.args[3] for call in self.execute.call_args_list],[24.,24.,24.])
+
+    def test_extra_passes_ignore_an_isolated_peak_and_balance_directions(self):
+        self.flow.confirm(-90., 90., 36., passes=4)
+        self.tick()
+        self.complete()
+        for center in (-28., -25., 35., -24.):
+            self.tick()
+            self.feed_arc(center)
+            self.complete()
+        self.assertEqual([call.args[2] for call in self.execute.call_args_list], [-90.,90.,-90.,90.,-90.])
+        self.assertEqual(self.flow.phase, 'CONFIRMED')
+        self.assertAlmostEqual(self.flow.confirmed_angle, -26.25, places=1)
+        self.assertIn('3/4 passes matched', self.flow.message)
 
     def test_confirmation_progress_uses_actual_angle_in_both_directions(self):
         self.flow.confirm(-90.,90.,36.)
@@ -88,7 +101,7 @@ class InspectionTest(unittest.TestCase):
         method=next(node for node in kind.body if isinstance(node,ast.FunctionDef) and node.name=='_start_inspection')
         scope=dict(math=math,time=SimpleNamespace(monotonic=lambda:100.),STOP_TAIL_S=.5)
         exec(compile(ast.Module(body=[method],type_ignores=[]),str(path),'exec'),scope)
-        owner=SimpleNamespace(_inspection=self.flow,_calibrating=False,_probe_active=lambda:False,
+        owner=SimpleNamespace(_inspection=self.flow,_confirmation_passes=4,_calibrating=False,_probe_active=lambda:False,
             _pump_active=False,_arm_state=dict(connected=True,calibration=dict(minimum=1024,center=2048,maximum=3072)),
             _arm_state_at=100.,get_parameter=lambda name:SimpleNamespace(value=0.),
             _inspection_clients={'arm':SimpleNamespace(server_is_ready=lambda:True)},
@@ -98,6 +111,7 @@ class InspectionTest(unittest.TestCase):
         self.tick()
         self.assertEqual(self.execute.call_args.args[:4],('arm','angle',-90.,36.))
         self.assertEqual(self.flow.confirm_speed,36.)
+        self.assertEqual(self.flow.total,4)
 
     def test_stale_old_peak_cannot_confirm_a_pass(self):
         self.flow.confirm(-90.,90.,36.)
@@ -155,7 +169,9 @@ class InspectionTest(unittest.TestCase):
     def test_probe_waits_for_each_retraction_before_next_angle(self):
         self.confirm()
         self.flow.probe(-90.,90.,80.)
-        for index,angle in enumerate((-7.,-2.,3.,8.,13.)):
+        self.assertEqual(self.flow.snapshot()['probe_target_bearing_deg'], 3.)
+        self.assertEqual(self.flow.snapshot()['probe_arm_center_deg'], -42.)
+        for index,angle in enumerate((-12.,-7.,-2.,3.,8.,13.,18.)):
             self.tick()
             self.assertEqual(self.execute.call_args.args[:4],('arm','angle',angle-45.,5.))
             count=self.execute.call_count;self.tick()
@@ -165,19 +181,21 @@ class InspectionTest(unittest.TestCase):
             self.tick();self.assertEqual(self.execute.call_count,count+1)
             self.complete(contact=index%2==0,contact_depth_mm=12.+index)
         self.assertEqual(self.flow.phase,'COMPLETE')
-        self.assertEqual(self.flow.completed,5)
-        self.assertEqual(self.flow.points[0],dict(angle_deg=-7.,status='CONTACT',contact_depth_mm=12.))
+        self.assertEqual(self.flow.completed,7)
+        self.assertEqual(self.flow.points[0],dict(angle_deg=-12.,status='CONTACT',contact_depth_mm=12.))
         self.assertIsNone(self.flow.points[1]['contact_depth_mm'])
 
     def test_probe_positions_are_clipped_and_deduplicated(self):
         self.flow.confirmed_angle=88.
         self.flow.probe(-45.,45.,50.)
-        self.assertEqual([target for kind,target in self.flow.queue if kind=='position'],[33.,38.,43.,45.])
-        self.assertEqual(self.flow.total,4)
-        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [78., 83., 88., 90.])
+        self.assertEqual([target for kind,target in self.flow.queue if kind=='position'],[28.,33.,38.,43.,45.])
+        self.assertEqual(self.flow.total,5)
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [73., 78., 83., 88., 90.])
         self.assertEqual(self.flow.snapshot()['probe_target_depth_mm'], 50.)
         self.flow.stop('Interrupted')
-        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [78., 83., 88., 90.])
+        self.assertEqual(self.flow.snapshot()['probe_target_bearing_deg'], 88.)
+        self.assertEqual(self.flow.snapshot()['probe_arm_center_deg'], 43.)
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [73., 78., 83., 88., 90.])
         self.flow.confirm(-45., 45., 25.)
         self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [])
         self.assertIsNone(self.flow.snapshot()['probe_target_depth_mm'])

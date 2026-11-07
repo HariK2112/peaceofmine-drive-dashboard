@@ -49,6 +49,10 @@ class DetectorTelemetry:
                 self.history.append((self.updated, raw, filtered))
                 self.last_packet = key
 
+    def record_aligned(self, at, raw, filtered, angle, unix_time):
+        self._expire_history(self.clock())
+        self.history.append((at, raw, filtered, angle, unix_time))
+
     def _expire_history(self, now):
         while self.history and now - self.history[0][0] > self.history_seconds:
             self.history.popleft()
@@ -73,6 +77,22 @@ class DetectorTelemetry:
         state = {**self.state, 'available': available,
                 'fresh': available and self.state.get('fresh', False), 'age_ms': age}
         if include_history:
-            state['history'] = [{'age_s': round(now - at, 3), 'adc': raw, 'filtered_adc': filtered}
-                            for at, raw, filtered in self.history]
+            state['history'] = [dict(age_s=round(now-p[0], 3), adc=p[1], filtered_adc=p[2],
+                                     **({'angle_deg': p[3], 'timestamp_s': p[4]} if len(p) > 3 else {}))
+                                for p in self.history]
         return state
+
+
+def fixture_angle_at(history, stamp, max_gap=.2):
+    """Interpolate measured fixture positions within one continuous encoder segment."""
+    for index in range(len(history) - 1, -1, -1):
+        before, angle = history[index]
+        if before == stamp:
+            return angle
+        if before < stamp:
+            if index+1 < len(history):
+                after, next_angle = history[index+1]
+                if after-before <= max_gap:
+                    return angle + (next_angle-angle) * (stamp-before) / (after-before)
+            break
+    return None
