@@ -82,7 +82,10 @@ class ActuatorTest(unittest.TestCase):
                 break
         self.assertIsNotNone(self.probe.home_position, self.probe.reason)
         self.command(self.probe, action='stop')
-        self.probe.contact.configure(dict(enabled=True, mux=4, level=100., direction='above', hysteresis=0., debounce_ms=0.))
+        # The controller reloads the car's saved contact input before each descent.
+        trigger = dict(enabled=True, mux=4, level=100., direction='above', hysteresis=0., debounce_ms=0.)
+        configuration.save_section(self.path, 'adc_simulation', dict(probe_trigger=trigger))
+        self.probe.reload_contact()
         sequence = [0]
         def contact_sample():
             sequence[0] += 1
