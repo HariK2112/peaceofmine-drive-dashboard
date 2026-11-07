@@ -407,7 +407,9 @@ class OperatorControl(Node):
                 self._stop_pump(0.)
                 self._marking = value
 
-    def _pump_allowed(self, safety):
+    def _pump_allowed(self, safety, manual=False):
+        if manual:
+            return bool(self._marking and self._lease is not None and safety['servo_allowed'])
         return bool(self._marking and self._armed and safety['allowed'] and
                     (self._rc_safety.simulation or self._rc_safety.px4_armed() is True))
 
@@ -423,7 +425,7 @@ class OperatorControl(Node):
             self._publish_pump(idle)
 
     def _pump_tick(self, now, safety):
-        allowed = self._pump_allowed(safety)
+        allowed = self._pump_allowed(safety, manual=self._pump_mode == 'manual')
         idle = self._marking['idle_percent'] if allowed else 0.
         if self._pump_active and (not allowed or now >= self._pump_until):
             self._stop_pump(idle)
@@ -432,15 +434,16 @@ class OperatorControl(Node):
     def _pump_command(self, payload, safety):
         manual = payload['type'] == 'pump_manual'
         action = payload.get('action') if manual else 'shot'
-        if not self._pump_allowed(safety):
-            return dict(type='error', message='Marking requires car settings, RC in ROS mode and an armed PX4.')
         if action == 'stop':
             if self._pump_mode == 'manual':
                 self._stop_pump(self._marking['idle_percent'])
             return
-        if manual != self._calibrating:
-            return dict(type='error', message='Open Setup to test the pump.' if manual else 'Close Setup before marking.')
-        if self._probe_active():
+        if not self._pump_allowed(safety, manual):
+            reason = 'RC kill or transmitter unavailable.' if manual else 'Marking requires car settings, RC in ROS mode and an armed PX4.'
+            return dict(type='error', message=reason)
+        if not manual and self._calibrating:
+            return dict(type='error', message='Close Setup before marking.')
+        if not manual and self._probe_active():
             return dict(type='error', message='Stop the active probe operation before marking.')
         now = time.monotonic()
         if action == 'renew':
@@ -498,7 +501,7 @@ class OperatorControl(Node):
             self._rc_enabled_until = 0.
             self._deadman = False
             self._command = (0.0, 0.0)
-        if (self._pump_active or self._pump_output) and not self._pump_allowed(safety):
+        if (self._pump_active or self._pump_output) and not self._pump_allowed(safety, manual=self._pump_mode == 'manual'):
             self._stop_pump(0.)
         return safety
 
@@ -854,6 +857,8 @@ class OperatorControl(Node):
                 if self._inspection.active:
                     self._stop_motion_locked()
                 return self._actuator_command(command)
+            elif message_type == 'pump_manual':
+                return self._pump_command(payload, safety)
             elif message_type == 'rc_drive_enable':
                 if self._drive_input == 'rc':
                     if (payload.get('enabled') is True and self._armed and safety['allowed']
@@ -893,7 +898,7 @@ class OperatorControl(Node):
                 return {'type': 'error', 'message': 'Vehicle and probe motion are blocked during arm calibration.'}
             elif message_type == 'inspection':
                 self._start_inspection(payload)
-            elif self._inspection.active and message_type in ('drive','arm_servo','probe_target','start_probe_cycle','probe_cycle','sweep_enabled','sweep_speed','align_probe','pump_mark','pump_manual'):
+            elif self._inspection.active and message_type in ('drive','arm_servo','probe_target','start_probe_cycle','probe_cycle','sweep_enabled','sweep_speed','align_probe','pump_mark'):
                 return {'type':'error', 'message':'Inspection running; stop it before using manual controls.'}
             elif message_type == 'drive':
                 if self._probe_state.get('probe', {}).get('cycle_active'):
@@ -979,7 +984,7 @@ class OperatorControl(Node):
                     return {'type': 'error', 'message': 'Target angle must be finite'}
                 self._permission_pub.publish(Bool(data=True))
                 self._arm_command_pub.publish(command_message(dict(action='angle', angle_deg=angle, request_id=payload.get('request_id'))))
-            elif message_type in ('pump_mark', 'pump_manual'):
+            elif message_type == 'pump_mark':
                 return self._pump_command(payload, safety)
             else:
                 error = {'type': 'error', 'message': 'Unsupported operator command.'}

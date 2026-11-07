@@ -124,12 +124,21 @@
           gps_status:within ? 'within_target' : fix ? 'uncertain' : 'unavailable'});
         return;
       }
-      if (m.type === 'pump_manual' && mock.calibrating && !mock.cycle) {
+      if (m.type === 'pump_manual') {
         const now = performance.now();
         if (m.action === 'start' && pump.mode === 'idle')
           Object.assign(pump, {mode:'manual', output:m.percent, until:now+250});
         if (pump.mode === 'manual' && m.action === 'renew' && now < pump.until) pump.until = now+250;
         if (pump.mode === 'manual' && m.action === 'stop') stopPump();
+        return;
+      }
+      if (m.type === 'adc' && m.action === 'settings') {
+        Object.assign(adcConfig, m.settings.config);
+        routes = m.settings.routes;
+        probeTrigger = m.settings.probe_trigger;
+        adcFiltered.clear();
+        adcRevision++;
+        this.emit({type:'adc_result',ok:true,message:'Applied in preview.'});
         return;
       }
       if (m.type === 'settings' && ['driving','display','cameras','gnss','marking'].includes(m.section)) {
@@ -158,8 +167,12 @@
 
   // /api/adc: ADS1115 sample batches (detector on MUX 6, probe contact on MUX 4).
   const adcConfig = {bus: 1, address: 72, rate: 128, pga: 1, mode: 'single', alert: 'disabled', polarity: 0, latch: false,
-    queue: 1, low: -1000, high: 1000, interval_ms: 0,
+    queue: 1, low: -1000, high: 1000, interval_ms: 0, filter_ms: 100,
     channels: Array.from({length: 8}, (_, i) => ({mux: i, enabled: i === 4 || i === 6, multiplier: 1, offset: 0}))};
+  let adcRevision = 1;
+  let routes = ['none','none','none','none','probe','none','detector','none'];
+  let probeTrigger = {enabled:true, mux:4, level:1, direction:'above', hysteresis:0, debounce_ms:0};
+  const adcFiltered = new Map();
   let adcSeq = 0, adcLast = performance.now() / 1000;
   const fieldTrail = [];
   mock.fieldFix = () => ({latitude: 59.35 + mock.pose.y / 111320, longitude: 18.07 + mock.pose.x / 56750,
@@ -184,14 +197,20 @@
       const near = Math.exp(-((mock.pose.x - 8) ** 2) / 2);
       const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : 0;
       const volts = 0.45 + 1.4 * near * Math.cos(angle * Math.PI / 180) ** 2 + 0.03 * Math.sin(t * 9);
-      samples.push({seq: ++adcSeq, time: t, mux: 6, raw: Math.round(volts * 8000), volts, scaled: volts, clipped: false});
-      samples.push({seq: ++adcSeq, time: t, mux: 4, raw: 1600, volts: 0.2, scaled: 0.2, clipped: false});
+      for (const ch of adcConfig.channels.filter(ch => ch.enabled)) {
+        const value = ch.mux === 6 ? volts : .2;
+        const old = adcFiltered.get(ch.mux);
+        const filtered = old == null || !adcConfig.filter_ms ? value : old - Math.expm1(-20 / adcConfig.filter_ms) * (value-old);
+        adcFiltered.set(ch.mux, filtered);
+        samples.push({seq:++adcSeq, time:t, mux:ch.mux, raw:Math.round(value*8000), volts:value, scaled:value*ch.multiplier+ch.offset,
+          filtered_volts:filtered, filtered_scaled:filtered*ch.multiplier+ch.offset, clipped:false});
+      }
       adcLast = t;
     }
-    const body = {session: 'mock', revision: 1, applied: 1, running: true, connected: true, demo: true, error: null,
+    const body = {session: 'mock', revision: adcRevision, applied: adcRevision, running: true, connected: true, demo: true, error: null,
       registers: {config: 0x8583}, now, sequence: adcSeq, config: adcConfig,
-      routes: ['none', 'none', 'none', 'none', 'probe', 'none', 'detector', 'none'],
-      probe_trigger: {enabled: true, mux: 4, level: 1, direction: 'above', hysteresis: 0, debounce_ms: 0},
+      routes,
+      probe_trigger: probeTrigger,
       probe_contact: {enabled: true, fresh: true, detected: false, mux: 4, value: 0.2, level: 1, direction: 'above'},
       samples};
     return Promise.resolve(new Response(JSON.stringify(body), {headers: {'Content-Type': 'application/json'}}));

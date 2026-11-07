@@ -75,7 +75,8 @@ def main() -> None:
     if capture:
         for name, key in (('image_width','width'), ('image_height','height'),
                           ('framerate','framerate'), ('pixel_format','pixel_format')):
-            parameters += ['-p', f'{name}:={json.dumps(capture[key])}']
+            value = float(capture[key]) if key == 'framerate' else capture[key]
+            parameters += ['-p', f'{name}:={json.dumps(value)}']
     os.execv(str(executable), [str(executable), *sys.argv[1:], *parameters, '-p', f'video_device:={device}'])
 
 

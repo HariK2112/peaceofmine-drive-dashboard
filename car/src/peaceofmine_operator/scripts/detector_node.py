@@ -15,7 +15,8 @@ from std_msgs.msg import Bool, Float32, String, UInt16
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistWithCovarianceStamped
 from rclpy.qos import qos_profile_sensor_data
-from peaceofmine_operator.detector import DetectorTelemetry, DetectorLowPass
+from peaceofmine_operator.ads1115 import RANGES
+from peaceofmine_operator.detector import DetectorTelemetry
 from peaceofmine_interfaces.msg import ActuatorStatus, AdcSamples
 from peaceofmine_operator import configuration
 from peaceofmine_operator.actuator_protocol import status_dict
@@ -35,11 +36,11 @@ class DetectorNode(Node):
         self.adc_session = None
         self.adc_sequence = -1
         self.configuration_error = None
-        self.adc_topic = str(self.declare_parameter('adc_topic', 'adc/samples').value)
+        self.adc_topic = str(self.declare_parameter('adc_topic', 'adc/filtered_samples').value)
 
         # Calibration parameters
         self.settings = SettingsClient(self, self.config_file)
-        self.filter = DetectorLowPass()
+        self.adc_stamp = None
         self.baseline = 0.0
         self.full_response = 255.0
         self.reference_voltage = 5.0
@@ -113,6 +114,8 @@ class DetectorNode(Node):
             raise ValueError('Invalid saved detector calibration')
         self.baseline, self.full_response, self.reference_voltage = float(base), float(full), float(ref)
         adc = saved.get('adc', {})
+        self.adc_full_scale = RANGES[adc.get('config', {}).get('pga', 1)]
+        self.filter_tau_s = adc.get('config', {}).get('filter_ms', 100) / 1000.
         channels = adc.get('config', {}).get('channels', [])
         routes = adc.get('routes', ['none'] * 8)
         assigned = [c['mux'] for c in channels if c['enabled'] and routes[c['mux']] in ('detector', 'both')] if 'adc' in saved else [6]
@@ -127,7 +130,7 @@ class DetectorNode(Node):
             self.signal_at = 0.
             self.detected = False
             self.recent_samples.clear()
-            self.filter.reset()
+            self.adc_stamp = None
             self.sensor.history.clear()
             self.beam = [0.] * len(self.beam)
 
@@ -141,7 +144,7 @@ class DetectorNode(Node):
 
     def adc_samples_cb(self, msg: AdcSamples):
         if not msg.valid:
-            self.filter.reset()
+            self.adc_stamp = None
             self.signal_at = 0.
             self.detected = False
             return
@@ -151,27 +154,28 @@ class DetectorNode(Node):
             return
         if msg.session != self.adc_session:
             self.adc_session, self.adc_sequence = msg.session, -1
-            self.filter.reset()
+            self.adc_stamp = None
         for sample in msg.samples:
             timestamp = sample.stamp.sec + sample.stamp.nanosec / 1e9
             age = time.time() - timestamp
             if sample.channel != self.adc_channel or not 0 <= age < .5 or sample.sequence <= self.adc_sequence:
                 continue
-            if not math.isfinite(sample.volts) or (self.filter.timestamp is not None and timestamp <= self.filter.timestamp):
+            if not math.isfinite(sample.volts) or (self.adc_stamp is not None and timestamp <= self.adc_stamp):
                 continue
             self.adc_sequence = sample.sequence
-            self.process_adc_sample(sample.volts, sample.sequence, timestamp)
+            self.adc_stamp = timestamp
+            self.process_adc_sample(sample.raw * self.adc_full_scale / 32768., sample.volts, sample.sequence)
 
-    def process_adc_sample(self, volts, seq, timestamp=None):
+    def process_adc_sample(self, volts, filtered_volts, seq):
         now = time.monotonic()
         self.seq = seq
         self.sample_times.append(now)
         raw_count = max(0., min(255., volts / self.reference_voltage * 255.))
 
         self.last_raw_adc = raw_count
-        self.recent_samples.append((now, raw_count))
 
-        self.last_filtered_adc = self.filter.update(raw_count, time.time() if timestamp is None else timestamp)
+        self.last_filtered_adc = max(0., min(255., filtered_volts / self.reference_voltage * 255.))
+        self.recent_samples.append((now, self.last_filtered_adc))
         ratio = (self.last_filtered_adc-self.baseline)/(self.full_response-self.baseline)
         normalized = max(0., min(1., ratio))
         int_adc = int(round(raw_count))
@@ -373,7 +377,7 @@ class DetectorNode(Node):
                 amplitude_adc=int(round(self.last_raw_adc)),
                 precise_adc=self.last_raw_adc, filtered_adc=self.last_filtered_adc
             ),
-            filter_tau_s=self.filter.time_constant,
+            filter_tau_s=self.filter_tau_s,
             baseline_adc=self.baseline,
             full_response_adc=self.full_response,
             error=self.configuration_error or (None if fresh else 'No fresh ADC samples; check ADS1115 status and detector wiring'),
@@ -421,7 +425,7 @@ class DetectorNode(Node):
             rate_hz=rate_hz,
             received=self.seq,
             invalid_lines=0,
-            filter_tau_s=self.filter.time_constant,
+            filter_tau_s=self.filter_tau_s,
             baseline_adc=self.baseline,
             full_response_adc=self.full_response,
             reference_voltage=self.reference_voltage,

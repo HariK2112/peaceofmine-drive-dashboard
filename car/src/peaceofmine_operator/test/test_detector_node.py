@@ -27,14 +27,15 @@ class DetectorTest(unittest.TestCase):
     def test_adc_uses_A2_once_and_rejects_stale_or_replayed_samples(self):
         from peaceofmine_interfaces.msg import AdcSample, AdcSamples
         packet = AdcSamples(valid=True, session='sensor', config_revision=self.node.adc_revision)
-        sample = AdcSample(channel=6, sequence=1, volts=2.)
+        sample = AdcSample(channel=6, sequence=1, raw=16000, volts=1.5)
         now = time.time()
         sample.stamp.sec = int(now)
         sample.stamp.nanosec = int((now-int(now))*1e9)
         packet.samples.append(sample)
         self.node.adc_samples_cb(packet)
         self.assertEqual(self.node.seq, 1)
-        self.assertAlmostEqual(self.node.last_raw_adc, 102.)
+        self.assertAlmostEqual(self.node.last_raw_adc, 16000*self.node.adc_full_scale/32768/self.node.reference_voltage*255)
+        self.assertAlmostEqual(self.node.last_filtered_adc, 1.5/self.node.reference_voltage*255)
         self.node.adc_samples_cb(packet)
         self.assertEqual(len(self.node.recent_samples), 1)
         sample.sequence = 2

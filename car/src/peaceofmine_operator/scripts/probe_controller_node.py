@@ -48,7 +48,7 @@ class ProbeController(ActuatorController):
         self.pressure_pub = self.create_publisher(Float32, 'probe/pressure_ratio', 10)
         self.contact_pub = self.create_publisher(ContactState, 'probe/contact', 1)
         self.create_subscription(Bool, 'probe/fault', lambda msg:setattr(self, 'fault', msg.data), 1)
-        self.create_subscription(AdcSamples, 'adc/samples', self.adc_cb, 10)
+        self.create_subscription(AdcSamples, 'adc/filtered_samples', self.adc_cb, 10)
         self.create_timer(1., self.reload_contact)
 
     def apply_probe_motion(self, value):
@@ -100,7 +100,7 @@ class ProbeController(ActuatorController):
         for sample in msg.samples:
             age=time.time()-(sample.stamp.sec+sample.stamp.nanosec/1e9)
             if sample.channel == self.contact.config['mux'] and 0 <= age <= self.contact.max_age:
-                self.contact.sample(sample.scaled, sample.sequence, msg.session)
+                self.contact.sample(sample.scaled, sample.sequence, (msg.session, msg.config_revision))
 
     def interlock(self):
         return super().interlock() and not self.fault

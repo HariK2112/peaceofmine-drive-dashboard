@@ -16,11 +16,8 @@
   function manualBlock() {
     if (!state.connected) return 'Connect to the operator stack.';
     if (!state.drive.you_control_owner) return 'Take control to test the pump.';
-    const blocked = pumpAuthorityBlock();
-    if (blocked) return blocked;
-    if (!state.drive.armed || !state.drive.calibrating) return 'Waiting for Setup permission.';
-    if (state.inspection?.active || state.probe?.active || state.probe?.holding || state.probe?.cycle_active)
-      return 'Stop the active inspection or probe before testing.';
+    if (!state.marking?.settings) return 'Waiting for marking settings.';
+    if (!state.safety?.servo_allowed) return state.safety?.servo_reason || 'Waiting for the RC transmitter.';
     if (state.marking.mode === 'shot') return 'Wait for the timed shot to finish.';
     return '';
   }

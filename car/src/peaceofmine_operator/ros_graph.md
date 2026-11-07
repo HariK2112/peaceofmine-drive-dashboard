@@ -65,7 +65,7 @@ to the driver. Firmware ownership permits only one active actuator.
 
 ```mermaid
 flowchart LR
-    ADC[ads1115] -->|adc/samples: AdcSamples| Probe[probe_controller]
+    ADC[ads1115] -->|adc/filtered_samples: AdcSamples| Probe[probe_controller]
     Probe -->|probe/contact: ContactState| Clients[ROS monitoring / recording]
     ADC -->|adc/state and scalar measurements| Web[operator_web]
     Probe -->|probe/web_state| Web
@@ -88,7 +88,8 @@ flowchart LR
 
 | Interface | Type | Publisher/server | Subscribers/clients |
 | --- | --- | --- | --- |
-| `adc/samples` | `peaceofmine_interfaces/AdcSamples` | ADC | probe; external recorders |
+| `adc/samples` | `peaceofmine_interfaces/AdcSamples` | ADC | raw sample consumers |
+| `adc/filtered_samples` | `peaceofmine_interfaces/AdcSamples` | ADC | probe and detector |
 | `adc/{input}/raw` | `std_msgs/Int16` | ADC | external clients |
 | `adc/{input}/volts`, `adc/{input}/scaled` | `std_msgs/Float64` | ADC | external clients |
 | `adc/state` | `std_msgs/String` batches/settings for plots | ADC | web |

@@ -24,7 +24,7 @@ class CameraCaptureTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'operator_config.json'
             cameras=copy.deepcopy(DEFAULTS)
-            cameras['capture']['forward'].update(device='/dev/v4l/by-id/camera',width=800,framerate=20.0)
+            cameras['capture']['forward'].update(device='/dev/v4l/by-id/camera',width=800,framerate=20)
             path.write_text(json.dumps({'cameras':cameras}))
             with patch.dict(os.environ,{'POM_CONFIG_FILE':str(path),'POM_CAMERA_INDEX':'0'}), \
                     patch.object(module,'resolve_device',return_value='/dev/video4'), \

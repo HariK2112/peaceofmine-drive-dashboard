@@ -9,19 +9,21 @@ INPUTS = ('AIN0 - AIN1', 'AIN0 - AIN3', 'AIN1 - AIN3', 'AIN2 - AIN3',
           'AIN0', 'AIN1', 'AIN2', 'AIN3')
 DEFAULTS = dict(bus=1, address=0x48, rate=128, pga=1, mode='single',
                 alert='disabled', polarity=0, latch=False, queue=1,
-                low=-1000, high=1000, interval_ms=0,
+                low=-1000, high=1000, interval_ms=0, filter_ms=100,
                 channels=[dict(mux=i, enabled=i >= 4, multiplier=1.0,
                                offset=0.0) for i in range(8)])
 
 
 def validate(value):
+    if isinstance(value, dict):
+        value = {'filter_ms': DEFAULTS['filter_ms'], **value}
     if not isinstance(value, dict) or set(value) != set(DEFAULTS):
         raise ValueError('Settings must contain exactly the supported fields')
     c = copy.deepcopy(value)
     for key, allowed in [('bus', range(256)), ('address', range(0x48, 0x4c)),
                          ('rate', RATES), ('pga', range(6)), ('polarity', (0, 1)),
                          ('queue', (1, 2, 4)), ('low', range(-32768, 32768)),
-                         ('high', range(-32768, 32768)), ('interval_ms', range(60001))]:
+                         ('high', range(-32768, 32768)), ('interval_ms', range(60001)), ('filter_ms', range(2001))]:
         if type(c[key]) is not int or c[key] not in allowed:
             raise ValueError(f'Invalid {key}')
     if c['mode'] not in ('single', 'continuous'):

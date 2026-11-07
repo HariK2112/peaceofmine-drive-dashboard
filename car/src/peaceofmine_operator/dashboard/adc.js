@@ -13,7 +13,7 @@
   el('trigger-mux').innerHTML = names.map((name,i) => `<option value="${i}">${name}</option>`).join('');
   let latest = null, revision = null, session = null, cursor = 0, history = [], chart = null, clockOffset = 0;
   let pending = false, importedTrigger = null;
-  const detectorFilters = new Map();
+
   const contactDirection = document.getElementById('probe-contact-direction');
   const contactVolts = document.getElementById('probe-contact-volts');
   const contactSave = document.getElementById('probe-contact-save');
@@ -155,7 +155,7 @@
   el('file').onchange = async () => {
     try {
       const value = JSON.parse(await el('file').files[0].text());
-      const config = value.config || value; // Also accept the standalone bench export.
+      const config = {filter_ms:100, ...(value.config || value)}; // Also accept the standalone bench export.
       const routes = value.routes || latest?.routes || Array(8).fill('none');
       if (!config.channels || config.channels.length !== 8 || routes.length !== 8 || fields.some(f => !(f.dataset.adcField in config))) throw Error('Invalid ADC configuration');
       if (value.probe_trigger && (!Number.isFinite(value.probe_trigger.level) || Math.abs(value.probe_trigger.level) > 1e12 || !['above','below'].includes(value.probe_trigger.direction))) throw Error('Invalid imported contact limit');
@@ -165,7 +165,7 @@
     } catch (error) { el('feedback').textContent = error.message; }
     el('file').value = '';
   };
-  el('csv').onclick = () => download('time,input,raw,volts,scaled,clipped\n' + history.map(s => [s.time,names[s.mux],s.raw,s.volts,s.scaled,s.clipped].join(',')).join('\n'), 'text/csv', 'ads1115.csv');
+  el('csv').onclick = () => download('time,input,raw,volts,scaled,clipped,filtered_volts,filtered_scaled\n' + history.map(s => [s.time,names[s.mux],s.raw,s.volts,s.scaled,s.clipped,s.filtered_volts,s.filtered_scaled].join(',')).join('\n'), 'text/csv', 'ads1115.csv');
   const now = () => Date.now()/1000 + clockOffset;
   function datasets(target, quantity, seconds) {
     if (!latest) return [];
@@ -178,11 +178,11 @@
         if (i && s.time-samples[i-1].time > gap) data.push({x:s.time-time-.001, y:null});
         data.push({x:s.time-time,y:s[quantity]});
       });
-      return {label:`ADS ${names[ch.mux]} (${quantity === 'detector_filtered' ? 'filtered scaled' : quantity})`, yAxisID:'ads1115', data, borderColor:colors[ch.mux], borderWidth:1.5, pointRadius:0, spanGaps:false};
+      return {label:`ADS ${names[ch.mux]} (${quantity === 'filtered_scaled' ? 'filtered scaled' : quantity})`, yAxisID:'ads1115', data, borderColor:colors[ch.mux], borderWidth:1.5, pointRadius:0, spanGaps:false};
     });
   }
   window.operatorADCOverlay = (target, route, baseCount) => {
-    const extra = datasets(route, 'detector_filtered', 30);
+    const extra = datasets(route, 'filtered_scaled', 30);
     const trigger = latest?.probe_trigger;
     if (route === 'probe' && trigger?.enabled) extra.push({label:`Contact trigger (${names[trigger.mux]})`,
       yAxisID:'ads1115', data:[{x:-30,y:trigger.level},{x:0,y:trigger.level}],
@@ -208,7 +208,7 @@
     el('rate').textContent = `${(recent.length/2).toFixed(1)} samples/s total · ${latest.config.rate} SPS chip rate shared across enabled inputs`;
     el('readings').innerHTML = latest.config.channels.filter(ch => ch.enabled).map(ch => {
       const samples = history.filter(s => s.mux===ch.mux && now()-s.time<=seconds);
-      const last = samples.at(-1), values = samples.map(s=>s[quantity]);
+      const last = samples.at(-1), values = samples.map(s=>s[quantity === 'comparison' ? 'filtered_volts' : quantity]).filter(Number.isFinite);
       const fresh = last && latest.running && latest.connected && now()-last.time < Math.max(1, latest.config.interval_ms/1000 + 2);
       const fmt = n => Number(n).toFixed(4);
       return `<tr><td>${names[ch.mux]}</td><td>${fresh ? last.raw : '—'}</td><td>${fresh ? fmt(last.volts) : '—'}</td><td>${fresh ? fmt(last.scaled) : '—'}</td><td>${values.length ? [Math.min(...values),Math.max(...values),values.reduce((a,b)=>a+b,0)/values.length].map(fmt).join(' / ') : '—'}</td><td>${!fresh ? 'STALE' : last.clipped ? 'CLIPPED' : 'Live'}</td></tr>`;
@@ -216,33 +216,61 @@
     el('registers').textContent = `${latest.applied === latest.revision ? 'Applied' : 'Applying settings'} · revision ${latest.revision}\n` + Object.entries(latest.registers).map(([k,v])=>`${k}: 0x${v.toString(16).padStart(4,'0')}  ${v.toString(2).padStart(16,'0')}`).join('\n');
   }
   // Plot refresh follows the display; acquisition and table updates do not.
+  function previewTraces(seconds) {
+    const applied = datasets(null, 'filtered_volts', seconds);
+    const raw = datasets(null, 'volts', seconds);
+    const draftMs = field('filter_ms').valueAsNumber;
+    const preview = [];
+    raw.forEach((line, i) => {
+      line.label = line.label.replace('(volts)', '(raw V)');
+      line.borderWidth = 1;
+      line.borderDash = [2, 4];
+      applied[i].label = line.label.replace('(raw V)', '(applied V)');
+      if (!field('filter_ms').validity.valid || draftMs === latest.config.filter_ms) return;
+      let lastTime = null, filtered = 0;
+      const data = line.data.map(({x, y}) => {
+        if (y === null) { lastTime = null; return {x, y}; }
+        const dt = x - lastTime;
+        filtered = !draftMs || lastTime === null || dt > .5 ? y : filtered - Math.expm1(-dt * 1000 / draftMs) * (y - filtered);
+        lastTime = x;
+        return {x, y: filtered};
+      });
+      preview.push({...line, label:line.label.replace('(raw V)', '(preview V)'), data, borderWidth:2, borderDash:[7, 3]});
+    });
+    return [...raw, ...applied, ...preview];
+  }
+  field('filter_ms').oninput = () => {
+    el('quantity').value = 'comparison';
+    if (chart) chart.$frameBucket = null;
+    window.operatorADCFrame();
+  };
   window.operatorADCFrame = () => {
     if (!latest || !document.getElementById('settings-dialog').open || document.getElementById('settings-adc').hidden) return;
     if (chart && scrollTimeChart(chart, performance.now())) return;
     const seconds = Number(el('window').value), quantity = el('quantity').value;
     if (!chart) chart = new Chart(el('history'), {type:'line', data:{datasets:[]}, options:{animation:false, responsive:true, maintainAspectRatio:false, parsing:false,
       plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:'#b7c4d8'}}}, scales:{x:{type:'linear',min:-seconds,max:0},ads1115:{type:'linear',position:'left',beginAtZero:true,suggestedMax:1}}}});
-    chart.data.datasets = datasets(null,quantity,seconds); chart.options.scales.x.min = -seconds; chart.$scrollPixels = 0; chart.$renderedAt = performance.now(); chart.update('none');
+    const applied = latest.config.filter_ms;
+    const draft = field('filter_ms').valueAsNumber;
+    el('filter-status').textContent = Number.isFinite(applied)
+      ? `Applied on car: ${applied ? applied+' ms' : 'off'}` + (field('filter_ms').validity.valid && draft !== applied ? ` · Unsaved preview: ${draft ? draft+' ms' : 'off'}` : '')
+      : 'Waiting for filter settings from the car';
+    chart.data.datasets = quantity === 'comparison' ? previewTraces(seconds) : datasets(null,quantity,seconds); chart.options.scales.x.min = -seconds; chart.$scrollPixels = 0; chart.$renderedAt = performance.now(); chart.update('none');
   };
   async function poll() {
     try {
       const response = await fetch(`/api/adc?after=${cursor}&session=${encodeURIComponent(session || "")}`, {cache:'no-store', signal:AbortSignal.timeout(3000)});
       if (!response.ok) throw Error(`ADC telemetry: HTTP ${response.status}`);
       const value = await response.json();
-      if (session !== value.session) { cursor=0; history=[]; detectorFilters.clear(); revision=null; session=value.session; }
-      if (value.sequence < cursor) { cursor=0; history=[]; detectorFilters.clear(); revision=null; }
-      if (revision !== value.revision) { history=[]; detectorFilters.clear(); if (revision === null) fill(value); revision=value.revision; }
-      latest=value; clockOffset=(value.now-Date.now()/1000);
-      const tau = Math.max(0.35, state.detector.sensor?.filter_tau_s ?? 0.1);
-      if (!Number.isFinite(tau) || tau <= 0) throw Error('Invalid detector filter time constant');
-      for (const sample of value.samples) {
-        if (!Number.isFinite(sample.time) || !Number.isFinite(sample.scaled)) throw Error('Invalid detector ADC sample');
-        const previous = detectorFilters.get(sample.mux);
-        const dt = previous ? sample.time - previous.time : 0;
-        sample.detector_filtered = !previous || dt < 0 || dt > 0.5 ? sample.scaled
-          : previous.value + (1 - Math.exp(-dt / tau)) * (sample.scaled - previous.value);
-        detectorFilters.set(sample.mux, {time: sample.time, value: sample.detector_filtered});
+      if (session !== value.session) { cursor=0; history=[]; revision=null; session=value.session; }
+      if (value.sequence < cursor) { cursor=0; history=[]; revision=null; }
+      if (revision !== value.revision) {
+        history = [];
+        if (revision === null) fill(value);
+        else if (field('filter_ms').valueAsNumber === latest?.config.filter_ms) field('filter_ms').value = value.config.filter_ms;
+        revision = value.revision;
       }
+      latest=value; clockOffset=(value.now-Date.now()/1000);
       history.push(...value.samples); cursor=value.samples.at(-1)?.seq ?? cursor;
       history=history.filter(s=>value.now-s.time<=60).slice(-30000);
       if (value.dropped) el('feedback').textContent = `${value.dropped} readings missed during disconnection.`;

@@ -390,14 +390,24 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.assertFalse(self.ctrl._pump_active)
         self.assertEqual(self.ctrl._pump_pub.publish.call_args.args[0].data, 0.)
 
-    def test_manual_requires_lease_setup_and_finite_percent(self):
+    def test_manual_requires_lease_and_finite_percent(self):
         start = dict(type='pump_manual', action='start', percent=32.)
         self.assertIn('Spectator', self.ctrl.handle_command('other', start)['message'])
-        self.assertIn('Setup', self.ctrl.handle_command('client1', start)['message'])
         self.ctrl._calibrating = True
         for invalid in (None, '30', float('nan'), -1., 101.):
             self.assertIn('percent', self.ctrl.handle_command('client1', {**start, 'percent': invalid})['message'])
         self.ctrl._pump_pub.publish.assert_not_called()
+
+    def test_manual_test_in_rc_override_with_px4_disarmed(self):
+        self.ctrl._rc_safety.simulation = False
+        self.ctrl._rc_safety.px4_armed.return_value = False
+        safety = dict(allowed=False, servo_allowed=True)
+        self.ctrl._rc_safety.snapshot.return_value = safety
+        self.assertIsNone(self.ctrl.handle_command('client1', dict(type='pump_manual', action='start', percent=32.)))
+        self.ctrl._pump_tick(time.monotonic(), safety)
+        self.assertEqual(self.ctrl._pump_output, 32.)
+        self.ctrl._pump_tick(time.monotonic(), dict(allowed=False, servo_allowed=False))
+        self.assertEqual(self.ctrl._pump_output, 0.)
 
     def test_manual_release_and_timeout_never_log_or_restart(self):
         start = dict(type='pump_manual', action='start', percent=32.)
@@ -406,7 +416,7 @@ class OperatorControlProbeTest(unittest.TestCase):
             self.assertIsNone(self.ctrl.handle_command('client1', start))
             self.assertEqual(self.ctrl._pump_output, 32.)
             if action == 'timeout':
-                self.ctrl._pump_tick(self.ctrl._pump_until, {'allowed': True})
+                self.ctrl._pump_tick(self.ctrl._pump_until, {'allowed': True, 'servo_allowed': True})
             else:
                 self.ctrl.handle_command('client1', dict(type='pump_manual', action='stop'))
             self.ctrl.handle_command('client1', dict(type='pump_manual', action='renew'))

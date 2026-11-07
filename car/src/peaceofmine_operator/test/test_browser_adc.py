@@ -23,8 +23,8 @@ class BrowserADCTest(unittest.TestCase):
                      revision=1, applied=1, running=True, connected=True, demo=True,
                      error=None, registers={'config': 0x8583}, now=100, sequence=2,
                      probe_trigger=dict(enabled=False,mux=4,level=1.,direction='above',hysteresis=0.,debounce_ms=0.),
-                     samples=[dict(seq=1, time=99.9, mux=6, raw=100, volts=.1, scaled=2, clipped=False),
-                              dict(seq=2, time=99.9, mux=4, raw=200, volts=.2, scaled=3, clipped=False)])
+                     samples=[dict(seq=1, time=99.9, mux=6, raw=100, volts=.1, scaled=2, filtered_scaled=2, filtered_volts=.1, clipped=False),
+                              dict(seq=2, time=99.9, mux=4, raw=200, volts=.2, scaled=3, filtered_scaled=3, filtered_volts=.2, clipped=False)])
         setup = '''
 window.requestAnimationFrame = () => 0;
 window.setInterval = () => 0;
@@ -58,7 +58,7 @@ assert(probePressureChart.data.datasets.at(-1).data[0].y===3, 'scaled probe valu
 assert(detectorDiagnosticsChart.data.datasets.at(-1).label.includes('A2'), 'A2 detector trace');
 assert(detectorDiagnosticsChart.data.datasets.at(-1).data[0].y===2, 'scaled detector value');
 adcResponse={...adcResponse,revision:2,applied:2,routes:['none','none','none','none','both','none','none','none'],sequence:3,
- samples:[{seq:3,time:100,mux:4,raw:300,volts:.3,scaled:7,clipped:true}]};
+ samples:[{seq:3,time:100,mux:4,raw:300,volts:.3,scaled:7,filtered_scaled:7,filtered_volts:.3,clipped:true}]};
 await window.nextPoll(); drawPressureHistory(); drawDetectorDiagnostics(2000);
 assert(probePressureChart.data.datasets.length===3, 'old routing removed');
 assert(probePressureChart.data.datasets.at(-1).data.length===1, 'revision clears old samples');
@@ -74,13 +74,17 @@ adcResponse={...adcResponse,probe_contact:{...adcResponse.probe_contact,fresh:fa
 await window.nextPoll();
 assert($('probe-adc-contact').textContent.includes('Waiting for contact') && !$('probe-adc-contact').textContent.includes('CONTACT'),'stale sensor never reports contact');
 assert(detectorDiagnosticsChart.data.datasets.at(-1).data[0].y===7, 'both destination');
-adcResponse={...adcResponse,now:100.02,sequence:4,samples:[{seq:4,time:100.02,mux:4,raw:400,volts:.4,scaled:9,clipped:false}]};
+adcResponse={...adcResponse,now:100.02,sequence:4,samples:[{seq:4,time:100.02,mux:4,raw:400,volts:.4,scaled:9,filtered_scaled:7.42,filtered_volts:.321,clipped:false}]};
 await window.nextPoll();drawPressureHistory();drawDetectorDiagnostics(2100);
-const filteredExpected=7+(1-Math.exp(-.02/.35))*2;
-assert(Math.abs(detectorDiagnosticsChart.data.datasets.at(-1).data.at(-1).y-filteredExpected)<1e-10,'detector overlay smooths new sample using timestamp');
+const filteredExpected=7.42;
+const filterField=document.querySelector('[data-adc-field="filter_ms"]');
+filterField.value='250';filterField.dispatchEvent(new Event('input'));
+assert($('adc-filter-status').textContent.includes('Unsaved preview: 250 ms'),'draft and applied filters are identified');
+filterField.value='100';filterField.dispatchEvent(new Event('input'));
+assert(Math.abs(detectorDiagnosticsChart.data.datasets.at(-1).data.at(-1).y-filteredExpected)<1e-10,'detector overlay uses the filtered sample from the car');
 assert(probePressureChart.data.datasets.find(d=>d.label.includes('ADS A0')).data.at(-1).y===detectorDiagnosticsChart.data.datasets.at(-1).data.at(-1).y,'probe plot also uses the display filter');
 assert($('adc-readings').textContent.includes('9.0000'),'ADC readings retain raw scaled value');
-adcResponse={...adcResponse,now:101,sequence:5,samples:[{seq:5,time:101,mux:4,raw:500,volts:.5,scaled:4,clipped:false}]};
+adcResponse={...adcResponse,now:101,sequence:5,samples:[{seq:5,time:101,mux:4,raw:500,volts:.5,scaled:4,filtered_scaled:4,filtered_volts:.5,clipped:false}]};
 await window.nextPoll();drawDetectorDiagnostics(2200);
 assert(detectorDiagnosticsChart.data.datasets.at(-1).data.at(-1).y===4,'detector filter resets after sensor gap');
 $('probe-contact-volts').value='0.22';$('probe-contact-volts').dispatchEvent(new Event('input'));

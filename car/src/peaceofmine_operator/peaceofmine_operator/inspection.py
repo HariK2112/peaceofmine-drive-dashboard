@@ -102,9 +102,9 @@ class InspectionWorkflow:
             return
         if self.pending == 'pass' and sample and sample.get('fresh') and sample.get('angle_fresh'):
             stamp = sample.get('sample_time')
-            keys = ('angle_deg', 'volts')
+            voltage = sample.get('filtered_volts', sample.get('volts'))
             if (type(stamp) in (int, float) and math.isfinite(stamp) and stamp >= self.pass_started
-                    and all(type(sample.get(k)) in (int, float) and math.isfinite(sample[k]) for k in keys)
+                    and all(type(v) in (int, float) and math.isfinite(v) for v in (voltage, sample.get('angle_deg')))
                     and (not self.samples or stamp > self.samples[-1]['sample_time'])):
                 polarity = sample.get('response_direction')
                 if polarity not in (-1, 1):
@@ -114,7 +114,7 @@ class InspectionWorkflow:
                     self.stop('Detector response direction changed; confirm again', error=True)
                     return
                 self.pass_polarity = polarity
-                self.samples.append({k: sample[k] for k in (*keys, 'sample_time')})
+                self.samples.append(dict(angle_deg=sample['angle_deg'], volts=voltage, sample_time=stamp))
                 fraction = (sample['angle_deg']-self.pass_from)/(self.pass_to-self.pass_from)
                 # Reserve completion for the action result and arc validation.
                 self.progress = max(self.progress, self.completed+max(0., min(.999, fraction)))

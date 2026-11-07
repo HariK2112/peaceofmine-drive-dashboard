@@ -6,9 +6,8 @@ import time
 
 
 class DetectorLowPass:
-    time_constant = .1
-
-    def __init__(self):
+    def __init__(self, time_constant=.1):
+        self.time_constant = time_constant
         self.reset()
 
     def reset(self):
@@ -19,7 +18,7 @@ class DetectorLowPass:
             raise ValueError('Detector sample and timestamp must be finite')
         if self.timestamp is not None and timestamp <= self.timestamp:
             return self.value
-        if self.timestamp is None or timestamp-self.timestamp > .5:
+        if self.timestamp is None or timestamp-self.timestamp > .5 or self.time_constant == 0:
             self.value = value
         else:
             self.value += -math.expm1(-(timestamp-self.timestamp)/self.time_constant)*(value-self.value)

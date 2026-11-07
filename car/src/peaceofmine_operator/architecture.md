@@ -104,12 +104,12 @@ If a contact spike is encountered, descent halts immediately, contact depth is r
 If the target depth is reached without contact, the probe safely retracts and logs a clear result.
 The RC operator supervises vehicle motion during probing. Web driving is blocked while a probe cycle is active or the probe is deployed. Cycle completion requires encoder arrival from the current operation, including for shallow targets.
 
-Probe ADC contact consumes `adc/samples`, not a plot. Disabled, unavailable,
+Probe ADC contact consumes `adc/filtered_samples`, not a plot. Disabled, unavailable,
 configuration-mismatched or stale measurements produce unknown contact. Hysteresis
 and debounce avoid threshold chatter; plot routing never changes detection input.
 
-Confirmation uses a three-point median curve of raw voltage in one-degree angle bins.
-This symmetric smoothing avoids the time filter's opposite-direction lag. Peak
+Confirmation uses a three-point median curve of the applied filtered voltage in one-degree angle bins.
+Peak
 prominence is measured above both local shoulders and must exceed three times
 the noise estimated from median raw-sample differences. A qualifying arc spans
 at least 3° at half prominence. Each opposed pass estimates its own baseline and

@@ -765,11 +765,13 @@
           <section class="set-card span-all">
             <header class="card-head"><h4>Live readings</h4>
               <div class="card-tools">
-                <select id="adc-quantity" aria-label="Plot quantity"><option value="scaled">Scaled</option><option value="volts">Volts</option><option value="raw">Raw counts</option></select>
+                <select id="adc-quantity" aria-label="Plot quantity"><option value="comparison">Raw and filtered volts</option><option value="scaled">Scaled</option><option value="volts">Volts</option><option value="raw">Raw counts</option></select>
                 <select id="adc-window" aria-label="History"><option value="10">10 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select>
                 <button type="button" id="adc-csv" class="quiet">Export CSV</button>
               </div>
             </header>
+            <label class="field"><span class="field-name">Low-pass time constant <span class="unit">ms</span> <span class="tip" data-tip="0 turns filtering off. Larger values smooth noise and delay the detector and probe response. Apply &amp; save to use this value on the car."></span></span><input data-adc-field="filter_ms" type="number" min="0" max="2000" step="1" required></label>
+            <p id="adc-filter-status" class="meta" role="status"></p>
             <div class="adc-chart"><canvas id="adc-history" aria-label="Live ADS1115 input readings"></canvas></div>
             <p id="adc-rate" class="meta"></p>
             <div class="table-wrap"><table class="set-table"><thead><tr><th>Input</th><th>Raw</th><th>Volts</th><th>Scaled</th><th>Min / max / mean</th><th>Status</th></tr></thead><tbody id="adc-readings"></tbody></table></div>

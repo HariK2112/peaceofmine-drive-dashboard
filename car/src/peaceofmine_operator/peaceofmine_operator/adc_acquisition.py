@@ -6,6 +6,7 @@ import threading
 import time
 from pathlib import Path
 from . import configuration
+from .detector import DetectorLowPass
 from collections import deque
 from itertools import takewhile
 from .ads1115 import ADS1115, DEFAULTS, INPUTS, RANGES, config_word, validate
@@ -19,6 +20,7 @@ class Acquisition:
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self.running = False
+        self.filters = {}
         self.revision = 1
         self.applied = 0
         self.connected = False
@@ -72,6 +74,7 @@ class Acquisition:
             except (OSError, TimeoutError):
                 pass
             self.device = None
+        self.filters.clear()
         self.connected = False
         self.applied = 0
 
@@ -122,9 +125,13 @@ class Acquisition:
                         self.registers['conversion'] = raw & 65535
                         volts = raw * RANGES[c['pga']] / 32768
                         self.sequence += 1
+                        if mux not in self.filters:
+                            self.filters[mux] = DetectorLowPass(c['filter_ms'] / 1000.)
+                        filtered = self.filters[mux].update(volts, time.monotonic())
                         self.samples.append(dict(seq=self.sequence, time=time.time(), mux=mux,
-                                                 raw=raw, volts=volts,
+                                                 raw=raw, volts=volts, filtered_volts=filtered,
                                                  scaled=volts * ch['multiplier'] + ch['offset'],
+                                                 filtered_scaled=filtered * ch['multiplier'] + ch['offset'],
                                                  clipped=raw in (-32768, 32767)))
                         index += 1
                         delay = c['interval_ms'] / 1000 if index % len(channels) == 0 else 0

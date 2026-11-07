@@ -39,6 +39,7 @@ class ADS1115Node(Node):
         self.config_file = config_file
         self.config_revision = saved.get('section_revisions',{}).get(section,0)
         self.samples_pub = self.create_publisher(AdcSamples, 'adc/samples', 10)
+        self.filtered_pub = self.create_publisher(AdcSamples, 'adc/filtered_samples', 10)
         self.session = uuid.uuid4().hex
         self.cursor = 0
         self.state_pub = self.create_publisher(String, 'adc/state', 10)
@@ -106,12 +107,16 @@ class ADS1115Node(Node):
         packet = AdcSamples(session=self.session, config_revision=self.config_revision,
             valid=bool(state['running'] and state['connected'] and state['applied']==state['revision']))
         packet.header.stamp = self.get_clock().now().to_msg()
+        filtered = AdcSamples(header=packet.header, session=packet.session,
+                              config_revision=packet.config_revision, valid=packet.valid)
         for sample in state['samples']:
             sec = int(sample['time'])
-            packet.samples.append(AdcSample(stamp=Time(sec=sec, nanosec=int((sample['time']-sec)*1e9)),
-                sequence=sample['seq'], channel=sample['mux'], raw=sample['raw'],
-                volts=float(sample['volts']), scaled=float(sample['scaled'])))
+            stamp = Time(sec=sec, nanosec=int((sample['time']-sec)*1e9))
+            fields = dict(stamp=stamp, sequence=sample['seq'], channel=sample['mux'], raw=sample['raw'])
+            packet.samples.append(AdcSample(**fields, volts=sample['volts'], scaled=sample['scaled']))
+            filtered.samples.append(AdcSample(**fields, volts=sample['filtered_volts'], scaled=sample['filtered_scaled']))
         self.samples_pub.publish(packet)
+        self.filtered_pub.publish(filtered)
         self.state_pub.publish(String(data=json.dumps(state, allow_nan=False)))
 
     def destroy_node(self):

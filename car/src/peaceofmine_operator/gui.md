@@ -28,8 +28,7 @@ Driving or starting a new search invalidates the previous probe target.
 Both cameras are optional with the normal launch command. An enabled camera
 retries independently when disconnected. During a
 probe scan the dashboard promotes the probe feed only when it has frames.
-ADC plots apply a 350 ms minimum display filter and a minimum vertical scale
-of one scaled unit. Contact detection uses the configured acquisition values. Setup retains input, camera and hardware calibration.
+The ADC preview shows raw voltage beside the filtered voltage used by the car. Setup retains input, camera and hardware calibration.
 
 ## Field map and GNSS
 
@@ -40,6 +39,10 @@ The field recorder reads the Pi GPIO UART at `/dev/ttyAMA0`, 115200 baud. Set `g
 In **Setup → GNSS**, the control owner can set the acceptable horizontal error (default 1 m) and maximum wait (default 5 s, set 0 for immediate capture). A ground mark commands the pump immediately and logs the event on the car. With a fresh fix within target, the recorder attaches it immediately. Otherwise it keeps the best available fix during the wait, ending early on vehicle movement or loss of control telemetry. Outside the target, the log shows an uncertain position and its estimated error. With no fix it records the shot with its position unavailable. Physical paint or water delivery requires visual confirmation.
 
 All clients read the same mission entries and recent trail (up to 900 points). The recorder uses `field.sqlite3` beside the resolved operator config, or `field-simulation.sqlite3` in simulation. The standard container mounts this directory from the host. Override `field_log_path` to choose another persistent location. Clearing the mission log removes its recorded events and map marks. The driven trail remains.
+
+In **Setup → Marking**, the owner can hold the manual test in either RC drive
+mode. Commanded output shows the AUX5 request. The physical RC kill switch
+and PX4 output selection still apply.
 
 ## Architecture
 
@@ -337,11 +340,14 @@ better conversion accuracy. Simulated payloads do not provide raw ADC readings.
 
 ### Detector smoothing
 
-The metal detector uses a 100 ms first-order low-pass filter at the ADC sample
-timestamps. The detector trace and peak signal retain fractional ADC precision.
-Raw ADC topics, readings, exported CSV and probe contact remain unfiltered. The
-filter resets after a sample gap, restart or calibration/source change; smoothing
-adds approximately 100 ms of response lag.
+Setup → Sensor board → Live readings lets you preview a low-pass time constant
+before applying it. The solid trace shows the car’s applied filter. Changing
+the value adds a dashed preview. Apply & save updates every viewer and the
+detector, arc confirmation and probe contact logic. The time constant defaults
+to 100 ms; 0 disables smoothing. Larger values delay contact response.
+Raw counts, volts and scaled ROS topics remain available. Each input is filtered
+independently; `adc/filtered_samples` carries its filtered volts and scaled
+value with the original raw count and timestamp.
 
 ### Confirm and probe scan
 
