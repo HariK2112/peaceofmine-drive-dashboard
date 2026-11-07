@@ -51,6 +51,7 @@ $('adc-apply').click();
 assert(sent.at(-1).settings.config.rate===64, 'settings sent');
 assert(sent.at(-1).settings.routes[6]==='detector' && sent.at(-1).settings.routes[4]==='probe', 'A2 detector and A0 probe routing');
 operatorADCResult({ok:true});
+document.querySelectorAll('[data-dock-pane]').forEach(pane => { pane.hidden = false; }); // charts live in dock tabs
 drawPressureHistory(); drawDetectorDiagnostics(1000);
 assert(probePressureChart.data.datasets.at(-1).label.includes('A0'), 'A0 probe trace');
 assert(probePressureChart.data.datasets.at(-1).data[0].y===3, 'scaled probe value');

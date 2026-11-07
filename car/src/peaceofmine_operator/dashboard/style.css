@@ -661,6 +661,7 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 @media (max-width: 1000px), (max-height: 600px) {
   main { height: auto; min-height: 100dvh; }
   .topbar { flex-wrap: wrap; }
+  .topbar-status, .topbar-actions { flex-wrap: wrap; min-width: 0; }
   .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "stage" "drive" "mission" "dock"; }
   .stage-frame { aspect-ratio: 16 / 9; container-type: size; }
   .drive-bar { flex-wrap: wrap; }
