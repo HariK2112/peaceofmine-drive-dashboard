@@ -860,6 +860,8 @@ class OperatorControl(Node):
                     self._stop_until = time.monotonic()+STOP_TAIL_S
                     flush_drive = True
             elif message_type in ('calibration_begin', 'calibration_end'):
+                if message_type == 'calibration_end' and not self._calibrating:
+                    return None
                 self._stop_motion_locked(stop_inspection=self._inspection.active)
                 self._calibrating = message_type == 'calibration_begin'
                 flush_drive = True
@@ -1065,7 +1067,7 @@ class OperatorControl(Node):
             stream = kind in ('drive', 'rc_drive_enable') or (
                 kind == 'arm_servo' and payload.get('held') and not payload.get('request_id')
             ) or (kind == 'pump_manual' and payload.get('action') == 'renew')
-            stop = (kind in ('disarm', 'estop') or (kind in ('inspection', 'pump_manual') and payload.get('action') == 'stop')
+            stop = (kind in ('disarm', 'estop', 'calibration_end') or (kind in ('inspection', 'pump_manual') and payload.get('action') == 'stop')
                     or (kind == 'arm_servo' and payload.get('action') in ('stop', 'home_release')))
             # The writer sequence orders a client's starts, renewals and
             # releases even when the Pi clock steps. Legacy messages use
@@ -1105,7 +1107,8 @@ class OperatorControl(Node):
                     client_id=client, request_id=payload.get('request_id'), command_type=kind, **result))))
         except (ValueError, TypeError, KeyError) as exc:
             self._result_pub.publish(String(data=json.dumps(dict(
-                type='error', client_id=client, request_id=payload.get('request_id') if isinstance(payload, dict) else None, message=str(exc)))))
+                type='error', client_id=client, command_type=payload.get('type') if isinstance(payload, dict) else None,
+                request_id=payload.get('request_id') if isinstance(payload, dict) else None, message=str(exc)))))
 
     def destroy_node(self):
         self.begin_shutdown()

@@ -72,9 +72,10 @@ function createServoSettings(role) {
     send(payload);
   }
   function armControlCommand(payload, confirmation, predicate) {
-    armPending = {at: performance.now(), predicate, confirmation};
+    const id = `${Date.now()}-${++servoRequestSequence}`;
+    armPending = {id, at: performance.now(), predicate, confirmation};
     setArmFeedback('Waiting for dashboard confirmation…');
-    send(payload);
+    send({...payload, request_id:id});
   }
   function armAngle(position) {
     return Number.isFinite(position) ? `${(position * 360 / 4096).toFixed(1)}°` : '—';
@@ -350,7 +351,10 @@ function createServoSettings(role) {
     document.addEventListener('visibilitychange', () => { if (document.hidden) stopArmMove(); });
   }
 
-  return {draw() { if (loadLatest) updateLoadChart(loadLatest, loadActive, true); }, update: updateArmSettings, initialize: initializeArmSettings, stop: stopArmMove, error(message, requestId) { if (requestId && armPending?.id === requestId) { armPending = null; setArmFeedback(message, 'error'); } }};
+  return {draw() { if (loadLatest) updateLoadChart(loadLatest, loadActive, true); }, update: updateArmSettings, initialize: initializeArmSettings, stop: stopArmMove, error(message, requestId) {
+    if (!requestId || armPending?.id !== requestId) return false;
+    armPending = null; setArmFeedback(message, 'error'); return true;
+  }};
 }
 const servoSettings = [createServoSettings('arm'), createServoSettings('probe')];
 function updateArmSettings() { servoSettings.forEach(panel => panel.update()); }

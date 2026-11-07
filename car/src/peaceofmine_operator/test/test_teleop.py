@@ -86,6 +86,21 @@ class TeleopTest(unittest.TestCase):
             deliver('b',12,dict(type='estop'),age=1.)
             self.assertFalse(self.node.owns_lease('b'))
 
+    def test_delayed_inspection_and_pump_releases_are_scoped(self):
+        self.node._lease='a'
+        self.node._client_seen['a']=100.
+        with patch.object(self.node,'handle_command',return_value=None) as command:
+            for kind, start in [('pump_manual','start'), ('inspection','confirm')]:
+                def deliver(seq, action, age):
+                    self.node._transport_command(String(data=json.dumps(dict(client_id='a',sequence=seq,
+                        stamp=gateway_module.time.time()-age, payload=dict(type=kind,action=action)))))
+                deliver(5,start,0.)
+                command.reset_mock()
+                deliver(4,'stop',1.)
+                command.assert_not_called()
+                deliver(6,'stop',1.)
+                command.assert_called_once_with('a',dict(type=kind,action='stop'))
+
     def test_detector_calibration_requires_control_and_fresh_sensor(self):
         self.node._odometry_at = 0.
         command = dict(action='apply', request_id='trigger', baseline_adc=20, full_response_adc=150)

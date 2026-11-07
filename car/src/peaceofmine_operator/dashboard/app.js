@@ -489,10 +489,16 @@ function connect() {
     }
     if (message.type === 'adc_result') { window.operatorADCResult?.(message); return; }
     if (message.type === 'error') {
-      if (pendingPumpMark && message.request_id === pendingPumpMark.id) pendingPumpMark = null;
+      const request = message.request_id;
+      const pumpMatch = request && pendingPumpMark?.id === request;
+      const metalMatch = request && metalPending?.id === request;
+      const servoMatch = servoSettings.some(panel => panel.error(message.message, request));
+      if (pumpMatch) pendingPumpMark = null;
+      if (metalMatch) { metalPending = null; metalFeedback = message.message; }
+      if (request && ((message.command_type === 'pump_mark' && !pumpMatch)
+          || (message.command_type === 'detector_calibrate' && !metalMatch)
+          || (message.command_type === 'arm_servo' && !servoMatch))) return;
       showNotice(message.message, true);
-      if (metalPending && message.request_id === metalPending.id) { metalPending = null; metalFeedback = message.message; }
-      servoSettings.forEach(panel => panel.error(message.message, message.request_id));
       return;
     }
     if (message.type !== 'state') return;

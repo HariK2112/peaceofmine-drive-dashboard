@@ -1041,7 +1041,7 @@ socket.onmessage({data: JSON.stringify({type: 'error', message: 'Motor unavailab
 assert(noticeExpiry === Infinity && $('notice').textContent.includes('Motor unavailable'), 'server errors remain visible until replaced');
 const noticeWrites = new MutationObserver(()=>{});noticeWrites.observe($('notice'),{childList:true,subtree:true,characterData:true});
 pendingPumpMark = {id:'my-shot',at:performance.now()};metalPending={id:'my-calibration',at:performance.now()};
-socket.onmessage({data:JSON.stringify({type:'error',message:'Motor unavailable',request_id:'older-request'})});
+socket.onmessage({data:JSON.stringify({type:'error',message:'Motor unavailable. Reconnect in Settings → Arm.',request_id:'older-request'})});
 assert(!noticeWrites.takeRecords().length && pendingPumpMark.id==='my-shot' && metalPending.id==='my-calibration','duplicate and unrelated errors leave other pending work intact');
 noticeWrites.disconnect();pendingPumpMark=null;metalPending=null;
 
