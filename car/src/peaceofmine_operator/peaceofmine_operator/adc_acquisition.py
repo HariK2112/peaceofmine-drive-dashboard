@@ -150,6 +150,15 @@ class Acquisition:
         self.thread.join(timeout=3)
 
 
+def contact_trigger(settings):
+    """The saved trigger mux is the channel the probe physically monitored."""
+    if 'probe_trigger' in settings:
+        return settings['probe_trigger']
+    # Exports predating contact detection had plot routing only.
+    assigned = [mux for mux, role in enumerate(settings.get('routes', [])) if role in ('probe', 'both')]
+    return dict(enabled=False, mux=assigned[0] if len(assigned) == 1 else 4, level=1.0, direction='above')
+
+
 class OperatorADC:
     def __init__(self, path, demo=False, initial_settings=None):
         self.path = Path(path).expanduser()
@@ -184,7 +193,7 @@ class OperatorADC:
         if not isinstance(routes, list) or len(routes) != 8 or any(
                 route not in ('none', 'detector', 'probe', 'both') for route in routes):
             raise ValueError('Each input needs a valid plot destination')
-        trigger = value.get('probe_trigger', dict(enabled=False, mux=4, level=1.0, direction='above'))
+        trigger = contact_trigger(value)
         if not isinstance(trigger, dict) or not {'enabled', 'mux', 'level', 'direction'} <= set(trigger) or set(trigger) - {'enabled','mux','level','direction','hysteresis','debounce_ms'}:
             raise ValueError('Invalid probe trigger settings')
         if (type(trigger['enabled']) is not bool or type(trigger['mux']) is not int
@@ -198,7 +207,16 @@ class OperatorADC:
             value = trigger.get(key,0.)
             if type(value) not in (int,float) or not math.isfinite(value) or not 0 <= value <= maximum:
                 raise ValueError('Invalid trigger hysteresis or debounce')
-        return config, list(routes), dict(trigger)
+        # Keep legacy plot exports and consumers compatible. Derive the probe
+        # role from its physical trigger input, preserving all detector routes.
+        normalized = []
+        for mux, role in enumerate(routes):
+            detector = role in ('detector', 'both')
+            if mux == trigger['mux']:
+                normalized.append('both' if detector else 'probe')
+            else:
+                normalized.append('detector' if detector else 'none')
+        return config, normalized, dict(trigger)
 
     def command(self, payload, persist=True):
         if payload.get('action') == 'settings':

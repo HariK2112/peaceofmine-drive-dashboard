@@ -85,7 +85,7 @@ function createServoSettings(role) {
     if (armHoldTimer !== null) {
       clearInterval(armHoldTimer);
       armHoldTimer = null;
-      armCommand('stop');
+      if (state.connected && state.drive.you_control_owner) armCommand('stop');
     }
   }
   function updateArmSettings() {
@@ -333,7 +333,7 @@ function createServoSettings(role) {
     };
     const releaseArmSettings = () => {
       stopArmMove();
-      if (state.drive.you_control_owner && (state.arm_servo?.active_role || 'arm') === role) {
+      if (state.drive.calibrating && state.drive.you_control_owner && (state.arm_servo?.active_role || 'arm') === role) {
         armCommand('stop');
         send({type: 'calibration_end'});
       }

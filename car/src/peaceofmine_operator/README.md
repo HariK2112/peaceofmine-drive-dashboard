@@ -173,8 +173,7 @@ simulation. The real vehicle does not have this scaling.
 
 ## Client input settings and wheel setup
 
-Open **Setup → Controls** for the input lab. Opening Setup stops motion and
-blocks driving while calibrating; previews never drive the rover. Closing it
+Open **Setup → Controls** for the input lab. Gamepads, wheels and RC through ROS can drive while Setup is open. Actuator calibration pauses ROS driving. Closing it
 retains the control lease. Losing browser focus or hiding the page releases
 held input and sends a stop.
 
@@ -251,14 +250,13 @@ The ADC starts sampling with the node; there is no Start/Stop acquisition button
 Defaults remain metal detector A2 and probe A0. In Settings → Metal detector,
 enter **Baseline (V)** and **Mine level (V)** and **Apply & save**. A 100 ms
 low-pass filter smooths the detector signal and plots, retaining ADC precision.
-Raw ADC topics/CSV and probe contact are unchanged.
+The probe uses the same applied filter as its contact graph. Raw ADC topics remain available.
 
 ### Arm servo and RC authority
 
-Fresh RC input determines software motion permission: CH5 low permits ROS
+Fresh PX4 armed status and live RC input are required for drive, arm, probe and pump output. CH5 low permits ROS
 driving and servos, middle gives driving to the RC while permitting servos, and
-high kills motion. Missing, stale or invalid RC input blocks motion. PX4 remains
-responsible for its own arming; its heartbeat status is not another software gate.
+high kills motion. Missing, stale or invalid RC input blocks motion. Missing, stale or disarmed PX4 state also stops output.
 The header distinguishes ROS mode, RC override, kill and unknown/lost RC input. Settings → Arm calibration records safe limits and exports launch XML.
 See [the safety audit and setup](../../docs/development/arm-servo-safety.md) before
 enabling the hardware driver. Safety uses existing `mavros/state` and `mavros/rc/in`;

@@ -29,6 +29,7 @@ class RcSafetyTest(unittest.TestCase):
 
     def test_fresh_rc_is_authority_and_replay_cannot_renew_it(self):
         self.assertFalse(self.safety.snapshot()['allowed'])
+        self.safety.update_state(state())
         self.safety.update_rc(rc())
         self.assertTrue(self.safety.snapshot()['allowed'])
         self.now += .41
@@ -45,6 +46,7 @@ class RcSafetyTest(unittest.TestCase):
                                     (1200,100,'unknown',False), (1000,0,'rc_lost',False)):
             with self.subTest(pwm=pwm,rssi=rssi):
                 self.safety.samples.clear()
+                self.safety.update_state(state())
                 self.safety.update_rc(rc(pwm=pwm,rssi=rssi))
                 snapshot=self.safety.snapshot()
                 self.assertFalse(snapshot['allowed'])
@@ -60,11 +62,19 @@ class RcSafetyTest(unittest.TestCase):
         self.assertIsNone(self.safety.px4_armed())
         self.assertEqual(self.safety.px4_state_status(), 'stale')
         self.safety.update_rc(rc(2000000))
-        self.assertTrue(self.safety.snapshot()['allowed'])
+        self.assertFalse(self.safety.snapshot()['allowed'])
         self.safety.update_state(state(2000000, armed=False))
         self.assertIs(self.safety.px4_armed(), False)
         self.safety.update_state(state(2000000, connected=False))
         self.assertIsNone(self.safety.px4_armed())
+
+    def test_disarm_with_repeated_stamp_immediately_revokes_all_motion(self):
+        healthy(self.safety)
+        self.safety.update_state(state(armed=False))
+        self.assertFalse(self.safety.snapshot()['allowed'])
+        self.assertFalse(self.safety.servo_snapshot()['allowed'])
+        self.safety.update_state(state(armed=True))
+        self.assertFalse(self.safety.px4_armed())
 
     def test_invalid_channels_reboot_and_disconnect_fail_closed(self):
         healthy(self.safety)
@@ -79,17 +89,17 @@ class RcSafetyTest(unittest.TestCase):
         self.safety.update_state(state(4000000, connected=False))
         self.assertFalse(self.safety.snapshot()['allowed'])
 
-    def test_px4_status_and_arming_do_not_add_a_second_rc_gate(self):
+    def test_disarmed_or_missing_px4_rejects_drive_and_servo_motion(self):
         for status in range(9):
             with self.subTest(status=status):
                 self.safety.samples.clear()
                 self.safety.update_state(state(system_status=status,armed=False))
                 self.safety.update_rc(rc())
-                self.assertTrue(self.safety.servo_snapshot()['allowed'])
-                self.assertTrue(self.safety.snapshot()['allowed'])
+                self.assertFalse(self.safety.servo_snapshot()['allowed'])
+                self.assertFalse(self.safety.snapshot()['allowed'])
         self.safety.samples.clear()
         self.safety.update_rc(rc(pwm=1500))
-        self.assertTrue(self.safety.servo_snapshot()['allowed'])
+        self.assertFalse(self.safety.servo_snapshot()['allowed'])
         self.assertFalse(self.safety.snapshot()['allowed'])
         self.now += .41
         self.assertFalse(self.safety.servo_snapshot()['allowed'])

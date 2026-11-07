@@ -70,9 +70,9 @@ class ArbotiX:
 
     def read_block(self, ident, address, length):
         values, result, error = self.packet.readTxRx(self.port, ident, address, length)
-        # Gateway status 32 can report one failed servo-bus read. Retry only
-        # this read, once; never retry motion writes or renew permission here.
-        if result == 0 and error == 32 and len(values) < length:
+        # A lost/corrupt reply or gateway read failure can clear on the next
+        # request. Retry this register read once, without replaying motion.
+        if result in (-3001, -3002) or (result == 0 and error == 32 and len(values) < length):
             self.read_retries = getattr(self, 'read_retries', 0) + 1
             values, result, error = self.packet.readTxRx(self.port, ident, address, length)
         if result != 0 or error or len(values) != length:

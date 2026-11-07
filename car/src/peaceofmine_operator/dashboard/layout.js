@@ -6,7 +6,23 @@
   const panes = [...document.querySelectorAll('[data-dock-pane]')];
 
   /* ---------------------------------------------------------- Dock tabs --- */
+  const workspace = document.querySelector('.workspace');
+  const expandChart = $('detector-expand');
+  function expandDetector(expanded) {
+    workspace.classList.toggle('detector-expanded', expanded);
+    expandChart.setAttribute('aria-pressed', String(expanded));
+    expandChart.textContent = expanded ? 'Restore chart' : 'Expand chart';
+    window.dispatchEvent(new Event('resize'));
+  }
+  expandChart.addEventListener('click', () => expandDetector(!workspace.classList.contains('detector-expanded')));
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !document.querySelector('dialog[open]') && workspace.classList.contains('detector-expanded')) {
+      expandDetector(false);
+      expandChart.focus();
+    }
+  });
   function selectTab(name, focus = false) {
+    if (name !== 'detector' && workspace.classList.contains('detector-expanded')) expandDetector(false);
     tabs.forEach(tab => {
       const on = tab.dataset.dockTab === name;
       tab.classList.toggle('active', on);

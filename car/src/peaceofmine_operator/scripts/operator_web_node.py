@@ -103,6 +103,14 @@ def build_app(node: OperatorGateway) -> web.Application:
             raise web.HTTPServiceUnavailable(text='Waiting for field recorder')
         return web.json_response(field, headers={'Cache-Control': 'no-store'})
 
+    async def detector_history_handler(request):
+        try:
+            after = float(request.query.get('after', 0))
+        except ValueError:
+            raise web.HTTPBadRequest(text='Invalid history cursor')
+        return web.json_response(node.detector_history(request.query.get('stream'), after),
+                                 headers={'Cache-Control': 'no-store'})
+
     async def adc_handler(request):
         try:
             after = max(0, int(request.query.get('after', '0')))
@@ -181,6 +189,7 @@ def build_app(node: OperatorGateway) -> web.Application:
     app.router.add_get('/ws', socket_handler)
     app.router.add_get('/api/field', field_handler)
     app.router.add_get('/api/adc', adc_handler)
+    app.router.add_get('/api/detector-history', detector_history_handler)
     return app
 
 
@@ -216,12 +225,16 @@ async def broadcast_telemetry(node: OperatorGateway) -> None:
             if shared is None:
                 shared = dict(type='control_status', available=False,
                               message='Control node unavailable. Waiting for ROS telemetry.')
+            packets = {}
             for ws in sockets:
                 if ws.closed or ws in writers:
                     continue
-                if shared.get('type') == 'state':
-                    shared['drive']['you_control_owner'] = node.owns_lease(ws)
-                writers[ws] = asyncio.create_task(send_state(ws, json.dumps(shared, separators=(',', ':'), allow_nan=False)))
+                owner = shared['type'] == 'state' and node.owns_lease(ws)
+                if owner not in packets:
+                    if shared['type'] == 'state':
+                        shared['drive']['you_control_owner'] = owner
+                    packets[owner] = json.dumps(shared, separators=(',', ':'), allow_nan=False)
+                writers[ws] = asyncio.create_task(send_state(ws, packets[owner]))
     finally:
         for task in writers.values():
             task.cancel()

@@ -26,6 +26,8 @@ class OperatorWebBridge(Node):
         self._cameras_at = 0
         self._power = {}
         self._power_at = 0
+        self._detector_history = deque()
+        self._history_stream = None
         self._detector = {}
         self._detector_at = 0.0
         self._actuators = {}
@@ -52,7 +54,8 @@ class OperatorWebBridge(Node):
                 ('adc/state', self._adc_state), ('adc/command_result', self._device_result),
                 ('cameras/state', self._camera_state), ('power/state', self._power_state),
                 ('operator/settings', self._settings_state), ('operator/settings/result', self._device_result)):
-            self.create_subscription(String, topic, self._json_callback(callback), 10)
+            depth = 1 if topic in ('operator/state', 'detector/telemetry', 'arm/web_state', 'probe/web_state') else 10
+            self.create_subscription(String, topic, self._json_callback(callback), depth)
         self.create_timer(.1, self._heartbeat)
 
     def _json_callback(self, callback):
@@ -85,7 +88,32 @@ class OperatorWebBridge(Node):
             return field
 
     def _detector_state(self, value):
-        self._detector, self._detector_at = value, time.monotonic()
+        now = time.monotonic()
+        sensor = value.get('detector', {}).get('sensor', {})
+        if 'history_stream' in sensor:
+            if sensor['history_stream'] != self._history_stream:
+                self._detector_history.clear()
+                self._history_stream = sensor['history_stream']
+            last = self._detector_history[-1][0] if self._detector_history else 0.
+            for point in sensor.pop('recent_points', []):
+                if point[0] > last:
+                    self._detector_history.append(point)
+                    last = point[0]
+            while self._detector_history and self._detector_history[0][0] < now - 120:
+                self._detector_history.popleft()
+        self._detector, self._detector_at = value, now
+
+    def detector_history(self, stream, after):
+        with self._lock:
+            if stream != self._history_stream:
+                after = 0.
+            points = []
+            for point in reversed(self._detector_history):
+                if point[0] <= after:
+                    break
+                points.append(point)
+            points.reverse()
+            return dict(stream=self._history_stream, now=time.monotonic(), points=points)
 
     def _actuator_state(self, role, value):
         self._actuators[role], self._actuator_times[role] = value, time.monotonic()
@@ -167,7 +195,7 @@ class OperatorWebBridge(Node):
         with self._lock:
             if self._shutting_down or ws not in self._connected_sockets:
                 return dict(type='error', message='Operator connection is closed.')
-            if not self._state or time.monotonic() - self._state_at >= .5:
+            if (not self._state or time.monotonic() - self._state_at >= .5) and payload.get('type') not in ('take_control', 'disarm', 'estop'):
                 return dict(type='control_status', available=False, message='Control node unavailable. Waiting for ROS telemetry.')
             payload = dict(payload)
             kind = payload.get('type')

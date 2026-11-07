@@ -90,12 +90,14 @@ class InspectionWorkflow:
     def stop(self, message='Inspection stopped', error=False):
         if not self.active and self.confirmed_angle is None:
             return
+        active = self.active
         self.generation += 1
         self.queue.clear()
         self.pending = None
         self.confirmed_angle = None
         self.phase, self.message = ('ERROR' if error else 'STOPPED'), message
-        self.cancel_io()
+        if active:
+            self.cancel_io()
 
     def tick(self, idle, sample):
         if not self.active:

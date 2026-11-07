@@ -92,7 +92,7 @@
           </section>
           <section class="pane-section map-panel" aria-labelledby="map-heading">
             <div class="section-head"><h2 id="map-heading">Field map</h2><select id="map-mode" aria-label="Field map view"><option value="gnss">GNSS map</option><option value="local">Local grid</option></select><button id="map-follow" type="button" class="quiet" aria-pressed="true" disabled>Follow</button></div>
-            <div id="gnss-map" aria-label="Geographic field map"><span id="gnss-map-empty" class="meta">Waiting for GNSS position</span></div>
+            <div id="gnss-map" class="field-map" aria-label="Geographic field map"><span id="gnss-map-empty" class="map-empty meta">Waiting for GNSS position</span></div>
             <p id="gnss-map-status" class="meta">Waiting for field recorder</p>
             <canvas hidden id="map-view" aria-label="Local field map"></canvas>
             <div class="section-foot"><p id="position">X 0.0 &middot; Y 0.0 &middot; heading 0&deg;</p></div>
@@ -106,8 +106,8 @@
             <div class="meter" aria-label="Detector signal"><span id="meter-fill"></span><i id="alert-marker" class="alert-marker" title="Search alert level"></i><i id="threshold" title="Mine level"></i></div>
             <canvas id="radar-view" aria-label="Detector sweep radar"></canvas>
           </section>
-          <section class="pane-section" aria-labelledby="history-heading">
-            <div class="section-head"><h2 id="history-heading">Signal and arm angle</h2><span class="head-note">last 30 s</span></div>
+          <section class="pane-section detector-trend" aria-labelledby="history-heading">
+            <div class="section-head"><h2 id="history-heading">Signal and arm angle</h2><span class="head-note" data-tip="The last 30 seconds are shown. The detector axis uses two minutes of measured signal. Calibration lines appear when in range.">Last 30 s</span><button type="button" id="detector-expand" class="quiet" aria-pressed="false" aria-controls="detector-diagnostics-history">Expand chart</button></div>
             <div class="chart-box detector-diagnostics-chart"><canvas id="detector-diagnostics-history" aria-label="Detector reading, arm angle and calibration history"></canvas></div>
           </section>
           <section class="pane-section pane-actions" aria-labelledby="align-heading">
@@ -271,17 +271,7 @@
               <label for="probe-cycle-target">Deepest probe</label>
               <div class="probe-cycle-input-wrap"><input id="probe-cycle-target" type="number" min="0.1" step="any" value="80" required><span class="unit">mm</span></div>
             </div>
-            <div class="probe-contact-controls">
-              <label for="probe-contact-direction">Contact when
-                <select id="probe-contact-direction"><option value="above">Above</option><option value="below">Below</option></select>
-              </label>
-              <label for="probe-contact-volts">Limit (V)
-                <input id="probe-contact-volts" type="number" step="any" required>
-              </label>
-              <button id="probe-contact-save" type="button" class="quiet" disabled>Save contact limit</button>
-            </div>
-            <p id="probe-contact-feedback" class="note" role="status">Waiting for contact settings.</p>
-            <p id="probe-adc-contact" class="note" role="status">Waiting for a contact reading.</p>
+            <div class="field-row"><span id="probe-adc-contact" class="note" role="status">Waiting for a contact reading.</span><button type="button" class="quiet" data-open-settings="contact">Contact setup</button></div>
             <div id="probe-cycle-alert" class="probe-cycle-alert hidden" role="alert">
               <span id="probe-cycle-alert-badge" class="badge active">CONTACT TRIGGER</span>
               <span id="probe-cycle-alert-text">Contact detected. Retracting.</span>
@@ -300,7 +290,8 @@
     <form method="dialog" class="setup">
       <header class="setup-head">
         <h2 id="settings-title">Setup</h2>
-        <span class="badge warn setup-note" data-tip="Driving is paused while Setup is open. Motors only move when the RC remote allows it.">DRIVING PAUSED</span>
+        <span id="setup-arming" class="badge neutral">PX4 UNKNOWN</span>
+        <span id="setup-owner" class="badge neutral">UNCLAIMED</span>
         <button value="close" formnovalidate class="quiet" aria-label="Close settings">Close</button>
       </header>
 
@@ -313,6 +304,7 @@
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-probe" data-settings-tab="probe">Probe</button>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-marking" data-settings-tab="marking">Marking</button>
         <p class="setup-nav-group" aria-hidden="true">Sensors</p>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-contact" data-settings-tab="contact">Probe contact</button>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-detector" data-settings-tab="detector">Metal detector</button>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-adc" data-settings-tab="adc">Sensor board</button>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-gnss" data-settings-tab="gnss">GNSS</button>
@@ -527,8 +519,8 @@
       <!-- =============================================================== Probe -->
       <section id="settings-probe" class="settings-panel" role="tabpanel" data-settings-panel="probe" hidden>
         <header class="panel-head">
-          <h3>Probe <span class="tip" data-tip="Home the probe at the top, then save how far down it can safely go. The contact limit is set on the main screen under Probe controls."></span></h3>
-          <div class="panel-tools"><button type="button" class="quiet" data-goto-settings="adc" data-tip="Contact input and filtering">Contact input →</button><button type="button" id="probe-servo-calibration-stop" class="danger">Stop · release motor</button></div>
+          <h3>Probe <span class="tip" data-tip="Home the probe at the top, then save how far down it can safely go. Set the contact limit in Setup → Probe contact."></span></h3>
+          <div class="panel-tools"><button type="button" class="quiet" data-goto-settings="contact" data-tip="Contact input and voltage calibration">Probe contact →</button><button type="button" id="probe-servo-calibration-stop" class="danger">Stop · release motor</button></div>
         </header>
         <div class="status-bar">
           <p id="probe-servo-feedback" class="arm-feedback status-msg" role="status" aria-live="polite">Take control. The RC remote must allow motion.</p>
@@ -614,7 +606,7 @@
 
       <section id="settings-marking" class="settings-panel" role="tabpanel" data-settings-panel="marking" hidden>
         <header class="panel-head">
-          <h3>Marking <span class="tip" data-tip="The pump uses MAVLink AUX5, PMB3 misc1, PCA9685 CH6 (Actuator_Set2). Percent is the commanded output range. Actual duty depends on the PX4 channel configuration."></span></h3>
+          <h3>Marking <span class="tip" data-tip="The pump uses MAVLink AUX4, PMB3 misc0, PCA9685 CH5 (Actuator_Set1). Percent is the commanded output range. Actual duty depends on the PX4 channel configuration."></span></h3>
           <div class="panel-tools"><button type="button" id="marking-take-control" class="quiet">Take control</button></div>
         </header>
         <div class="status-bar">
@@ -640,6 +632,33 @@
         </div>
       </section>
 
+      <section id="settings-contact" class="settings-panel" role="tabpanel" data-settings-panel="contact" hidden>
+        <header class="panel-head">
+          <h3>Probe contact <span class="tip" data-tip="The probe uses this filtered ADC input to detect contact during descent. Test the response with the probe clear, then press the sensor and set the limit between the two readings."></span></h3>
+          <div class="panel-tools"><button type="button" class="quiet" data-goto-settings="adc">Sensor board →</button></div>
+        </header>
+        <div class="status-bar"><p id="adc-trigger-state" class="status-msg" role="status">Waiting for contact readings</p></div>
+        <div class="panel-grid cols-wide">
+          <section class="set-card">
+            <header class="card-head"><h4>Live contact signal</h4><output class="head-value" id="contact-live-volts">—</output></header>
+            <div class="metal-chart-container"><canvas id="contact-history" role="img" aria-label="Filtered contact sensor voltage and contact limit over the last 30 seconds"></canvas></div>
+          </section>
+          <section class="set-card">
+            <header class="card-head"><h4>Contact calibration</h4></header>
+            <label class="field"><span class="field-name">Sensor input</span><select id="adc-trigger-mux"></select></label>
+            <label class="check"><input id="adc-trigger-enabled" type="checkbox"> Detect contact</label>
+            <div class="fields-2">
+              <label class="field"><span class="field-name">Contact when</span><select id="probe-contact-direction"><option value="above">Above</option><option value="below">Below</option></select></label>
+              <label class="field"><span class="field-name">Limit <span class="unit">V</span></span><input id="probe-contact-volts" type="number" step="any" required></label>
+              <label class="field"><span class="field-name">Hysteresis <span class="unit">V</span><span class="tip" data-tip="Voltage change back from the limit needed to clear contact."></span></span><input id="adc-trigger-hysteresis" type="number" min="0" step="any" required></label>
+              <label class="field"><span class="field-name">Debounce <span class="unit">ms</span><span class="tip" data-tip="Time the voltage must remain past the limit before contact changes."></span></span><input id="adc-trigger-debounce" type="number" min="0" max="10000" step="any" required></label>
+            </div>
+            <div class="card-actions"><button id="probe-contact-save" type="button" class="primary" disabled>Save contact settings</button><button type="button" class="quiet" id="contact-revert">Undo edits</button></div>
+            <p id="probe-contact-feedback" class="status-msg" role="status"></p>
+          </section>
+        </div>
+      </section>
+
       <!-- ====================================================== Metal detector -->
       <section id="settings-detector" class="settings-panel" role="tabpanel" data-settings-panel="detector" hidden>
         <header class="panel-head">
@@ -660,7 +679,7 @@
           <section class="set-card">
             <header class="card-head"><h4>Live signal</h4>
               <div class="card-tools">
-                <label class="check"><input id="metal-autoscale" type="checkbox" checked> Auto scale</label>
+                <label class="check" data-tip="Fit two minutes of measured signal. Switch off to see the full voltage range and all calibration levels."><input id="metal-autoscale" type="checkbox" checked> Auto scale</label>
                 <select id="metal-time-range" aria-label="Time range"><option value="30" selected>30 s</option><option value="60">60 s</option><option value="120">120 s</option></select>
               </div>
             </header>
@@ -669,6 +688,9 @@
           </section>
           <section class="set-card">
             <header class="card-head"><h4>Calibrate <span class="tip" data-tip="Levels are saved on the car and used by every operator."></span></h4></header>
+            <label class="field"><span class="field-name">Sensor input</span>
+              <span class="input-with-btn"><select id="metal-adc-input"></select><button type="button" id="metal-adc-save" disabled>Save input</button></span></label>
+            <p id="metal-adc-feedback" class="status-msg" role="status"></p>
             <label class="field"><span class="field-name"><span class="step">1</span>Baseline <span class="unit">V</span> <span class="tip" data-tip="Hold the coil away from metal, then press Measure."></span></span>
               <span class="input-with-btn"><input id="metal-baseline" type="number" min="0" max="5" step="any"><button id="metal-zero" type="button">Measure</button></span>
             </label>
@@ -724,7 +746,14 @@
             <header class="card-head"><h4>Receiver</h4></header>
             <dl class="readouts"><div class="span-all"><dt>Source</dt><dd id="gnss-device">—</dd></div><div><dt>Satellites</dt><dd id="gnss-sats">—</dd></div>
               <div><dt>Latitude</dt><dd id="gnss-lat">—</dd></div><div><dt>Longitude</dt><dd id="gnss-lon">—</dd></div>
-              <div><dt>Horizontal error</dt><dd id="gnss-accuracy">—</dd></div></dl>
+              <div><dt>Estimated error</dt><dd id="gnss-accuracy">—</dd></div></dl>
+          </section>
+          <section class="set-card span-all">
+            <header class="card-head"><h4>Field map <span class="tip" data-tip="The dot shows the receiver, the circle shows its estimated horizontal error, and the line shows its recent trail. Select a ground mark to see its accuracy."></span></h4>
+              <button id="gnss-preview-follow" type="button" class="quiet" aria-pressed="true" disabled>Follow</button>
+            </header>
+            <div id="gnss-preview" class="field-map" aria-label="GNSS Setup field map"><span id="gnss-preview-empty" class="map-empty meta">Waiting for GNSS position</span></div>
+            <p id="gnss-preview-status" class="meta">Waiting for field recorder</p>
           </section>
         </div>
       </section>
@@ -732,7 +761,7 @@
       <!-- ======================================================== Sensor board -->
       <section id="settings-adc" class="settings-panel" role="tabpanel" data-settings-panel="adc" hidden>
         <header class="panel-head">
-          <h3>Sensor board <span class="tip" data-tip="The ADS1115 chip reads the metal detector (A2) and probe contact (A0). It starts sampling by itself when the car starts."></span></h3>
+          <h3>Sensor board <span class="tip" data-tip="The ADS1115 samples the enabled inputs. Assign sensors on their calibration tabs."></span></h3>
           <div class="panel-tools"><span id="adc-status" class="badge neutral">WAITING</span></div>
         </header>
         <div class="status-bar">
@@ -747,20 +776,11 @@
           </div>
         </div>
         <p id="adc-error" class="error-line" role="alert"></p>
-        <div class="panel-grid cols-wide">
-          <section class="set-card">
+        <div class="panel-grid">
+          <section class="set-card span-all">
             <header class="card-head"><h4>Inputs <span class="tip" data-tip="Turn on only the inputs you use. Scaled value = volts × multiplier + offset."></span></h4></header>
             <div class="table-wrap"><table class="set-table"><thead><tr><th>On</th><th>Input</th><th>Multiplier</th><th>Offset</th><th>Used for</th></tr></thead><tbody id="adc-input-settings"></tbody></table></div>
-          </section>
-          <section class="set-card">
-            <header class="card-head"><h4>Probe contact <span class="tip" data-tip="The contact limit itself is set on the main screen under Probe controls. If the reading goes stale, the probe stops."></span></h4></header>
-            <label class="check"><input id="adc-trigger-enabled" type="checkbox"> Detect contact</label>
-            <label class="field"><span class="field-name">Input</span><select id="adc-trigger-mux"></select></label>
-            <div class="fields-2">
-              <label class="field"><span class="field-name">Hysteresis <span class="tip" data-tip="How far the reading must move back before contact clears."></span></span><input id="adc-trigger-hysteresis" type="number" min="0" step="any" value="0" required></label>
-              <label class="field"><span class="field-name">Debounce <span class="unit">ms</span> <span class="tip" data-tip="How long the reading must stay past the limit before it counts."></span></span><input id="adc-trigger-debounce" type="number" min="0" max="10000" value="0" required></label>
-            </div>
-            <p id="adc-trigger-state" class="status-msg" role="status">Trigger disabled</p>
+            <div class="btn-row"><button type="button" class="quiet" data-goto-settings="contact">Probe contact →</button><button type="button" class="quiet" data-goto-settings="detector">Metal detector →</button></div>
           </section>
           <section class="set-card span-all">
             <header class="card-head"><h4>Live readings</h4>

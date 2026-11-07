@@ -8,74 +8,116 @@
   const field = key => fields.find(input => input.dataset.adcField === key);
   field('rate').innerHTML = [8,16,32,64,128,250,475,860].map(n => `<option value="${n}">${n} SPS</option>`).join('');
   field('pga').innerHTML = ranges.map((n,i) => `<option value="${i}">±${n} V</option>`).join('');
-  el('input-settings').innerHTML = names.map((name,i) => `<tr data-adc-channel="${i}"><td><input type="checkbox" aria-label="Enable ${name}"></td><td>${name}</td><td><input type="number" step="any" aria-label="${name} multiplier"></td><td><input type="number" step="any" aria-label="${name} offset"></td><td><select aria-label="${name} signal use"><option value="none">None</option><option value="detector">Metal detector</option><option value="probe">Probe</option><option value="both">Both</option></select></td></tr>`).join('');
+  el('input-settings').innerHTML = names.map((name,i) => `<tr data-adc-channel="${i}"><td><input type="checkbox" aria-label="Enable ${name}"></td><td>${name}</td><td><input type="number" step="any" aria-label="${name} multiplier"></td><td><input type="number" step="any" aria-label="${name} offset"></td><td>—</td></tr>`).join('');
   const rows = [...document.querySelectorAll('[data-adc-channel]')];
-  el('trigger-mux').innerHTML = names.map((name,i) => `<option value="${i}">${name}</option>`).join('');
+  const inputOptions = names.map((name,i) => `<option value="${i}">${name}</option>`).join('');
+  const muxInput = el('trigger-mux'), enabledInput = el('trigger-enabled');
+  const hysteresis = el('trigger-hysteresis'), debounce = el('trigger-debounce');
+  const detectorInput = document.getElementById('metal-adc-input');
+  const detectorSave = document.getElementById('metal-adc-save');
+  const detectorFeedback = document.getElementById('metal-adc-feedback');
+  muxInput.innerHTML = inputOptions;
+  detectorInput.innerHTML = '<option value="">Unassigned</option>' + inputOptions;
   let latest = null, revision = null, session = null, cursor = 0, history = [], chart = null, clockOffset = 0;
-  let pending = false, importedTrigger = null;
-
+  let pending = false, importedSettings = null, adcOnline = false;
+  let contactChart = null, detectorKey = '', detectorDirty = false, detectorMessage = '';
   const contactDirection = document.getElementById('probe-contact-direction');
   const contactVolts = document.getElementById('probe-contact-volts');
   const contactSave = document.getElementById('probe-contact-save');
   const contactFeedback = document.getElementById('probe-contact-feedback');
-  let contactDraftKey = '', contactDirty = false, contactPending = false, contactMessage = '';
+  let contactDraftKey = '', contactDirty = false, contactMessage = '';
   const opposite = direction => direction === 'above' ? 'below' : 'above';
-  function contactConfigError() {
-    if (!latest?.probe_trigger) return 'Waiting for contact settings.';
-    const mux = latest.probe_trigger.mux;
-    if (!Number.isInteger(mux) || mux < 0 || mux >= names.length) return 'Contact input is invalid. Check Setup → Sensor board.';
-    if (!Number.isFinite(latest.probe_trigger.level) || !['above', 'below'].includes(latest.probe_trigger.direction)) return 'Contact trigger is invalid. Check Setup → Sensor board.';
-    const channel = latest.config.channels.find(channel => channel.mux === mux);
-    if (!channel?.enabled) return `Enable ${names[mux]} in Setup → Sensor board.`;
-    if (!['probe', 'both'].includes(latest.routes[mux])) return `Assign ${names[mux]} to Probe in Setup → Sensor board.`;
-    if (!Number.isFinite(channel.multiplier) || channel.multiplier === 0) return 'Contact input multiplier must be nonzero. Check Setup → Sensor board.';
-    if (!Number.isFinite(channel.offset)) return 'Contact input offset is invalid. Check Setup → Sensor board.';
+  const detectorRole = role => role === 'detector' || role === 'both';
+  const assignedRoutes = (detectors, probeMux) => names.map((_, mux) => detectors.includes(mux)
+    ? (mux === probeMux ? 'both' : 'detector') : (mux === probeMux ? 'probe' : 'none'));
+  const detectorMuxes = settings => settings.routes.flatMap((role, mux) => detectorRole(role) ? [mux] : []);
+  const channelAt = mux => latest?.config.channels.find(channel => channel.mux === mux);
+  function inputProblem(mux, needsEnabled = true) {
+    const channel = channelAt(mux);
+    if (!channel) return 'Waiting for ADC settings.';
+    if (needsEnabled && !channel.enabled) return `Enable ${names[mux]} in Setup → Sensor board.`;
+    if (!Number.isFinite(channel.multiplier) || channel.multiplier === 0 || !Number.isFinite(channel.offset))
+      return 'Set a finite offset and a nonzero input multiplier in Setup → Sensor board.';
     return '';
   }
-  window.operatorContactBlock = () => contactConfigError() || (pending ? 'Wait for ADC settings to finish saving.' : contactDirty ? 'Save the contact limit first.' : '');
-  function renderMainContact() {
-    const error = contactConfigError();
-    contactSave.disabled = !state.connected || !state.drive.you_control_owner || pending || Boolean(error);
-    contactDirection.disabled = contactVolts.disabled = pending;
-    if (!error) {
-      const trigger = latest.probe_trigger;
-      const channel = latest.config.channels.find(channel => channel.mux === trigger.mux);
-      const key = JSON.stringify([trigger, channel.multiplier, channel.offset]);
-      if (!contactDirty && key !== contactDraftKey) {
-        contactVolts.value = ((trigger.level - channel.offset) / channel.multiplier).toFixed(6);
-        contactDirection.value = channel.multiplier < 0 ? opposite(trigger.direction) : trigger.direction;
-        contactDraftKey = key;
-      }
-      const contact = latest.probe_contact;
-      const volts = contact?.fresh && Number.isFinite(contact.value) ? (contact.value - channel.offset) / channel.multiplier : null;
-      document.getElementById('probe-adc-contact').textContent = !trigger.enabled ? 'Contact limit disabled'
-        : volts === null ? 'Waiting for contact reading.' : `${contact.detected ? 'CONTACT' : 'Clear'} · ${volts.toFixed(6)} V`;
+  window.operatorContactBlock = () => !adcOnline || !latest?.probe_trigger ? 'Waiting for contact settings.'
+    : inputProblem(latest.probe_trigger.mux) || (pending ? 'Wait for ADC settings to finish saving.'
+    : contactDirty ? 'Save or undo your edits in Setup → Probe contact.' : '');
+
+  function renderSensors() {
+    const trigger = latest?.probe_trigger;
+    const owner = adcOnline && state.connected && state.drive.you_control_owner;
+    if (!trigger) return;
+    const channel = channelAt(trigger.mux);
+    const key = JSON.stringify([trigger, channel?.multiplier, channel?.offset]);
+    if (!contactDirty && key !== contactDraftKey && channel) {
+      muxInput.value = trigger.mux;
+      enabledInput.checked = trigger.enabled;
+      contactVolts.value = channel.multiplier ? Number(((trigger.level - channel.offset) / channel.multiplier).toFixed(9)) : '';
+      contactDirection.value = channel.multiplier < 0 ? opposite(trigger.direction) : trigger.direction;
+      hysteresis.value = channel.multiplier ? Number(((trigger.hysteresis || 0) / Math.abs(channel.multiplier)).toFixed(9)) : 0;
+      debounce.value = trigger.debounce_ms || 0;
+      contactDraftKey = key;
     }
-    contactFeedback.textContent = error || (contactPending ? 'Saving contact limit…' : contactMessage)
-      || (!state.drive.you_control_owner ? 'Take control to save the contact limit.'
-        : contactDirty ? 'Contact limit changed. Save before scanning.'
-        : latest?.probe_trigger.enabled ? 'Saved contact limit' : 'Save a limit to enable contact detection.');
+    const issue = inputProblem(Number(muxInput.value), enabledInput.checked);
+    contactSave.disabled = !owner || Boolean(pending) || Boolean(issue);
+    for (const input of [muxInput, enabledInput, contactVolts, contactDirection, hysteresis, debounce]) input.disabled = Boolean(pending);
+    const contact = latest.probe_contact;
+    const volts = adcOnline && contact?.fresh && contact.mux === trigger.mux && Number.isFinite(contact.value) && channel?.multiplier
+      ? (contact.value - channel.offset) / channel.multiplier : null;
+    const status = !adcOnline ? 'ADC disconnected' : !trigger.enabled ? 'Contact detection disabled'
+      : volts === null ? 'Waiting for contact reading.' : `${contact.detected ? 'CONTACT' : 'Clear'} · ${names[trigger.mux]} · ${volts.toFixed(4)} V`;
+    document.getElementById('probe-adc-contact').textContent = status;
+    el('trigger-state').textContent = status;
+    contactFeedback.textContent = issue || (pending === 'contact' ? 'Saving contact settings…' : contactMessage)
+      || (!owner ? 'Take control to save contact settings.' : contactDirty ? 'Unsaved contact settings' : '');
+    const detectors = detectorMuxes(latest);
+    const active = detectors.filter(mux => channelAt(mux)?.enabled);
+    const detectorSignature = JSON.stringify([detectors, active]);
+    if (!detectorDirty && detectorKey !== detectorSignature) {
+      detectorInput.value = active.length === 1 ? active[0] : detectors.length === 1 ? detectors[0] : '';
+      detectorKey = detectorSignature;
+    }
+    const detectorIssue = detectorInput.value !== '' && !channelAt(Number(detectorInput.value))?.enabled
+      ? `Enable ${names[Number(detectorInput.value)]} in Setup → Sensor board.` : '';
+    detectorSave.disabled = !owner || Boolean(pending) || Boolean(detectorIssue);
+    detectorFeedback.textContent = detectorIssue || (pending === 'detector' ? 'Saving sensor input…' : detectorMessage)
+      || (!detectorDirty && detectors.length > 1 ? 'Multiple saved detector inputs. Select and save one input.' : '');
+    const routes = assignedRoutes(detectors, trigger.mux);
+    rows.forEach((row, mux) => {
+      const label = {none:'—', detector:'Metal detector', probe:'Probe contact', both:'Metal detector + probe contact'}[routes[mux]];
+      if (row.lastElementChild.textContent !== label) row.lastElementChild.textContent = label;
+    });
   }
-  const editContact = () => { contactDirty = true; contactMessage = ''; renderMainContact(); };
-  contactVolts.oninput = editContact;
-  contactDirection.onchange = editContact;
+  function savedSettings() {
+    return {config: structuredClone(latest.config), routes:[...latest.routes], probe_trigger:{...latest.probe_trigger}};
+  }
+  const editContact = () => { contactDirty = true; contactMessage = ''; renderSensors(); };
+  for (const input of [contactVolts, hysteresis, debounce]) input.oninput = editContact;
+  for (const input of [contactDirection, muxInput, enabledInput]) input.onchange = editContact;
+  document.getElementById('contact-revert').onclick = () => {
+    contactDirty = false; contactDraftKey = ''; contactMessage = ''; renderSensors();
+  };
   contactSave.onclick = () => {
-    const error = contactConfigError();
-    if (error) { contactMessage = error; renderMainContact(); return; }
-    if (!state.connected || !state.drive.you_control_owner || pending) return;
-    if (!contactVolts.reportValidity()) return;
-    const volts = contactVolts.valueAsNumber;
-    const trigger = latest.probe_trigger;
-    const channel = latest.config.channels.find(channel => channel.mux === trigger.mux);
-    const level = volts * channel.multiplier + channel.offset;
-    if (!Number.isFinite(volts) || !Number.isFinite(level)) { contactMessage = 'Enter a finite contact limit in volts.'; renderMainContact(); return; }
-    const direction = channel.multiplier < 0 ? opposite(contactDirection.value) : contactDirection.value;
-    const settings = {config: structuredClone(latest.config), routes: [...latest.routes],
-      probe_trigger: {...trigger, enabled: true, level, direction}};
-    contactPending = true;
+    if (contactSave.disabled || ![contactVolts, hysteresis, debounce].every(input => input.reportValidity())) return;
+    const mux = Number(muxInput.value), channel = channelAt(mux);
+    const settings = savedSettings();
+    settings.probe_trigger = {...settings.probe_trigger, enabled:enabledInput.checked, mux,
+      level:contactVolts.valueAsNumber * channel.multiplier + channel.offset,
+      direction:channel.multiplier < 0 ? opposite(contactDirection.value) : contactDirection.value,
+      hysteresis:hysteresis.valueAsNumber * Math.abs(channel.multiplier), debounce_ms:debounce.valueAsNumber};
+    settings.routes = assignedRoutes(detectorMuxes(latest), mux);
     contactMessage = '';
-    command({action: 'settings', settings});
-    renderMainContact();
+    command({action:'settings', settings}, 'contact');
+    renderSensors();
+  };
+  detectorInput.onchange = () => { detectorDirty = true; detectorMessage = ''; renderSensors(); };
+  detectorSave.onclick = () => {
+    if (detectorSave.disabled) return;
+    const settings = savedSettings();
+    settings.routes = assignedRoutes(detectorInput.value === '' ? [] : [Number(detectorInput.value)], settings.probe_trigger.mux);
+    command({action:'settings', settings}, 'detector');
+    renderSensors();
   };
 
   function fill(value) {
@@ -88,13 +130,7 @@
       inputs[0].checked = value.config.channels[i].enabled;
       inputs[1].value = value.config.channels[i].multiplier;
       inputs[2].value = value.config.channels[i].offset;
-      row.querySelector('select').value = value.routes[i];
     });
-    const trigger = value.probe_trigger || latest?.probe_trigger || {enabled:false,mux:4,level:1,direction:'above'};
-    el('trigger-enabled').checked = trigger.enabled;
-    el('trigger-mux').value = trigger.mux;
-    el('trigger-hysteresis').value = trigger.hysteresis || 0;
-    el('trigger-debounce').value = trigger.debounce_ms || 0;
     equivalents();
   }
   function draft() {
@@ -109,15 +145,9 @@
       if ([...inputs].slice(1).some(input => !input.value || !input.checkValidity())) throw Error('Enter finite scaling values');
       return {mux, enabled: inputs[0].checked, multiplier: Number(inputs[1].value), offset: Number(inputs[2].value)};
     });
-    const trigger = importedTrigger || latest?.probe_trigger;
-    if (!Number.isFinite(trigger?.level) || Math.abs(trigger.level) > 1e12 || !['above','below'].includes(trigger.direction)) throw Error('Invalid saved contact limit. Set the voltage and direction in Probe.');
-    for (const key of ['hysteresis', 'debounce']) {
-      if (!el(`trigger-${key}`).value || !el(`trigger-${key}`).checkValidity()) throw Error(`Invalid contact ${key}`);
-    }
-    return {config, routes: rows.map(row => row.querySelector('select').value),
-      probe_trigger:{enabled:el('trigger-enabled').checked,mux:Number(el('trigger-mux').value),
-        level:trigger.level,direction:trigger.direction,
-        hysteresis:Number(el('trigger-hysteresis').value),debounce_ms:Number(el('trigger-debounce').value)}};
+    const source = importedSettings || latest;
+    if (!source) throw Error('Waiting for ADC settings.');
+    return {config, routes:[...source.routes], probe_trigger:{...source.probe_trigger}};
   }
   function equivalents() {
     const lsb = ranges[Number(field('pga').value)] / 32768;
@@ -125,26 +155,31 @@
     ['low','high'].forEach(key => el(`${key}-volts`).textContent = `${(Number(field(key).value) * lsb).toFixed(6)} V`);
   }
   fields.forEach(input => input.addEventListener('input', equivalents));
-  function command(value) {
+  function command(value, source = 'board') {
     if (!state.connected || !state.drive.you_control_owner) { el('feedback').textContent = 'Take control before changing ADC settings.'; return; }
-    if (pending) return;
-    pending = true;
+    if (pending || !adcOnline) return;
+    pending = source;
     el('apply').disabled = true;
-    el('feedback').textContent = 'Saving…';
-    send({type:'adc', ...value});
+    if (source === 'board') el('feedback').textContent = 'Saving…';
+    send({type:'adc', ...value, expected_adc_revision:latest?.saved_config_revision});
   }
   window.operatorADCResult = message => {
+    const source = pending;
     pending = false;
-    el('feedback').textContent = message.ok ? message.message || 'Saved' : message.message;
-    if (contactPending) {
-      contactPending = false;
-      if (message.ok) { contactDirty = false; importedTrigger = null; }
-      contactMessage = message.ok ? 'Contact limit saved' : message.message;
+    if (source === 'contact') {
+      if (message.ok) contactDirty = false;
+      contactMessage = message.ok ? 'Contact settings saved.' : message.message;
+    } else if (source === 'detector') {
+      if (message.ok) detectorDirty = false;
+      detectorMessage = message.ok ? 'Sensor input saved.' : message.message;
+    } else {
+      el('feedback').textContent = message.message || (message.ok ? 'Saved' : 'Save failed');
+      if (message.ok) importedSettings = null;
     }
     render();
   };
   el('apply').onclick = () => { try { command({action:'settings', settings:draft()}); } catch (error) { el('feedback').textContent = error.message; } };
-  el('revert').onclick = () => { if (latest) { importedTrigger = null; fill(latest); } };
+  el('revert').onclick = () => { if (latest) { importedSettings = null; fill(latest); } };
   function download(text, type, name) {
     const url = URL.createObjectURL(new Blob([text], {type}));
     const a = document.createElement('a'); a.href = url; a.download = name; a.click();
@@ -159,18 +194,24 @@
       const routes = value.routes || latest?.routes || Array(8).fill('none');
       if (!config.channels || config.channels.length !== 8 || routes.length !== 8 || fields.some(f => !(f.dataset.adcField in config))) throw Error('Invalid ADC configuration');
       if (value.probe_trigger && (!Number.isFinite(value.probe_trigger.level) || Math.abs(value.probe_trigger.level) > 1e12 || !['above','below'].includes(value.probe_trigger.direction))) throw Error('Invalid imported contact limit');
-      fill({config,routes,probe_trigger:value.probe_trigger});
-      importedTrigger = value.probe_trigger || null;
+      let trigger = value.probe_trigger || latest?.probe_trigger;
+      if (!value.probe_trigger && value.routes) {
+        const probeInputs = routes.flatMap((role, mux) => ['probe','both'].includes(role) ? [mux] : []);
+        trigger = {enabled:false, mux:probeInputs.length === 1 ? probeInputs[0] : 4, level:1, direction:'above'};
+      }
+      if (!trigger) throw Error('Waiting for contact settings.');
+      importedSettings = {routes, probe_trigger:trigger};
+      fill({config});
       el('feedback').textContent = 'Imported draft. Apply & save to use it.';
     } catch (error) { el('feedback').textContent = error.message; }
     el('file').value = '';
   };
   el('csv').onclick = () => download('time,input,raw,volts,scaled,clipped,filtered_volts,filtered_scaled\n' + history.map(s => [s.time,names[s.mux],s.raw,s.volts,s.scaled,s.clipped,s.filtered_volts,s.filtered_scaled].join(',')).join('\n'), 'text/csv', 'ads1115.csv');
   const now = () => Date.now()/1000 + clockOffset;
-  function datasets(target, quantity, seconds) {
+  function datasets(target, quantity, seconds, selectedMux = null) {
     if (!latest) return [];
     const time = now();
-    return latest.config.channels.filter(ch => ch.enabled && (!target || [target,'both'].includes(latest.routes[ch.mux]))).map(ch => {
+    return latest.config.channels.filter(ch => ch.enabled && (selectedMux === null || ch.mux === selectedMux) && (!target || [target,'both'].includes(latest.routes[ch.mux]))).map(ch => {
       const samples = history.filter(s => s.mux === ch.mux && time-s.time <= seconds);
       const data = [];
       const gap = Math.max(.5, latest.config.interval_ms/1000 + 3 * latest.config.channels.filter(c => c.enabled).length/latest.config.rate);
@@ -181,6 +222,49 @@
       return {label:`ADS ${names[ch.mux]} (${quantity === 'filtered_scaled' ? 'filtered scaled' : quantity})`, yAxisID:'ads1115', data, borderColor:colors[ch.mux], borderWidth:1.5, pointRadius:0, spanGaps:false};
     });
   }
+  const scaleBuckets = new Map();
+  const scaleFields = ['raw', 'volts', 'scaled', 'filtered_volts', 'filtered_scaled'];
+  function rememberScale(samples, end) {
+    for (const sample of samples) {
+      const second = Math.floor(sample.time);
+      let channels = scaleBuckets.get(second);
+      if (!channels) { channels = new Map(); scaleBuckets.set(second, channels); }
+      let range = channels.get(sample.mux);
+      if (!range) { range = {}; channels.set(sample.mux, range); }
+      for (const field of scaleFields) {
+        const value = sample[field];
+        if (!Number.isFinite(value)) continue;
+        const bounds = range[field];
+        if (bounds) {
+          if (value < bounds.min) bounds.min = value;
+          if (value > bounds.max) bounds.max = value;
+        } else range[field] = {min: value, max: value};
+      }
+    }
+    for (const second of scaleBuckets.keys()) if (end - second > SIGNAL_LOOKBACK_S) scaleBuckets.delete(second);
+  }
+
+  function adcAxis(route, quantity) {
+    if (!latest) return {};
+    let low = Infinity, high = -Infinity, minSpan = 0;
+    const time = now(), voltsSpan = ranges[latest.config.pga] * .01;
+    const quantities = quantity === 'comparison' ? ['volts', 'filtered_volts'] : [quantity];
+    for (const channel of latest.config.channels) {
+      if (!channel.enabled || (route && ![route, 'both'].includes(latest.routes[channel.mux]))) continue;
+      const span = quantity === 'raw' ? 327.68 : quantity.includes('scaled') ? voltsSpan * Math.abs(channel.multiplier) : voltsSpan;
+      minSpan = Math.max(minSpan, span);
+      for (const [second, channels] of scaleBuckets) {
+        if (time - second > SIGNAL_LOOKBACK_S) continue;
+        const channelBounds = channels.get(channel.mux);
+        for (const field of quantities) {
+          const bounds = channelBounds?.[field];
+          if (bounds) { low = Math.min(low, bounds.min); high = Math.max(high, bounds.max); }
+        }
+      }
+    }
+    return signalBounds(low, high, minSpan || .001);
+  }
+
   window.operatorADCOverlay = (target, route, baseCount) => {
     const extra = datasets(route, 'filtered_scaled', 30);
     const trigger = latest?.probe_trigger;
@@ -188,7 +272,7 @@
       yAxisID:'ads1115', data:[{x:-30,y:trigger.level},{x:0,y:trigger.level}],
       borderColor:'#ff9b89',borderDash:[5,4],borderWidth:1,pointRadius:0});
     target.data.datasets = [...target.data.datasets.slice(0,baseCount), ...extra];
-    target.options.scales.ads1115 = {type:'linear', position:'right', display:extra.length > 0, beginAtZero:true, suggestedMax:1,
+    target.options.scales.ads1115 = {type:'linear', position:'right', display:extra.length > 0, ...adcAxis(route, 'filtered_scaled'),
       title:{display:true,text:'ADS1115 scaled'}, grid:{drawOnChartArea:false}, ticks:{color:'#efcf70'}};
   };
   function render() {
@@ -196,14 +280,10 @@
     el('apply').disabled = pending || !state.connected || !state.drive.you_control_owner;
     el('status').textContent = `${latest.demo ? 'DEMO · ' : ''}${latest.error || latest.load_error ? 'ERROR' : !latest.running ? 'UNAVAILABLE' : latest.applied !== latest.revision ? 'PENDING' : 'SAMPLING'}`;
     el('error').textContent = latest.error || latest.load_error || (!latest.running ? 'Acquisition is unavailable. Check the ADC connection.' : '');
-    const contact = latest.probe_contact;
-    const contactText = !contact?.enabled ? 'Trigger disabled' : !contact.fresh ? 'No fresh trigger reading' :
-      `${contact.detected ? 'CONTACT' : 'Clear'} · ${names[contact.mux]} ${contact.value.toFixed(4)} (trigger ${contact.direction === 'above' ? '≥' : '≤'} ${contact.level})`;
-    el('trigger-state').textContent = contactText;
-    renderMainContact();
+    renderSensors();
+    window.operatorADCFrame?.();
     if (!document.getElementById('settings-dialog').open || document.getElementById('settings-adc').hidden) return;
     const seconds = Number(el('window').value), quantity = el('quantity').value;
-    window.operatorADCFrame?.();
     const recent = history.filter(s => now()-s.time <= 2);
     el('rate').textContent = `${(recent.length/2).toFixed(1)} samples/s total · ${latest.config.rate} SPS chip rate shared across enabled inputs`;
     el('readings').innerHTML = latest.config.channels.filter(ch => ch.enabled).map(ch => {
@@ -244,38 +324,84 @@
     if (chart) chart.$frameBucket = null;
     window.operatorADCFrame();
   };
+  function drawContactHistory() {
+    if (contactChart && scrollTimeChart(contactChart, performance.now())) return;
+    const mux = Number(muxInput.value);
+    const traces = datasets(null, 'filtered_volts', 30, mux);
+    const line = traces[0];
+    const last = line?.data.at(-1);
+    const maxAge = Math.max(.5, latest.config.interval_ms / 1000 + 3 * latest.config.channels.filter(c => c.enabled).length / latest.config.rate);
+    const fresh = adcOnline && latest.connected && latest.running && latest.applied === latest.revision
+      && Number.isFinite(last?.y) && last.x >= -maxAge;
+    document.getElementById('contact-live-volts').textContent = fresh ? `${last.y.toFixed(4)} V` : '—';
+    if (line) {
+      line.label = `${names[mux]} · filtered V`;
+      line.borderColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    }
+    if (Number.isFinite(contactVolts.valueAsNumber)) {
+      const level = contactVolts.valueAsNumber;
+      traces.push({label:contactDirty ? 'Draft limit' : enabledInput.checked ? 'Contact limit' : 'Limit (disabled)', data:[{x:-30,y:level},{x:0,y:level}],
+        yAxisID:'ads1115', borderColor:getComputedStyle(document.documentElement).getPropertyValue('--warn').trim(),
+        borderWidth:1, borderDash:[5,4], pointRadius:0});
+    }
+    if (!contactChart) contactChart = new Chart(document.getElementById('contact-history'), {
+      type:'line', data:{datasets:[]}, options:{animation:false, responsive:true, maintainAspectRatio:false, parsing:false,
+        plugins:{decimation:{enabled:true, algorithm:'min-max'}}, scales:{x:{type:'linear', min:-30, max:0,
+          title:{display:true,text:'Time (s)'}}, ads1115:{type:'linear',position:'left',title:{display:true,text:'Voltage (V)'}}}}});
+    contactChart.data.datasets = traces;
+    contactChart.$scrollPixels = 0;
+    contactChart.$renderedAt = performance.now();
+    contactChart.update('none');
+  }
   window.operatorADCFrame = () => {
-    if (!latest || !document.getElementById('settings-dialog').open || document.getElementById('settings-adc').hidden) return;
+    if (!latest || !document.getElementById('settings-dialog').open) return;
+    if (!document.getElementById('settings-contact').hidden) { drawContactHistory(); return; }
+    if (document.getElementById('settings-adc').hidden) return;
     if (chart && scrollTimeChart(chart, performance.now())) return;
     const seconds = Number(el('window').value), quantity = el('quantity').value;
     if (!chart) chart = new Chart(el('history'), {type:'line', data:{datasets:[]}, options:{animation:false, responsive:true, maintainAspectRatio:false, parsing:false,
-      plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:'#b7c4d8'}}}, scales:{x:{type:'linear',min:-seconds,max:0},ads1115:{type:'linear',position:'left',beginAtZero:true,suggestedMax:1}}}});
+      plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:'#b7c4d8'}}}, scales:{x:{type:'linear',min:-seconds,max:0},ads1115:{type:'linear',position:'left'}}}});
     const applied = latest.config.filter_ms;
     const draft = field('filter_ms').valueAsNumber;
     el('filter-status').textContent = Number.isFinite(applied)
       ? `Applied on car: ${applied ? applied+' ms' : 'off'}` + (field('filter_ms').validity.valid && draft !== applied ? ` · Unsaved preview: ${draft ? draft+' ms' : 'off'}` : '')
       : 'Waiting for filter settings from the car';
-    chart.data.datasets = quantity === 'comparison' ? previewTraces(seconds) : datasets(null,quantity,seconds); chart.options.scales.x.min = -seconds; chart.$scrollPixels = 0; chart.$renderedAt = performance.now(); chart.update('none');
+    chart.data.datasets = quantity === 'comparison' ? previewTraces(seconds) : datasets(null,quantity,seconds);
+    chart.options.scales.ads1115 = {type:'linear', position:'left', ...adcAxis(null, quantity)};
+    chart.options.scales.x.min = -seconds; chart.$scrollPixels = 0; chart.$renderedAt = performance.now(); chart.update('none');
   };
   async function poll() {
     try {
       const response = await fetch(`/api/adc?after=${cursor}&session=${encodeURIComponent(session || "")}`, {cache:'no-store', signal:AbortSignal.timeout(3000)});
       if (!response.ok) throw Error(`ADC telemetry: HTTP ${response.status}`);
       const value = await response.json();
-      if (session !== value.session) { cursor=0; history=[]; revision=null; session=value.session; }
-      if (value.sequence < cursor) { cursor=0; history=[]; revision=null; }
+      if (session !== value.session) { cursor=0; history=[]; scaleBuckets.clear(); revision=null; session=value.session; }
+      if (value.sequence < cursor) { cursor=0; history=[]; scaleBuckets.clear(); revision=null; }
       if (revision !== value.revision) {
         history = [];
+        scaleBuckets.clear();
         if (revision === null) fill(value);
         else if (field('filter_ms').valueAsNumber === latest?.config.filter_ms) field('filter_ms').value = value.config.filter_ms;
         revision = value.revision;
       }
-      latest=value; clockOffset=(value.now-Date.now()/1000);
+      latest=value; adcOnline=true; clockOffset=(value.now-Date.now()/1000);
+      rememberScale(value.samples, value.now);
       history.push(...value.samples); cursor=value.samples.at(-1)?.seq ?? cursor;
       history=history.filter(s=>value.now-s.time<=60).slice(-30000);
       if (value.dropped) el('feedback').textContent = `${value.dropped} readings missed during disconnection.`;
       render();
-    } catch (error) { el('status').textContent='DISCONNECTED'; el('error').textContent=error.message; pending=false; if (contactPending) { contactPending=false; contactMessage='Contact limit save was not confirmed. Check the connection.'; } renderMainContact(); document.getElementById('probe-adc-contact').textContent='ADC disconnected'; }
+    } catch (error) {
+      adcOnline = false;
+      el('status').textContent='DISCONNECTED';
+      el('error').textContent=error.message;
+      if (pending === 'contact') contactMessage='Contact save was not confirmed. Check the connection.';
+      if (pending === 'detector') detectorMessage='Sensor input save was not confirmed. Check the connection.';
+      pending=false;
+      el('apply').disabled=true;
+      renderSensors();
+      document.getElementById('probe-adc-contact').textContent='ADC disconnected';
+      document.getElementById('contact-live-volts').textContent='—';
+    }
     setTimeout(poll, document.hidden ? 1000 : 100);
   }
   poll();

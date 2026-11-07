@@ -77,20 +77,18 @@ class TeleopTest(unittest.TestCase):
             self.assertEqual(json.loads(publish.call_args.args[0].data)['full_response_adc'],126.2)
             self.assertIsNotNone(self.command('detector_calibrate',action='zero'))
 
-    def test_typed_cycle_state_blocks_both_input_paths_and_watchdog(self):
+    def test_browser_and_ros_joy_drive_through_payload_activity(self):
         from peaceofmine_interfaces.msg import ActuatorStatus
         self.arm()
-        self.node._probe_state_cb(ActuatorStatus(probe_cycle_active=True))
-        self.assertTrue(self.node._probe_state['probe']['cycle_active'])
-        self.assertIsNotNone(self.command('drive', linear_x=.4, deadman=True))
+        self.node._probe_state_cb(ActuatorStatus(probe_cycle_active=True, depth_mm=40.))
+        self.node._pump_active = True
+        self.assertIsNone(self.command('drive', linear_x=.4, deadman=True))
+        self.output.assert_called_with(.4, 0.)
         self.node._joy_cb(Joy(axes=[0., 0., 1., 0., 0., -1.], buttons=[0]*11))
-        self.node._deadman = True
-        self.node._command = (.4, 0.)
-        self.node._last_command = 100.
-        self.node._stop_until = 100.5
+        self.output.assert_called_with(.8, 0.)
         self.node._emit_cmd_vel()
-        self.output.assert_called_with(0., 0.)
-        self.assertFalse(self.node._deadman)
+        self.output.assert_called_with(.8, 0.)
+        self.assertTrue(self.node.snapshot()['drive']['publishing'])
 
     def test_mark_is_independent_of_odometry_and_probe_setup_but_rc_still_stops_it(self):
         from test_rc_safety import rc, state
@@ -135,7 +133,7 @@ class TeleopTest(unittest.TestCase):
     def test_servo_commands_work_in_rc_override_while_drive_is_blocked(self):
         from mavros_msgs.msg import State, RCIn
         self.node._rc_safety.simulation = False
-        message = State(connected=True, armed=False, system_status=4)
+        message = State(connected=True, armed=True, system_status=4)
         message.header.stamp.sec = 100
         self.node._state_cb(message)
         remote = RCIn(channels=[1700, 1800, 1500, 1500, 1500], rssi=100)
@@ -248,7 +246,7 @@ class TeleopTest(unittest.TestCase):
                 self.assertIs(command['enabled'],reverse)
                 self.assertEqual(command['action'],'configure_direction')
 
-    def test_confirmation_uses_arm_without_probe_setup_and_blocks_driving(self):
+    def test_deliberate_drive_cancels_confirmation_and_neutral_input_preserves_it(self):
         from unittest.mock import Mock
         self.command('take_control')
         self.node._arm_state=dict(connected=True,torque=False,calibration=dict(minimum=1000,center=1500,maximum=2000))
@@ -259,9 +257,11 @@ class TeleopTest(unittest.TestCase):
         self.node._inspection_clients={'arm':Mock(),'probe':Mock()}
         self.assertIsNone(self.command('inspection',action='confirm'))
         self.assertTrue(self.node._inspection.active)
-        self.assertTrue(self.node._payload_blocks_drive())
-        self.assertIsNotNone(self.command('drive',linear_x=.5,deadman=True))
-        self.assertIsNone(self.command('inspection',action='stop'))
+        self.assertIsNone(self.command('drive', linear_x=0., deadman=True))
+        self.assertTrue(self.node._inspection.active)
+        self.assertIsNone(self.command('drive', linear_x=.5, deadman=True))
+        self.output.assert_called_with(.5, 0.)
+        self.assertEqual(self.node._inspection.phase, 'STOPPED')
         self.assertFalse(self.node._inspection.active)
         self.assertEqual(self.node._lease,self.owner)
 
@@ -320,8 +320,9 @@ class TeleopTest(unittest.TestCase):
         self.assertEqual(self.node._command, (-.2, 0.))
 
     def test_rc_source_requires_owner_presence_and_new_valid_samples(self):
-        from test_rc_safety import rc
+        from test_rc_safety import rc, state
         self.node._rc_safety.simulation = False
+        self.node._state_cb(state())
         self.node._drive_settings_cb(String(data=json.dumps(dict(
             driving=dict(input='rc', forward_percent=40, reverse_percent=20)))))
         stamp = 100
@@ -338,8 +339,13 @@ class TeleopTest(unittest.TestCase):
         self.command('take_control')
         sample()
         self.assertFalse(self.node.snapshot()['drive']['publishing'])
+        self.node._probe_state = {'probe': {'cycle_active': True, 'depth_mm': 23.}}
+        self.node._pump_active = True
+        self.node._inspection.confirm(-45., 45., 30.)
         self.command('rc_drive_enable', enabled=True)
+        self.assertTrue(self.node._inspection.active)
         msg = sample()
+        self.assertFalse(self.node._inspection.active)
         self.output.assert_called_with(-.4, -.7)
         self.assertEqual(self.node.snapshot()['drive']['command_source'], 'rc')
         self.assertIsNotNone(self.command('drive', deadman=False))

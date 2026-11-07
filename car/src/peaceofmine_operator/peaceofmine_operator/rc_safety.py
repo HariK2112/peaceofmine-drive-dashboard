@@ -28,7 +28,10 @@ class RcSafety:
         if not message.connected:
             self.samples.clear()
             return
-        self._update('state', message)
+        previous = self.samples.get('state')
+        if not self._update('state', message) and previous and not message.armed and 'state' in self.samples:
+            # Disarm even on a repeated stamp; retain its original expiry.
+            self.samples['state'] = (previous[0], message, previous[2])
 
     def update_rc(self, message):
         return self._update('rc', message)
@@ -45,6 +48,9 @@ class RcSafety:
     def servo_snapshot(self):
         if self.simulation:
             return dict(allowed=True, reason='Simulation interlock')
+        armed = self.px4_armed()
+        if armed is not True:
+            return dict(allowed=False, reason='PX4 is disarmed' if armed is False else 'PX4 arming state missing or stale')
         rc_sample = self.samples.get('rc')
         if rc_sample is None or self.clock() - rc_sample[0] > self.TIMEOUTS['rc']:
             return dict(allowed=False, reason='RC input missing or stale')
@@ -75,7 +81,8 @@ class RcSafety:
             return dict(mode='simulation', allowed=True, servo_allowed=True, reason='Simulation interlock', simulated=True)
         def result(mode, reason, allowed=False):
             servo = self.servo_snapshot()
-            return dict(mode=mode, reason=reason, allowed=allowed, simulated=False,
+            return dict(mode=mode, reason=servo['reason'] if allowed and not servo['allowed'] else reason,
+                        allowed=allowed and servo['allowed'], simulated=False,
                         servo_allowed=servo['allowed'], servo_reason=servo['reason'])
         now = self.clock()
         rc_sample = self.samples.get('rc')

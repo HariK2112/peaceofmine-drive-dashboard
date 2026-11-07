@@ -10,7 +10,7 @@ const DRIVE_MIN_INTERVAL_MS = 8;
 const PAD_UI_PERIOD_MS = 0; // Input graphics follow requestAnimationFrame.
 const LATENCY_PERIOD_MS = 1000;
 const LATENCY_HISTORY_LENGTH = 30;
-const GATEWAY_TIMEOUT_MS = 3000;
+const GATEWAY_TIMEOUT_MS = 8000;
 const TELEMETRY_TIMEOUT_MS = 3000;
 const MAX_LINEAR_MPS = 0.8;
 const MAX_ANGULAR_RAD_S = 1.4;
@@ -262,7 +262,7 @@ function sendDrive(linear, angular, deadman) {
   );
 }
 
-function setConnection(connected, label, detail = '') {
+function setConnection(connected, label, detail = '', overlay = !connected) {
   state.connected = connected;
   if (!connected) {
     motionFrames.length = 0;
@@ -272,7 +272,7 @@ function setConnection(connected, label, detail = '') {
   }
   $('connection').textContent = label;
   $('connection-dot').style.background = connected ? '#37b98e' : '#d36458';
-  $('connection-overlay').classList.toggle('hidden', connected);
+  $('connection-overlay').classList.toggle('hidden', !overlay);
   $('connection-title').textContent = connected ? 'Connected' : label;
   $('connection-detail').textContent = detail || 'Waiting for the Raspberry Pi gateway. This page will reconnect automatically.';
   updateHud();
@@ -325,8 +325,40 @@ function controlUnavailable() {
   state.drive.cmd_linear_x = state.drive.cmd_angular_z = 0;
   pendingPumpMark = null;
   clearHeldInput();
-  setConnection(false, 'Control node unavailable', 'Raspberry Pi gateway linked. ROS control telemetry is missing; controls will recover automatically when telemetry returns.');
+  setConnection(false, 'Waiting for control telemetry', 'The gateway is linked. Controls recover when ROS telemetry returns.', !lastTelemetryAt);
 }
+
+let historyStream = null;
+let historyCursor = 0;
+let historyTime = 0;
+let historyRequest = false;
+let detectorPoints = [];
+async function refreshDetectorHistory() {
+  const stream = state.detector?.sensor?.history_stream;
+  if (!state.connected || !stream || historyRequest || document.hidden) return;
+  historyRequest = true;
+  try {
+    const query = new URLSearchParams({stream, after:String(stream === historyStream ? historyCursor : 0)});
+    const response = await fetch('/api/detector-history?' + query, {cache:'no-store', signal:AbortSignal.timeout(5000)});
+    if (!response.ok) return;
+    const batch = await response.json();
+    if (batch.stream !== stream || state.detector?.sensor?.history_stream !== stream) return;
+    if (stream !== historyStream) { detectorPoints = []; historyCursor = 0; historyStream = stream; }
+    const elapsed = batch.now - historyTime;
+    detectorPoints = detectorPoints.filter(p => p.age_s + elapsed <= 120);
+    for (const point of detectorPoints) point.age_s += elapsed;
+    for (const [stamp, adc, filtered_adc] of batch.points) {
+      detectorPoints.push({age_s:batch.now-stamp, adc, filtered_adc});
+      historyCursor = stamp;
+    }
+    historyTime = batch.now;
+    state.detector.sensor.history = detectorPoints;
+    detectorHistoryAt = performance.now();
+  } catch { /* The next poll resumes from the same cursor. */ }
+  finally { historyRequest = false; }
+}
+
+setInterval(refreshDetectorHistory, 400);
 
 function connect() {
   clearTimeout(reconnectTimer);
@@ -372,7 +404,7 @@ function connect() {
     if (!message || typeof message !== 'object' || typeof message.type !== 'string') return;
     lastServerMessageAt = performance.now();
     if (message.type === 'control_status' && message.available === false) {
-      controlUnavailable();
+      if (!lastTelemetryAt || performance.now()-lastTelemetryAt >= 1000) controlUnavailable();
       return;
     }
     if (message.type === 'latency_pong') {
@@ -698,7 +730,7 @@ function operationBlock(allowManualTarget = false) {
   if (!state.connected) return 'Connect to the operator stack.';
   if (!state.drive.you_control_owner) return 'Take control first.';
   if (!state.safety?.servo_allowed || !state.drive.armed) return state.safety?.servo_reason || 'RC must permit servo motion.';
-  if (state.drive.calibrating) return 'Close Setup before operating.';
+  if (state.drive.calibrating) return 'Finish actuator calibration before operating.';
   if (state.inspection?.active) return 'A scan is running. Stop it first.';
   if (state.probe.cycle_active) return 'Probe cycle is running. Stop probe to cancel.';
   if (!allowManualTarget && (state.probe.active || state.probe.holding)) return 'Stop probe before starting another action.';
@@ -716,7 +748,7 @@ function probeActionBlock(allowManualTarget = false) {
 
 function pumpAuthorityBlock() {
   if (!state.marking?.settings) return 'Waiting for marking settings from the car.';
-  if (!state.safety?.allowed) return 'Set the physical RC to ROS mode.';
+  if (!state.safety?.servo_allowed) return state.safety?.servo_reason || 'Waiting for RC and PX4 arming state.';
   if (state.safety.mode !== 'simulation' && state.drive.px4_armed !== true) return 'Arm PX4 to operate the pump.';
   return '';
 }
@@ -925,7 +957,7 @@ function renderInspection() {
     inspectionTaskKey = taskKey;
   }
   const progress = $('inspection-progress');
-  progress.hidden = total === 0;
+  progress.hidden = total === 0 || ['ERROR', 'STOPPED'].includes(phase);
   progress.max = total || 1;
   if (inspection.active && phase === 'CONFIRMING' && !Number.isFinite(inspection.progress)) {
     progress.removeAttribute('value');
@@ -986,6 +1018,11 @@ function updateHud() {
   setText(px4Badge, known ? (px4Armed ? 'PX4 ARMED' : 'PX4 DISARMED') : simulated ? 'PX4 N/A' : unknown);
   px4Badge.className = `badge ${known ? (px4Armed ? 'active' : 'neutral') : simulated ? 'neutral' : 'warn'}`;
   px4Badge.title = known ? 'Vehicle arming reported by MAVROS' : simulated ? 'Simulation has no PX4 arming telemetry' : 'Vehicle arming telemetry is missing or stale';
+  for (const [setupId, badge] of [['setup-arming', px4Badge], ['setup-owner', $('control-owner')]]) {
+    const copy = $(setupId);
+    setText(copy, badge.textContent);
+    copy.className = badge.className;
+  }
   const canConfigureDrive = owner && !!state.settings?.driving && !drivingPending;
   for (const id of ['drive-control-source', 'keyboard-max-throttle', 'keyboard-reverse-throttle'])
     $(id).disabled = !canConfigureDrive;
@@ -1033,11 +1070,16 @@ function updateHud() {
   $('mode-probe-pill').textContent = state.inspection.phase === 'PROBING' ? 'RUNNING' : scanBlock ? 'BLOCKED' : '5° STEPS';
   renderInspection();
   const inspectionStatus = state.inspection.phase !== 'IDLE';
+  const scanStatus = $('inspection-status');
+  scanStatus.hidden = !inspectionStatus;
   if (inspectionStatus) {
-    const generalBlock = state.inspection.active && owner && servoSafe && !drive.calibrating ? '' : otherActionBlock;
-    $('operation-help').textContent = [$('inspection-status').textContent, generalBlock].filter(Boolean).join(' ');
+    if (['ERROR', 'STOPPED'].includes(state.inspection.phase)) {
+      scanStatus.textContent = 'Last inspection: ' + scanStatus.textContent;
+    }
+    $('operation-help').hidden = !otherActionBlock || (state.inspection.active && owner && servoSafe && !drive.calibrating);
+  } else {
+    $('operation-help').hidden = false;
   }
-  $('inspection-status').hidden = true;
   $('inspection-panel').hidden = !inspectionStatus;
   const depthInput = $('probe-cycle-target');
   depthInput.max = Number.isFinite(probe.max_depth_mm) && probe.max_depth_mm > 0 ? probe.max_depth_mm : 0;
@@ -1110,7 +1152,9 @@ function updateHud() {
   $('probe-status').title = probe.reason || '';
   $('probe-status').className = `badge ${probe.fault || (probe.cycle_active && probe.contact_detected) ? 'active' : probe.cycle_active ? 'active' : probe.depth_mm > 2 ? 'safe' : 'neutral'}`;
 
-  $('arm-state').textContent = state.safety?.mode === 'override' ? 'RC CONTROL' : !owner ? 'SPECTATOR' : safe ? (drive.publishing ? 'ROS CONTROL' : 'READY') : 'RC LOCKED';
+  const driveBadge = !state.connected ? 'OFFLINE' : state.safety?.mode === 'override' ? (state.safety.servo_allowed ? 'RC CONTROL' : 'DRIVE LOCKED')
+    : !owner ? 'SPECTATOR' : !safe ? 'DRIVE LOCKED' : drive.calibrating ? 'CALIBRATING' : drive.publishing ? 'ROS CONTROL' : 'READY';
+  $('arm-state').textContent = driveBadge;
   $('arm-state').className = `badge ${owner && drive.armed ? 'active' : 'neutral'}`;
 
   const heading = ((robot.yaw * 180 / Math.PI % 360) + 360) % 360;
@@ -1158,9 +1202,14 @@ function rosJoyLive() {
 }
 
 function driveBlockMessage() {
-  if (state.connected && state.safety?.mode === 'override') return {text: state.drive.rc?.fresh ? 'Remote control active' : 'RC input stale', kind: state.drive.rc?.fresh ? 'ready' : 'blocked'};
+  if (state.connected && state.safety?.mode === 'override') {
+    if (!state.safety.servo_allowed) return {text: state.safety.servo_reason || 'Waiting for PX4 arming state.', kind: 'blocked'};
+    return {text: state.drive.rc?.fresh ? 'Physical RC controls the vehicle.' : 'RC input stale', kind: state.drive.rc?.fresh ? 'ready' : 'blocked'};
+  }
   if (!state.connected) return {text: 'Waiting for vehicle telemetry.', kind: 'blocked'};
   if (!state.drive.you_control_owner) return {text: 'You are watching. Take control to drive.', kind: 'blocked'};
+  if (!state.safety?.allowed) return {text: state.safety?.reason || 'Waiting for PX4 safety status', kind: 'blocked'};
+  if (state.drive.calibrating) return {text: 'Actuator calibration is active. Finish calibration to drive.', kind: 'blocked'};
   const padReady = Boolean(gamepad) || rosJoyLive();
   if (preferences.input === 'controller' && gamepadApiBlocked() && !rosJoyLive()) {
     return {
@@ -1174,12 +1223,8 @@ function driveBlockMessage() {
   if (preferences.input === 'controller' && !padReady) {
     return {text: 'No gamepad found. Plug it into this laptop or the car, then press a button.', kind: 'blocked'};
   }
-  if (!state.safety?.allowed) return {text: state.safety?.reason || 'Waiting for PX4 safety status', kind: 'blocked'};
-  if (state.inspection?.active) return {text: 'A scan is running. Stop it before driving.', kind: 'blocked'};
-  if (state.probe.cycle_active || state.probe.depth_mm > 2) return {text: 'Retract the probe before driving.', kind: 'blocked'};
-  if (state.pump_active || state.drive.pump_active) return {text: 'Wait for the marking pump to stop.', kind: 'blocked'};
   if (preferences.input === 'rc' && !state.drive.rc?.fresh) return {text: 'Waiting for fresh RC steering and throttle.', kind: 'blocked'};
-  if (!state.drive.publishing) return {text: 'Ready to drive.', kind: 'ready'};
+  if (!state.drive.publishing) return {text: state.inspection?.active ? 'Driving will stop the current scan.' : 'Ready to drive.', kind: 'ready'};
   return {
     text: `ROS cmd_vel ${state.drive.cmd_linear_x.toFixed(2)} m/s · ${state.drive.cmd_angular_z.toFixed(2)} rad/s`,
     kind: 'ready',
@@ -1517,7 +1562,7 @@ function inputLoop() {
 
   renderInputs(pads, lastInput);
   const canDrive = state.connected && state.drive.armed && state.safety?.allowed && state.drive.you_control_owner
-    && !$('settings-dialog').open && !state.inspection?.active && !document.hidden && document.hasFocus();
+    && !state.drive.calibrating && !document.hidden && document.hasFocus();
   if (!canDrive) resetKeyboardRamp(now);
   if (preferences.input === 'rc') {
     const enabled = canDrive && !drivingPending && state.drive.input === 'rc' && state.drive.rc?.fresh;
@@ -1526,8 +1571,7 @@ function inputLoop() {
       lastRcEnable = now;
     } else if (!enabled) stopRcInput();
   }
-  // Opening Settings already sends a stop. Do not flood calibration with rejected drive commands.
-  if (preferences.input !== 'rc' && !drivingPending && !$('settings-dialog').open) sendDriveIfNeeded(canDrive && lastInput.deadman ? lastInput : {linear: 0, angular: 0, deadman: false}, now);
+  if (preferences.input !== 'rc' && !drivingPending && !state.drive.calibrating) sendDriveIfNeeded(canDrive && lastInput.deadman ? lastInput : {linear: 0, angular: 0, deadman: false}, now);
 
   if (now - lastPadUi >= PAD_UI_PERIOD_MS) {
     lastPadUi = now;
@@ -1651,7 +1695,7 @@ $('search-alert-dismiss').onclick = event => {
 };
 
 $('settings').onclick = () => {
-  stopInput(true);
+  if (preferences.input === 'keyboard') releaseKeyboardCapture();
   $('settings-dialog').showModal();
 };
 $('offline-settings').onclick = $('settings').onclick;
@@ -2256,12 +2300,11 @@ function stopRcInput() {
   lastRcEnable = -Infinity;
 }
 
-function stopInput(forCalibration = false) {
+function stopInput() {
   stopRcInput();
   releaseKeyboardCapture();
   if (state.drive.you_control_owner) {
     sendDrive(0, 0, false);
-    if (forCalibration === true) send({type: 'calibration_begin'});
   }
 }
 
@@ -2692,6 +2735,28 @@ function recordDetectorAngle(now) {
   while (detectorAngles.length && now - detectorAngles[0].at > 30000) detectorAngles.shift();
 }
 
+// Use the receiver's full two-minute history to scale the visible trace.
+const SIGNAL_LOOKBACK_S = 120;
+const DETECTOR_MIN_SPAN_ADC = 2.55; // One percent of the detector input span.
+
+function signalBounds(low, high, minSpan, domainLow = -Infinity, domainHigh = Infinity) {
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return {};
+  const span = Math.min(domainHigh - domainLow, Math.max(minSpan, 1.2 * (high - low)));
+  const min = Math.min(domainHigh - span, Math.max(domainLow, (high + low - span) / 2));
+  return {min, max: min + span};
+}
+
+function detectorAxis(sensor, elapsed, factor = 1) {
+  let low = Infinity, high = -Infinity;
+  for (const sample of sensor.history || []) {
+    if (sample.age_s + elapsed > SIGNAL_LOOKBACK_S || !Number.isFinite(sample.filtered_adc)) continue;
+    low = Math.min(low, sample.filtered_adc * factor);
+    high = Math.max(high, sample.filtered_adc * factor);
+  }
+  const full = 255 * factor;
+  return Number.isFinite(low) ? signalBounds(low, high, DETECTOR_MIN_SPAN_ADC * factor, 0, full) : {min: 0, max: full};
+}
+
 function drawDetectorHistory(now = performance.now(), animate = false) {
   if (!$('detector-history').getClientRects().length) return;
   if (animate && detectorChart && scrollTimeChart(detectorChart, now)) return;
@@ -2712,9 +2777,9 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
       }},
   });
   detectorChart.data.datasets[0].data = samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc * reference / 255}));
-  // keep the alert line in view so the operator sees how close the signal is
-  const alertVolts = preferences.searchAlert.enabled ? searchAlertVolts() : NaN;
-  detectorChart.options.scales.y.suggestedMax = Number.isFinite(alertVolts) ? alertVolts * 1.04 : undefined;
+  if (Number.isFinite(reference) && reference > 0) {
+    Object.assign(detectorChart.options.scales.y, detectorAxis(sensor, elapsed, reference / 255));
+  }
   detectorChart.$scrollPixels = 0;
   detectorChart.$renderedAt = now;
   detectorChart.update('none');
@@ -2755,6 +2820,7 @@ function drawDetectorDiagnostics(now = performance.now(), animate = false) {
   for (const [index, value] of [[2, zero], [3, trigger]]) {
     detectorDiagnosticsChart.data.datasets[index].data = Number.isFinite(value) ? [{x: -30, y: value}, {x: 0, y: value}] : [];
   }
+  Object.assign(detectorDiagnosticsChart.options.scales.adc, detectorAxis(sensor, elapsed));
   window.operatorADCOverlay?.(detectorDiagnosticsChart, 'detector', 4);
   detectorDiagnosticsChart.$scrollPixels = 0;
   detectorDiagnosticsChart.$renderedAt = now;
@@ -2774,14 +2840,8 @@ function drawMetalHistory(animate = false) {
   const values = samples.map(sample => sample.filtered_adc * reference / 255).filter(Number.isFinite);
   const baseline = sensor.baseline_adc * reference / 255;
   const trigger = baseline + (sensor.full_response_adc * reference / 255 - baseline) * state.detector.threshold_ratio;
-  const plotValues = [...values, baseline, trigger, preferences.searchAlert.enabled ? searchAlertVolts() : NaN].filter(Number.isFinite);
-  let low = 0, high = reference;
-  if ($('metal-autoscale').checked && plotValues.length) {
-    const minimum = Math.min(...plotValues), maximum = Math.max(...plotValues);
-    const padding = Math.max(0.001, (maximum - minimum) * 0.1);
-    low = Math.max(0, minimum - padding);
-    high = Math.min(reference, maximum + padding);
-  }
+  const {min: low, max: high} = $('metal-autoscale').checked
+    ? detectorAxis(sensor, elapsed, reference / 255) : {min: 0, max: reference};
   if (!metalChart) {
     metalChart = new Chart(canvas, {
       type: 'line',
@@ -2811,7 +2871,7 @@ function drawMetalHistory(animate = false) {
     });
   }
   metalChart.data.datasets[0].data = samples.map(sample => ({x: -sample.age_s - elapsed, y: sample.filtered_adc * reference / 255}));
-  metalChart.data.datasets[1].data = Number.isFinite(baseline) && baseline >= low && baseline <= high
+  metalChart.data.datasets[1].data = Number.isFinite(baseline)
     ? [{x: -seconds, y: baseline}, {x: 0, y: baseline}] : [];
   metalChart.data.datasets[2].data = Number.isFinite(trigger)
     ? [{x: -seconds, y: trigger}, {x: 0, y: trigger}] : [];
@@ -3000,7 +3060,7 @@ function renderInputs(pads, target) {
     deadman: false,
   } : target;
   $('steering-preview').setAttribute('transform', `rotate(${-preview.angular / MAX_ANGULAR_RAD_S * 100} 80 80)`);
-  $('mapped-input').textContent = `Forward / reverse: ${preview.linear.toFixed(3)} m/s\nSteering: ${preview.angular.toFixed(3)} rad/s\nDeadman: ${preview.deadman ? 'HELD' : 'released'}\nDrive output: paused while Setup is open`;
+  $('mapped-input').textContent = `Forward / reverse: ${preview.linear.toFixed(3)} m/s\nSteering: ${preview.angular.toFixed(3)} rad/s\nDeadman: ${preview.deadman ? 'HELD' : 'released'}\nDrive output: ${state.drive.publishing ? `${state.drive.cmd_linear_x.toFixed(2)} m/s · ${state.drive.cmd_angular_z.toFixed(2)} rad/s` : driveBlockMessage().text}`;
   const axes = keyboard ? [] : gamepad?.axes ?? [];
   const buttons = keyboard ? [] : gamepad?.buttons ?? [];
   const axisRows = $('raw-axes'), buttonRows = $('raw-buttons');

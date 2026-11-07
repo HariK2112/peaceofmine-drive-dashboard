@@ -1,4 +1,4 @@
-"""Shared settings for the PMB3 misc1 marking output."""
+"""Shared settings for the PMB3 misc0 marking output."""
 import math
 
 DEFAULTS = dict(duration_s=2.0, idle_percent=0.0, active_percent=100.0, manual_percent=0.0)

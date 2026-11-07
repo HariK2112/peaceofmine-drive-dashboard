@@ -7,6 +7,7 @@ from svea_core import rosonic as rx
 from svea_core.interfaces import ActuationInterface
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32
+from mavros_msgs.msg import State
 
 
 class twist_consumer(rx.Node):
@@ -26,6 +27,7 @@ class twist_consumer(rx.Node):
     cmd_timeout  = rx.Parameter(0.6)     # [s]
     use_difflock = rx.Parameter(True)
     pump_top     = rx.Parameter('actuation/pump_percent')
+    require_px4_armed = rx.Parameter(False)
 
     actuation = ActuationInterface()
 
@@ -33,6 +35,8 @@ class twist_consumer(rx.Node):
     _steering = 0.0
     _last_msg = None
     _pump_until = None
+    _armed_until = 0.
+    _state_stamp = 0
 
     def on_startup(self):
         if self.twist_type not in ("geometry_msgs/msg/Twist",
@@ -56,15 +60,32 @@ class twist_consumer(rx.Node):
         return max(-self.max_steering, min(self.max_steering, delta))
 
     def on_shutdown(self):
-        self.actuation.send_xtr(xtr2=0.0)
+        self.actuation.send_xtr(xtr1=0.0)
         self.actuation.send_control(0.0, 0.0)
         self.actuation.loop()  # Publish neutral before ROS publishers are destroyed.
+
+    @rx.Subscriber(State, 'mavros/state')
+    def state_cb(self, msg):
+        if not self.require_px4_armed:
+            return
+        stamp = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        if msg.connected and msg.armed and stamp > self._state_stamp:
+            self._armed_until = time.monotonic() + 3.
+        elif not msg.connected or not msg.armed or stamp < self._state_stamp:
+            self._armed_until = 0.
+            self._velocity = self._steering = 0.
+            self._pump_until = None
+            self.actuation.send_xtr(xtr1=0.)
+            self.actuation.send_control(0., 0.)
+        self._state_stamp = stamp if msg.connected else 0
 
     @rx.Subscriber(Float32, pump_top)
     def pump_cb(self, msg: Float32):
         percent = msg.data if math.isfinite(msg.data) and 0 <= msg.data <= 100 else 0.
+        if self.require_px4_armed and time.monotonic() >= self._armed_until:
+            percent = 0.
         self._pump_until = time.monotonic() + 0.25
-        self.actuation.send_xtr(xtr2=percent)
+        self.actuation.send_xtr(xtr1=percent)
 
     @rx.Subscriber(twist_type, twist_top)
     def twist_cb(self, msg):
@@ -80,9 +101,13 @@ class twist_consumer(rx.Node):
 
     @rx.Timer(0.1)
     def loop(self):
-        if self._pump_until is not None and time.monotonic() >= self._pump_until:
+        now = time.monotonic()
+        if self.require_px4_armed and now >= self._armed_until:
+            self._velocity = self._steering = 0.
+            self._pump_until = 0.
+        if self._pump_until is not None and now >= self._pump_until:
             self._pump_until = None
-            self.actuation.send_xtr(xtr2=0.0)
+            self.actuation.send_xtr(xtr1=0.0)
         age = (self.get_clock().now() - self._last_msg).nanoseconds * 1e-9
         if age > self.cmd_timeout:
             self._velocity = 0.0

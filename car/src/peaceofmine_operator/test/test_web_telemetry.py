@@ -40,6 +40,20 @@ class BridgeTest(unittest.TestCase):
         self.bridge._cameras_at = self.bridge._power_at = self.bridge._settings_at = self.now
         self.bridge._settings = {}
 
+    def test_history_reconnects_by_cursor_and_stays_out_of_control_frames(self):
+        from collections import deque
+        self.bridge._detector_history = deque()
+        self.bridge._history_stream = None
+        for points in ([[99., 1., 1.]], [[99., 1., 1.], [99.5, 2., 1.5]]):
+            self.bridge._detector_state(dict(detector=dict(sensor=dict(history_stream='adc1', recent_points=points))))
+        self.assertEqual(len(self.bridge.detector_history('', 0)['points']), 2)
+        self.assertEqual(self.bridge.detector_history('adc1', 99.)['points'], [[99.5, 2., 1.5]])
+        sensor = self.bridge.snapshot(True)['detector']['sensor']
+        self.assertNotIn('recent_points', sensor)
+        self.assertNotIn('history', sensor)
+        self.bridge._detector_state(dict(detector=dict(sensor=dict(history_stream='adc2', recent_points=[]))))
+        self.assertEqual(self.bridge.detector_history('adc1', 99.)['points'], [])
+
     def test_fast_state_omits_history_without_copying_or_mutating_it(self):
         class NoCopy(list):
             def __deepcopy__(self, memo):

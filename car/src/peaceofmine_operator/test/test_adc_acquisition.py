@@ -109,16 +109,24 @@ class OperatorADCTest(unittest.TestCase):
             finally:
                 adc.close()
 
-    def test_plot_routing_does_not_control_trigger_source(self):
+    def test_legacy_conflicts_preserve_physical_trigger_and_detector_routes(self):
         with tempfile.TemporaryDirectory() as tmp:
             adc = OperatorADC(Path(tmp)/'adc.json', demo=True)
             try:
                 state = adc.snapshot()
                 settings = {k:state[k] for k in ('config','routes','probe_trigger')}
                 settings['probe_trigger'].update(enabled=True,level=.5)
-                settings['routes'][5]='detector'
+                settings['routes'][4]='detector'
+                settings['routes'][5]='probe'
                 adc.command(dict(action='settings',settings=settings))
                 self.assertTrue(adc.probe_trigger['enabled'])
+                self.assertEqual(adc.probe_trigger['mux'], 4)
+                self.assertEqual(adc.routes[4:7], ['both', 'none', 'detector'])
+                del settings['probe_trigger']
+                _, routes, trigger = OperatorADC.validate(settings)
+                self.assertEqual(trigger['mux'], 5)
+                self.assertFalse(trigger['enabled'])
+                self.assertEqual(routes[4:7], ['detector', 'probe', 'detector'])
             finally:
                 adc.close()
 

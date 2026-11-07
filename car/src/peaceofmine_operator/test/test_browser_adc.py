@@ -42,6 +42,7 @@ $('settings').click(); document.querySelector('[data-settings-tab="adc"]').click
 await window.nextPoll();
 assert($('adc-status').textContent.includes('DEMO'), 'demo is explicit: '+$('adc-status').textContent+' '+$('adc-error').textContent);
 assert(document.querySelectorAll('[data-adc-channel]').length === 8, 'all mux inputs');
+assert(!document.querySelector('[data-adc-channel] select') && $('settings-contact').contains($('adc-trigger-mux')) && $('settings-detector').contains($('metal-adc-input')), 'sensor tabs own their assignments');
 assert($('adc-trigger-mux').value==='4', 'default probe trigger uses A0');
 assert($('adc-readings').textContent.includes('Live'), 'live readings');
 const draftField=document.querySelector('[data-adc-field="rate"]');
@@ -57,6 +58,8 @@ assert(probePressureChart.data.datasets.at(-1).label.includes('A0'), 'A0 probe t
 assert(probePressureChart.data.datasets.at(-1).data[0].y===3, 'scaled probe value');
 assert(detectorDiagnosticsChart.data.datasets.at(-1).label.includes('A2'), 'A2 detector trace');
 assert(detectorDiagnosticsChart.data.datasets.at(-1).data[0].y===2, 'scaled detector value');
+const routedAxis=detectorDiagnosticsChart.scales.ads1115;
+assert(routedAxis.min>1.9 && routedAxis.max<2.1 && routedAxis.max-routedAxis.min>.03,'routed detector axis fits its measured signal with a noise floor');
 adcResponse={...adcResponse,revision:2,applied:2,routes:['none','none','none','none','both','none','none','none'],sequence:3,
  samples:[{seq:3,time:100,mux:4,raw:300,volts:.3,scaled:7,filtered_scaled:7,filtered_volts:.3,clipped:true}]};
 await window.nextPoll(); drawPressureHistory(); drawDetectorDiagnostics(2000);
@@ -87,6 +90,12 @@ assert($('adc-readings').textContent.includes('9.0000'),'ADC readings retain raw
 adcResponse={...adcResponse,now:101,sequence:5,samples:[{seq:5,time:101,mux:4,raw:500,volts:.5,scaled:4,filtered_scaled:4,filtered_volts:.5,clipped:false}]};
 await window.nextPoll();drawDetectorDiagnostics(2200);
 assert(detectorDiagnosticsChart.data.datasets.at(-1).data.at(-1).y===4,'detector filter resets after sensor gap');
+document.querySelector('[data-settings-tab="contact"]').click();
+await window.nextPoll();
+const contactChart = Chart.getChart('contact-history');
+assert(contactChart, 'contact chart created: '+JSON.stringify({open:$('settings-dialog').open,hidden:$('settings-contact').hidden,error:$('adc-error').textContent,canvases:Object.values(Chart.instances).map(c=>c.canvas?.id)}));
+assert(contactChart.data.datasets[0].label.includes('filtered V') && contactChart.data.datasets[0].data.at(-1).y === .5, 'calibration plots car-filtered voltage on selected input');
+assert(contactChart.data.datasets.at(-1).data.at(-1).y === 6, 'calibration charts voltage threshold');
 $('probe-contact-volts').value='0.22';$('probe-contact-volts').dispatchEvent(new Event('input'));
 $('probe-contact-direction').value='below';$('probe-contact-direction').dispatchEvent(new Event('change'));
 await window.nextPoll();
@@ -112,7 +121,16 @@ assert(Math.abs(sent.at(-1).settings.probe_trigger.level-.54)<1e-10 && sent.at(-
 operatorADCResult({ok:false,message:'Save failed'});
 assert(Number($('probe-contact-volts').value)===.23 && $('probe-contact-feedback').textContent.includes('Save failed') && operatorContactBlock().includes('Save'),'failed contact save retains draft and blocks unsaved probing');
 
-assert(!$('adc-trigger-level') && !$('adc-trigger-direction'),'ADC settings do not duplicate main contact editors');
+$('contact-revert').click();
+assert(!$('settings-adc').contains($('adc-trigger-enabled')) && !$('probe-task').contains($('probe-contact-direction')),'contact editors have one owner');
+$('adc-trigger-mux').value='6'; $('adc-trigger-mux').dispatchEvent(new Event('change')); $('probe-contact-save').click();
+assert(sent.at(-1).settings.probe_trigger.mux===6 && sent.at(-1).settings.routes[6]==='probe' && sent.at(-1).settings.routes[4]==='detector','changing contact input keeps detector assignment');
+operatorADCResult({ok:false,message:'Test rollback'}); $('contact-revert').click();
+document.querySelector('[data-settings-tab="detector"]').click();
+$('metal-adc-input').value='6'; $('metal-adc-input').dispatchEvent(new Event('change')); $('metal-adc-save').click();
+assert(sent.at(-1).settings.routes[6]==='detector' && sent.at(-1).settings.routes[4]==='probe' && sent.at(-1).settings.probe_trigger.mux===4,'detector input editor preserves probe assignment');
+operatorADCResult({ok:false,message:'Test rollback'});
+document.querySelector('[data-settings-tab="adc"]').click();
 const triggerBeforeApply=structuredClone(adcResponse.probe_trigger);
 $('adc-revert').click();$('adc-apply').click();
 assert(sent.at(-1).settings.probe_trigger.level===triggerBeforeApply.level && sent.at(-1).settings.probe_trigger.direction===triggerBeforeApply.direction,'advanced ADC saves preserve the canonical contact threshold: '+JSON.stringify({last:sent.at(-1),feedback:$('adc-feedback').textContent,disabled:$('adc-apply').disabled,owner:state.drive.you_control_owner,connected:state.connected}));
@@ -125,7 +143,7 @@ operatorADCResult({ok:true});
 $('adc-revert').click();$('adc-apply').click();
 assert(sent.at(-1).settings.probe_trigger.level===adcResponse.probe_trigger.level && sent.at(-1).settings.probe_trigger.direction===adcResponse.probe_trigger.direction,'revert drops imported threshold override');
 operatorADCResult({ok:true});
-$('adc-revert').click(); assert(document.querySelector('[data-adc-channel="4"] select').value==='both', 'revert loads shared settings');
+$('adc-revert').click(); assert(document.querySelector('[data-adc-channel="4"] td:last-child').textContent.includes('Metal detector + probe contact'), 'revert loads shared settings');
 state.settings={cameras:structuredClone(cameraDefaults),saved:true};
 state.settings.cameras.forward.rotation=90;
 operatorSettingsState(state.settings);

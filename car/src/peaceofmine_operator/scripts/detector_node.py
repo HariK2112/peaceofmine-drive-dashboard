@@ -154,6 +154,7 @@ class DetectorNode(Node):
             return
         if msg.session != self.adc_session:
             self.adc_session, self.adc_sequence = msg.session, -1
+            self.sensor.history.clear()
             self.adc_stamp = None
         for sample in msg.samples:
             timestamp = sample.stamp.sec + sample.stamp.nanosec / 1e9
@@ -435,11 +436,14 @@ class DetectorNode(Node):
                 amplitude_adc=int(round(self.last_raw_adc)),
                 precise_adc=self.last_raw_adc, filtered_adc=self.last_filtered_adc
             ),
-            history=self.sensor.snapshot().get('history', []),
             command_result=self.command_result, error=self.configuration_error or (None if fresh else 'No fresh ADC samples; check ADS1115 status and wiring')
         )
         if not self.use_adc:
-            sensor_info = self.sensor.snapshot()
+            sensor_info = self.sensor.snapshot(include_history=False)
+        # Overlapping batches let the gateway recover missed updates without
+        # serializing two minutes of detector history on every ROS heartbeat.
+        sensor_info['history_stream'] = f'{self.start_time}:{self.adc_session}:{self.adc_revision}:{self.baseline}:{self.full_response}:{self.reference_voltage}'
+        sensor_info['recent_points'] = self.sensor.recent_points(2.)
         peak = {**self.latest_peak, 'fresh': fresh and now-self.latest_peak['timestamp'] <= 30} if self.latest_peak else None
 
         self.publisher.publish(String(data=json.dumps(dict(detector=dict(

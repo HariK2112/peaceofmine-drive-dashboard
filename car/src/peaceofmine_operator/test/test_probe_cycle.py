@@ -306,6 +306,7 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.ctrl._enforce_safety_locked = lambda: {'allowed': True, 'servo_allowed': True}
         self.ctrl._joy_live = lambda now: False
         self.ctrl._apply_drive_locked = MagicMock()
+        self.ctrl._emit_cmd_vel = MagicMock()
 
     def test_start_probe_cycle_dispatches_when_stationary(self):
         res = self.ctrl.handle_command('client1', {'type': 'start_probe_cycle', 'depth_mm': 80.0, 'request_id': 'req1'})
@@ -319,12 +320,11 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.assertIsNone(res)
         self.ctrl._probe_command_pub.publish.assert_called_once()
 
-    def test_drive_blocked_when_probe_cycle_active(self):
+    def test_drive_applies_when_probe_cycle_active(self):
         self.ctrl._probe_state['probe']['cycle_active'] = True
         res = self.ctrl.handle_command('client1', {'type': 'drive', 'linear_x': 0.4, 'angular_z': 0.0, 'deadman': True})
-        self.assertIsNotNone(res)
-        self.assertIn('probe cycle is active', res['message'])
-        self.ctrl._apply_drive_locked.assert_not_called()
+        self.assertIsNone(res)
+        self.ctrl._apply_drive_locked.assert_called_once_with(.4, 0., True)
 
     def test_align_probe_dispatches_when_stowed(self):
         res = self.ctrl.handle_command('client1', {'type': 'align_probe', 'angle_deg': -15.0, 'request_id': 'req_align'})
@@ -372,15 +372,15 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertIn('already in progress', res['message'])
 
-    def test_drive_blocked_when_pump_active(self):
+    def test_drive_applies_when_pump_active(self):
         self.ctrl._pump_active = True
         res = self.ctrl.handle_command('client1', {'type': 'drive', 'linear_x': 0.2, 'angular_z': 0.0, 'deadman': True})
-        self.assertIsNotNone(res)
-        self.assertIn('ground marking is active', res['message'])
+        self.assertIsNone(res)
+        self.ctrl._apply_drive_locked.assert_called_once_with(.2, 0., True)
 
     def test_pump_timeout_returns_to_saved_idle(self):
         self.ctrl.handle_command('client1', dict(type='pump_mark'))
-        self.ctrl._pump_tick(self.ctrl._pump_until + .1, {'allowed': True})
+        self.ctrl._pump_tick(self.ctrl._pump_until + .1, {'allowed': True, 'servo_allowed':True})
         self.assertFalse(self.ctrl._pump_active)
         self.assertEqual(self.ctrl._pump_pub.publish.call_args.args[0].data, 7.)
 
@@ -403,6 +403,9 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.ctrl._rc_safety.px4_armed.return_value = False
         safety = dict(allowed=False, servo_allowed=True)
         self.ctrl._rc_safety.snapshot.return_value = safety
+        self.assertIsNotNone(self.ctrl.handle_command('client1', dict(type='pump_manual', action='start', percent=32.)))
+        self.assertEqual(self.ctrl._pump_output, 0.)
+        self.ctrl._rc_safety.px4_armed.return_value = True
         self.assertIsNone(self.ctrl.handle_command('client1', dict(type='pump_manual', action='start', percent=32.)))
         self.ctrl._pump_tick(time.monotonic(), safety)
         self.assertEqual(self.ctrl._pump_output, 32.)
@@ -428,13 +431,13 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.ctrl._rc_safety.simulation = False
         self.ctrl._rc_safety.px4_armed.return_value = True
         self.ctrl.handle_command('client1', dict(type='pump_mark'))
-        self.ctrl._pump_tick(time.monotonic(), {'allowed': False})
+        self.ctrl._pump_tick(time.monotonic(), {'allowed': False, 'servo_allowed':False})
         self.assertFalse(self.ctrl._pump_active)
         self.assertEqual(self.ctrl._pump_output, 0.)
         for armed in (None, False):
             self.ctrl._rc_safety.px4_armed.return_value = armed
             self.assertIn('armed PX4', self.ctrl.handle_command('client1', dict(type='pump_mark'))['message'])
-            self.ctrl._pump_tick(time.monotonic(), {'allowed': True})
+            self.ctrl._pump_tick(time.monotonic(), {'allowed': True, 'servo_allowed':True})
             self.assertEqual(self.ctrl._pump_output, 0.)
 
 

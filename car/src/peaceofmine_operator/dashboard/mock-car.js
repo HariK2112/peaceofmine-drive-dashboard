@@ -55,7 +55,7 @@
     const nearTarget = Math.exp(-((mock.pose.x - 8) ** 2) / 2);
     const filtered = 40 + 120 * nearTarget * Math.cos(angle * Math.PI / 180) ** 2 + 4 * Math.sin(t * 7);
     detectorHistory.push({at: t, adc: Math.round(filtered + 3 * Math.random()), filtered_adc: Math.round(filtered)});
-    while (detectorHistory.length && t - detectorHistory[0].at > 30) detectorHistory.shift();
+    while (detectorHistory.length && t - detectorHistory[0].at > 120) detectorHistory.shift();
     const dt = 0.1;
     mock.pose.yaw += mock.angular * dt;
     mock.pose.x += mock.linear * Math.cos(mock.pose.yaw) * dt;
@@ -83,7 +83,7 @@
           history_age_s: 0, history: detectorHistory.map(p => ({age_s: +(t - p.at).toFixed(3), adc: p.adc, filtered_adc: p.filtered_adc}))}},
       probe: {depth_mm: mock.depth, target_mm: mock.cycle ? 60 : 0, max_depth_mm: 110, pressure_ratio: mock.cycle ? 0.1 + mock.depth / 200 : 0.05,
         pressure_history: pressureHistory.slice(), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, holding: false,
-        adc_contact_state: {enabled: true, fresh: true, detected: false, value: 0.2, level: 1, direction: 'above'}},
+        adc_contact_state: mockContact()},
       power: {battery: {available: true, present: true, stale: false, power_w: 38 + 6 * Math.sin(t / 3) + mock.linear * 40,
           current_a: 3.2, voltage_v: 11.9, remaining_pct: 72, temperature_c: 31, cell_delta_v: 0.012},
         history: Array.from({length: 30}, (_, i) => ({age_s: i * 2, watts: 38 + 6 * Math.sin((t - i * 2) / 3)})),
@@ -148,7 +148,15 @@
       }
       if (m.type === 'clear_log') mock.fieldEntries.length = 0;
       if (m.type === 'log_pose') mock.fieldEntries.unshift({...mock.pose,id:crypto.randomUUID(),timestamp:Date.now()/1000,status:'POSE LOGGED'});
-      if (m.type === 'drive' && mock.owner) { mock.linear = m.deadman ? m.linear_x : 0; mock.angular = m.deadman ? m.angular_z : 0; return; }
+      if (m.type === 'drive' && mock.owner && !mock.calibrating) {
+        mock.linear = m.deadman ? m.linear_x : 0;
+        mock.angular = m.deadman ? m.angular_z : 0;
+        if ((mock.linear || mock.angular) && (mock.inspection.active || mock.inspection.confirmed_angle_deg != null)) {
+          if (mock.inspection.phase === 'PROBING') mock.cycle = false;
+          Object.assign(mock.inspection, {phase:'STOPPED', active:false, confirmed_angle_deg:null, message:'Vehicle moved. Confirm the target again before probing.'});
+        }
+        return;
+      }
       if (m.type === 'sweep_enabled') { mock.sweep = !!m.enabled; return; }
       if (m.type === 'calibration_begin' || m.type === 'calibration_end') { stopPump(); mock.calibrating = m.type === 'calibration_begin'; mock.homing = 0; return; }
       if (m.type === 'arm_servo' && m.role === 'probe' && m.action === 'home' && m.held) { mock.calibrating = true; if (++mock.homing > 15) mock.homed = true; return; }
@@ -173,6 +181,14 @@
   let routes = ['none','none','none','none','probe','none','detector','none'];
   let probeTrigger = {enabled:true, mux:4, level:1, direction:'above', hysteresis:0, debounce_ms:0};
   const adcFiltered = new Map();
+  function mockContact() {
+    const channel = adcConfig.channels[probeTrigger.mux];
+    const filtered = adcFiltered.get(probeTrigger.mux);
+    const fresh = probeTrigger.enabled && channel.enabled && Number.isFinite(filtered);
+    const value = fresh ? filtered * channel.multiplier + channel.offset : null;
+    return {...probeTrigger, fresh, value, detected:fresh
+      ? (probeTrigger.direction === 'above' ? value >= probeTrigger.level : value <= probeTrigger.level) : null};
+  }
   let adcSeq = 0, adcLast = performance.now() / 1000;
   const fieldTrail = [];
   mock.fieldFix = () => ({latitude: 59.35 + mock.pose.y / 111320, longitude: 18.07 + mock.pose.x / 56750,
@@ -211,7 +227,7 @@
       registers: {config: 0x8583}, now, sequence: adcSeq, config: adcConfig,
       routes,
       probe_trigger: probeTrigger,
-      probe_contact: {enabled: true, fresh: true, detected: false, mux: 4, value: 0.2, level: 1, direction: 'above'},
+      probe_contact: mockContact(),
       samples};
     return Promise.resolve(new Response(JSON.stringify(body), {headers: {'Content-Type': 'application/json'}}));
   };

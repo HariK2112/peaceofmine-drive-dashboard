@@ -6,6 +6,7 @@ from std_msgs.msg import Bool, Float32
 from peaceofmine_interfaces.msg import AdcSamples, ContactState
 from peaceofmine_interfaces.action import ActuatorOperation
 from peaceofmine_operator.actuator_controller import ActuatorController
+from peaceofmine_operator.adc_acquisition import contact_trigger
 from peaceofmine_operator.adc_contact import AdcContact
 from peaceofmine_operator.probe_contact import ProbeContact
 from peaceofmine_operator import configuration, probe_calibration
@@ -82,7 +83,7 @@ class ProbeController(ActuatorController):
         adc = saved.get('adc_simulation' if self.simulation else 'adc', {})
         config = adc.get('config', {})
         scan = sum(c['enabled'] for c in config.get('channels', []))/config.get('rate',128)
-        self.contact.configure(adc.get('probe_trigger', self.contact.config),
+        self.contact.configure(contact_trigger(adc),
             max(.5, config.get('interval_ms',0)/1000+3*scan))
         revision=saved.get('section_revisions',{}).get('adc_simulation' if self.simulation else 'adc',0)
         if revision != self.adc_revision:

@@ -76,6 +76,9 @@ class ADS1115Node(Node):
             if not isinstance(request_id, str) or not 1 <= len(request_id) <= 100:
                 raise ValueError('Expected request_id of 1..100 characters')
             if value.get('action') == 'settings':
+                expected = value.get('expected_adc_revision')
+                if expected is not None and expected != configuration.load(self.config_file).get('section_revisions',{}).get(self.adc.section,0):
+                    raise ValueError('ADC settings changed. Review the current inputs and retry.')
                 OperatorADC.validate(value.get('settings'))
                 def complete(ok, message):
                     if ok:

@@ -483,7 +483,13 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
 .pane-split { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
 .pane-split > .pane-section + .pane-section { margin-left: var(--pad); padding-left: var(--pad); border-left: 1px solid var(--line); }
 .pane-signal { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
-.pane-detector { grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr) minmax(12rem, 1fr); }
+.pane-detector { grid-template-columns: minmax(12rem, 22%) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: "signal trend" "actions trend"; }
+.pane-detector .detector-diagnostics-panel { grid-area: signal; }
+.pane-detector .detector-trend { grid-area: trend; }
+.pane-detector > .pane-actions { grid-area: actions; margin: var(--s2) 0 0; padding: var(--s2) 0 0; border-left: 0; border-top: 1px solid var(--line); }
+@media (min-width: 1001px) and (min-height: 601px) {
+  .workspace:where(:not(.detector-expanded)):has([data-dock-tab="detector"].active) { grid-template-rows: minmax(0, 1fr) auto clamp(20rem, 46vh, 34rem); }
+}
 .pane-probe { grid-template-columns: minmax(14rem, 1fr) minmax(0, 2fr); }
 .pane-vehicle { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); }
 
@@ -504,12 +510,13 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
 /* signal & map */
 #map-view { display: block; flex: 1 1 auto; width: 100%; min-height: 4rem; border-radius: var(--radius-sm); background: var(--bg-sunken); }
 
-#map-view[hidden], #gnss-map[hidden] { display: none; }
-#gnss-map { position: relative; isolation: isolate; flex: 1 1 auto; min-height: 5rem; width: 100%; background: var(--bg-sunken); border-radius: var(--radius-sm); }
-#gnss-map-empty { position: absolute; inset: 0; display: grid; place-items: center; }
-#gnss-map-empty[hidden] { display: none; }
-#gnss-map-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#gnss-map .leaflet-control-attribution { line-height: 1.1; }
+#map-view[hidden], .field-map[hidden] { display: none; }
+.field-map { position: relative; isolation: isolate; flex: 1 1 auto; min-height: 5rem; width: 100%; background: var(--bg-sunken); border-radius: var(--radius-sm); }
+.field-map .map-empty { position: absolute; inset: 0; display: grid; place-items: center; }
+.field-map .map-empty[hidden] { display: none; }
+#gnss-preview { min-height: clamp(12rem, 34vh, 24rem); }
+#gnss-map-status, #gnss-preview-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field-map .leaflet-control-attribution { line-height: 1.1; }
 .map-panel:has(#map-mode option[value="gnss"]:checked) .section-foot { display: none; }
 
 /* detector */
@@ -654,10 +661,6 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 .probe-cycle-input-wrap { display: flex; align-items: center; gap: var(--s1); }
 .probe-cycle-input-wrap input { width: 5rem; text-align: right; }
 .unit { color: var(--muted); font-size: var(--fs-xs); }
-.probe-contact-controls { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
-.probe-contact-controls label { display: grid; gap: var(--s1); margin: 0; color: var(--muted); font-size: var(--fs-xs); }
-.probe-contact-controls input, .probe-contact-controls select { width: 100%; min-width: 0; }
-#probe-contact-save { grid-column: 1 / -1; }
 .probe-cycle-alert { display: flex; align-items: center; gap: var(--s2); padding: var(--s2); border: 1px solid var(--danger); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-xs); }
 #probe-stop { width: 100%; }
 
@@ -679,6 +682,17 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
   .pane-split { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr) !important; }
   .pane-split > .pane-section + .pane-section { margin: var(--pad) 0 0; padding: var(--pad) 0 0; border-left: 0; border-top: 1px solid var(--line); }
   .chart-box { min-height: 10rem; }
+  .pane-detector { grid-template-areas: "trend" "signal" "actions"; grid-template-rows: auto; }
+  .pane-detector > .detector-trend { margin: 0; padding: 0; border: 0; }
+  .detector-diagnostics-chart { min-height: clamp(14rem, 38vh, 22rem); }
 }
 
 
+
+
+/* The expanded chart keeps the connection, lease and STOP controls in reach. */
+.workspace.detector-expanded { grid-template-areas: "dock"; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: calc(100dvh - 6rem); }
+.workspace.detector-expanded > :not(.dock),
+.workspace.detector-expanded .pane-detector > :not(.detector-trend) { display: none; }
+.workspace.detector-expanded .pane-detector { grid-template: "trend" minmax(0, 1fr) / minmax(0, 1fr); }
+.workspace.detector-expanded .pane-detector > .detector-trend { margin: 0; padding: 0; border: 0; }

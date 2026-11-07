@@ -53,14 +53,26 @@ class DetectorTelemetry:
         while self.history and now - self.history[0][0] > self.history_seconds:
             self.history.popleft()
 
-    def snapshot(self):
+    def recent_points(self, seconds):
+        cutoff = self.clock() - seconds
+        points = []
+        for point in reversed(self.history):
+            if point[0] < cutoff:
+                break
+            points.append(point)
+        points.reverse()
+        return points
+
+    def snapshot(self, include_history=True):
         now = self.clock()
         self._expire_history(now)
         available = self.updated is not None and now - self.updated < 1.0
         age = self.state.get('age_ms')
         if age is not None and self.updated is not None:
             age += round((now - self.updated) * 1000)
-        return {**self.state, 'available': available,
-                'fresh': available and self.state.get('fresh', False), 'age_ms': age,
-                'history': [{'age_s': round(now - at, 3), 'adc': raw, 'filtered_adc': filtered}
-                            for at, raw, filtered in self.history]}
+        state = {**self.state, 'available': available,
+                'fresh': available and self.state.get('fresh', False), 'age_ms': age}
+        if include_history:
+            state['history'] = [{'age_s': round(now - at, 3), 'adc': raw, 'filtered_adc': filtered}
+                            for at, raw, filtered in self.history]
+        return state

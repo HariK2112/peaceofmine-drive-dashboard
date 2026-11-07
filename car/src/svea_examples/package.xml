@@ -8,6 +8,7 @@
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>
+  <exec_depend>mavros_msgs</exec_depend>
   <depend>joy</depend>
   <depend>svea_core</depend>
 

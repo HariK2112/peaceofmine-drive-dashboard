@@ -36,13 +36,15 @@ Signal & map opens at street level on the first fresh receiver position. The dot
 
 The field recorder reads the Pi GPIO UART at `/dev/ttyAMA0`, 115200 baud. Set `gnss_device` and `gnss_baud` in the operator launch for another receiver. NAV-PVT supplies coordinates and horizontal accuracy together. GGA-only output provides a position with unknown accuracy. Outdoor RTK localization supplies the ROS `/fix` topic when enabled. Simulation skips the UART.
 
-In **Setup → GNSS**, the control owner can set the acceptable horizontal error (default 1 m) and maximum wait (default 5 s, set 0 for immediate capture). A ground mark commands the pump immediately and logs the event on the car. With a fresh fix within target, the recorder attaches it immediately. Otherwise it keeps the best available fix during the wait, ending early on vehicle movement or loss of control telemetry. Outside the target, the log shows an uncertain position and its estimated error. With no fix it records the shot with its position unavailable. Physical paint or water delivery requires visual confirmation.
+**Setup → GNSS** shows the same live position, accuracy circle, trail and ground marks. Each map has its own zoom and Follow control. The control owner can set the acceptable horizontal error (default 1 m) and maximum wait (default 5 s, set 0 for immediate capture). A ground mark commands the pump immediately and logs the event on the car. With a fresh fix within target, the recorder attaches it immediately. Otherwise it keeps the best available fix during the wait, ending early on vehicle movement or loss of control telemetry. Outside the target, the log shows an uncertain position and its estimated error. With no fix it records the shot with its position unavailable. Physical paint or water delivery requires visual confirmation.
 
 All clients read the same mission entries and recent trail (up to 900 points). The recorder uses `field.sqlite3` beside the resolved operator config, or `field-simulation.sqlite3` in simulation. The standard container mounts this directory from the host. Override `field_log_path` to choose another persistent location. Clearing the mission log removes its recorded events and map marks. The driven trail remains.
 
 In **Setup → Marking**, the owner can hold the manual test in either RC drive
-mode. Commanded output shows the AUX5 request. The physical RC kill switch
-and PX4 output selection still apply.
+mode with PX4 armed. ROS commands the pump on **AUX4 / misc0 / CH5**.
+This car uses duty mask 32 and channel 6 parameter endpoints 0 and 4096.
+The idle setting defaults to 0%. In direct RC mode the transmitter selects the
+physical output. Setup displays the command percentage sent by ROS.
 
 ## Architecture
 
@@ -172,7 +174,7 @@ If the Wi-Fi address changes, regenerate the certificate with the new address.
 3. Accept the certificate warning.
 4. Confirm the input toolbar shows the pad; its live graphic is under Diagnostics.
 5. **Take control** and select ROS authority on the physical RC.
-6. Use the RC to permit motion; there is no separate dashboard arm/disarm step. RT forward, LT reverse, left stick steer. Release the input deadman to stop driving. The header STOP releases dashboard control; click **Take control** before a new operation. Settings → Stop / release torque stops only the selected actuator and keeps dashboard control. Opening Settings stops motion and blocks driving while calibrating; jogging needs only RC permission and a held movement control.
+6. Use the RC to permit motion; there is no separate dashboard arm/disarm step. RT forward, LT reverse, left stick steer. Release the input deadman to stop driving. The header STOP releases dashboard control; click **Take control** before a new operation. Settings → Stop / release torque stops only the selected actuator and keeps dashboard control. Opening Setup releases keyboard capture. Gamepads, wheels and RC through ROS continue to drive during ordinary Setup. An active actuator calibration pauses ROS driving until calibration ends.
 
 The status line must read `ROS cmd_vel …`. Stick lights alone are not
 enough. The virtual forward camera is first-person, so the car will not
@@ -312,6 +314,8 @@ The filtered detector voltage and both saved levels share the same graph. You ca
 enter levels without fresh readings; **Measure baseline** needs recent samples and
 updates only the baseline. The filter never estimates or changes these levels.
 
+The Detector tab gives the signal and arm-angle chart most of the dock. **Expand chart** uses the workspace, and **Restore chart** or Escape returns to the normal layout. Detector voltage, ADC counts and routed ADC traces use up to two minutes of measured readings to scale the vertical axis. A minimum span of 1% of the input range keeps small fluctuations readable in context. Thresholds and calibration lines appear when they fall within the measured range. In Setup, turn off **Auto scale** to view the full detector voltage range.
+
 Setup → Metal detector shows a filtered voltage graph with selectable history, receive rate, packet
 log, rejected-line count, freshness and estimated peak voltage. Only the control
 owner can zero or apply calibration. Zero averages the available readings from
@@ -388,7 +392,8 @@ reading; zeroing requires fresh holding samples and control ownership.
 ## ADS1115 sensor and probe contact trigger
 
 Both operator launches start `ads1115_node.py` in the vehicle namespace. The node
-owns I2C acquisition, configuration persistence, and ADC contact detection. The
+owns I2C acquisition and sends configuration changes to the settings service.
+The probe controller evaluates contact using the filtered samples. The
 register driver, acquisition worker, ROS node, gateway telemetry cache, and browser
 settings live in separate files. The gateway never opens the I2C bus.
 
@@ -396,7 +401,7 @@ Acquisition starts automatically with the node and continues without a browser
 or control lease. Saved settings and signal assignments are restored before the
 bus opens. Hardware/configuration errors are reported; no dummy readings replace
 them. Stop the standalone ADS1115 devtool before launching the operator.
-To change inputs, open **Settings → ADS1115**, take control and **Apply & save**. Simulation uses labelled
+To enable inputs, open **Setup → Sensor board**, take control and select **Save changes**. Simulation uses labelled
 demo samples and a separate `adc_simulation` section in the shared
 `operator_config.json`; hardware uses the `adc` section. Override `config_file`
 in either launch with an absolute mounted path to choose a different shared file.
@@ -404,20 +409,19 @@ The earlier `.operator/ads1115.json` and `ads1115-sim.json` files are imported o
 when the matching section is absent. `adc_settings_path` is retained only as an
 optional legacy import path; all new saves go to the shared configuration.
 
-Each single-ended or differential input can be assigned to the metal detector
-plot, probe plot, both, or neither. Defaults are **A2 → metal detector** and
-**A0 → probe**. Added traces use their own scaled-value axis. The ADS1115 panel
-provides bus/address, PGA, conversion mode/rate, scan interval, per-input scaling,
-ALERT/RDY settings, raw/voltage/scaled plots, statistics, clipping status, register
-readback, CSV export, and JSON import/export. Import also accepts standalone bench
-configuration files. Drafts only take effect after Apply & save.
+Select the detector input in **Setup → Metal detector** and the contact input in
+**Setup → Probe contact**. Both sensors may share a channel. The default detector
+input is A2 and the default contact input is A0. **Setup → Sensor board** shows
+the assignments beside the input enable, multiplier and offset controls. It also
+provides register settings, live readings, filter preview and file import/export.
 
-Under **Probe contact trigger**, enable detection, choose an enabled input, and set a threshold in scaled units. Plot routing is independent of the contact source. Optional hysteresis and debounce suppress threshold chatter. Choose whether contact means
-at/above or at/below the level. The probe plot shows the threshold and the main
-probe panel reports CONTACT, Clear, or unavailable readings. This is a contact
-indication, not an automatic motion stop. Existing servo protection and homing
-thresholds remain independent. Disabled, stopped, disconnected, or stale sensors
-cannot report fresh contact.
+In **Probe contact**, watch the filtered voltage with the sensor clear and then
+pressed. Choose the input, direction, voltage limit, hysteresis and debounce,
+enable detection and select **Save contact settings**. The graph previews the
+draft limit against the selected channel. The main screen shows the applied
+contact state and links back to calibration. The probe controller handles
+threshold and spike detection and retracts on contact during a cycle. Missing
+or stale readings block probing.
 
 Relative ROS topics (under `/self/` with the default vehicle name):
 
@@ -459,7 +463,7 @@ exclusive actuator ownership, operation identities and watchdogs. Controllers
 exchange typed commands and telemetry without synchronous register requests.
 The website is served by `operator_web`, which communicates through ROS.
 
-The browser's control lease expires after 0.5 seconds without heartbeats. RC
+A missing gateway heartbeat stops actuation after 0.5 seconds. The lease survives a brief stall and expires after 3 seconds; closing the socket or taking over releases it immediately. RC
 permission, a control lease and held drive input are required; there is no separate
 browser arming latch. Drive commands expire after 0.25 seconds.
 Servo controller, driver and firmware safety checks remain independent. A timed-out

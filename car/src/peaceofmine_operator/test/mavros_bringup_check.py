@@ -79,7 +79,7 @@ def check():
                             if message.type == aiohttp.WSMsgType.TEXT:
                                 data = message.json()
                                 if data.get('safety', {}).get('mode') == 'ros' and data['drive'].get('px4_armed') is False:
-                                    assert data['safety']['allowed'] is True
+                                    assert data['safety']['allowed'] is False
                                     return
                         raise AssertionError('Gateway closed before reporting PX4 disarm')
             asyncio.run(asyncio.wait_for(check_dashboard(), 5))

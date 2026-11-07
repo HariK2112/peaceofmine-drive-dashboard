@@ -16,8 +16,8 @@
   function manualBlock() {
     if (!state.connected) return 'Connect to the operator stack.';
     if (!state.drive.you_control_owner) return 'Take control to test the pump.';
-    if (!state.marking?.settings) return 'Waiting for marking settings.';
-    if (!state.safety?.servo_allowed) return state.safety?.servo_reason || 'Waiting for the RC transmitter.';
+    const authority = pumpAuthorityBlock();
+    if (authority) return authority;
     if (state.marking.mode === 'shot') return 'Wait for the timed shot to finish.';
     return '';
   }
@@ -72,7 +72,7 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) release(); });
   $('settings-dialog').addEventListener('close', release);
   document.querySelector('.setup-nav').addEventListener('click', release);
-  $('marking-take-control').onclick = () => { send({type: 'take_control'}); send({type: 'calibration_begin'}); };
+  $('marking-take-control').onclick = () => send({type: 'take_control'});
   $('marking-save').onclick = () => {
     const value = {};
     for (const [name, input] of Object.entries(fields)) {

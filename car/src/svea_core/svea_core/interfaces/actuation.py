@@ -79,7 +79,7 @@ class ActuationInterface(rx.Field):
         # Map velocity percent to z channel [0, 1000], 500 is neutral
         msg.z = 1000 - float(500 + self.velocity_percent * 5)
         
-        # Set enabled_extensions for SVEA (Enables aux1 and aux2 channels)
+        # Enable the MAVLink auxiliary fields.
         msg.enabled_extensions = 252
         
         # Differential lock: aux1 (front) and aux2 (rear, inverted)
@@ -96,7 +96,8 @@ class ActuationInterface(rx.Field):
         else:
             msg.aux3 = 1000.
 
-        msg.aux4 = 1000.0 - self.xtr1_percent * 20.0
+        # PMB3 misc0 (Actuator_Set1 / PCA9685 CH5) is the pump duty output.
+        msg.aux4 = -1000.0 + self.xtr1_percent * 20.0
         # PMB3 misc1 (Actuator_Set2 / PCA9685 CH6), MANUAL_CONTROL range.
         msg.aux5 = -1000.0 + 20.0 * self.xtr2_percent
 
@@ -142,7 +143,7 @@ class ActuationInterface(rx.Field):
 
     def send_xtr(self, xtr1: Optional[float] = None, xtr2: Optional[float] = None):
         if xtr1 is not None:
-            self.xtr1_percent = xtr1
+            self.xtr1_percent = xtr1 if 0 <= xtr1 <= 100 else 0.0
         if xtr2 is not None:
             self.xtr2_percent = xtr2 if 0 <= xtr2 <= 100 else 0.0
 
