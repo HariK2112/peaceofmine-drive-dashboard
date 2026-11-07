@@ -13,8 +13,8 @@ class BrowserInputs(unittest.TestCase):
     def test_inputs_and_stop_gates(self):
         html = (DASHBOARD / 'index.html').read_text()
         import re
-        html = re.sub(r'<script src="/assets/[^"]+"></script>', '', html)
-        html = html.replace('<link rel="stylesheet" href="/assets/style.css">', '<style>' + (DASHBOARD / 'style.css').read_text() + '</style>')
+        html = re.sub(r'<script src="/?assets/[^"]+"></script>', '', html)
+        html = re.sub(r'<link rel="stylesheet" href="/?assets/style.css">', lambda _:  '<style>' + (DASHBOARD / 'style.css').read_text() + '</style>', html)
         setup = '''
 window.requestAnimationFrame = () => 0;
 window.testIntervals = [];
@@ -30,7 +30,7 @@ Object.defineProperty(document, 'hidden', {value: false});
 const assert = (condition, label) => { if (!condition) throw Error(label); };
 const latestDrive = () => sent.filter(m => m.type === 'drive').at(-1);
 assert(!$('probe-diagnostics').open && !$('arm-diagnostics').open && !$('probe-servo-diagnostics').open,'technical diagnostics are collapsed by default');
-assert(!$('operator-diagnostics').open && !$('mission-record').open,'secondary regions are collapsed at startup');
+assert(document.querySelector('[data-dock-tab="overview"]').classList.contains('active') && $('target-log-body').closest('[data-dock-pane]').hidden,'live data starts on the signal view; the mission log is a tab');
 assert(document.querySelectorAll('#drive-control-source').length===1 && !document.querySelector('.operation-modes-strip'),'one input selector and no separate workflow strip');
 assert(document.querySelectorAll('.workflow-actions').length===1 && document.querySelector('.task-workbench').contains($('inspection-progress')),'workflow and progress share one workbench');
 assert($('probe-servo-home-load').value==='10','homing starts at the requested 10%');
@@ -43,7 +43,6 @@ else {
   assert(taskBounds.top>=cameraBounds.bottom && detectorBounds.top>=taskBounds.bottom,'phone order is camera then workflow then detector graph');
 }
 assert($('search-task').open && !$('probe-task').open,'search settings start open, probe controls remain available by disclosure');
-$('operator-diagnostics').open=true;
 $('probe-diagnostics').open=$('arm-diagnostics').open=$('probe-servo-diagnostics').open=true;
 state.connected = true;
 state.robot.stationary = true;

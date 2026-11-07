@@ -20,248 +20,268 @@
     </div>
   </section>
   <main>
-    <header>
+    <header class="topbar">
       <div class="brand"><h1>PeaceOfMine</h1><span id="environment-label">Connecting</span></div>
-      <div class="header-actions">
+      <div class="topbar-status" aria-label="Vehicle status">
         <div class="connection"><span id="connection-dot"></span><span id="connection">Connecting</span></div>
         <span id="rc-safety" class="badge neutral" title="PX4 safety status">RC UNKNOWN · LOCKED</span>
-        <button id="power-chip" type="button" class="power-chip" title="Battery · open Vehicle &amp; link"><span id="power-chip-pct">—</span><span id="power-chip-w">— W</span></button>
+        <button id="power-chip" type="button" class="power-chip" title="Battery · opens the Vehicle tab"><span id="power-chip-pct">—</span><span id="power-chip-w">— W</span></button>
         <span id="control-owner" class="badge neutral">SPECTATING</span>
-        <button id="take-control" class="primary">Take control</button>
-        <button id="settings" class="quiet">Setup</button>
+      </div>
+      <div class="topbar-actions">
+        <button id="settings" type="button" class="quiet">Setup</button>
+        <button id="take-control" type="button" class="primary">Take control</button>
         <button id="stop-controls" type="button" class="danger" disabled>STOP</button>
       </div>
     </header>
-    <section class="workspace" aria-label="Operator workspace">
-      <div class="camera-workspace">
-        <div class="drive-toolbar">
-          <label for="drive-control-source">Drive input
-            <select id="drive-control-source"><option value="keyboard">WASD keyboard</option><option value="controller">Joystick / gamepad</option><option value="wheel">Steering wheel</option></select>
-          </label>
-          <div class="input-state"><p id="controller">Choose an input</p><p id="controller-mapping"></p></div>
-          <span id="arm-state" class="badge neutral">DISARMED</span>
-          <button type="button" class="quiet" data-open-settings="input">Input setup</button>
-        </div>
-        <div class="stage-frame">
-        <div id="camera-stage" class="camera-stage" data-focus="forward">
-        <section id="camera-panel" class="viewport panel forward-camera" tabindex="0" aria-label="Camera view. Click to capture WASD. Escape or clicking outside releases keys.">
-        <canvas id="forward-view" aria-label="Virtual rover camera view"></canvas>
-        <video id="forward-video" autoplay muted playsinline class="camera-feed hidden" aria-label="Selected forward camera"></video>
-        <img id="forward-network-camera" draggable="false" class="camera-feed hidden" alt="Selected Raspberry Pi camera stream">
-        <div class="camera-label" id="forward-camera-label">VIRTUAL FORWARD CAMERA</div>
-        <div class="camera-latency hidden" id="forward-camera-latency">CAMERA --</div>
-        <div id="input-lock" class="input-lock hidden">CLICK CAMERA FOR INPUT</div>
-        <div class="speed-readout">
-          <span>ACTUAL SPEED</span>
-          <strong id="speed">0.00 m/s</strong>
-        </div>
-      </section>
-      <section id="probe-camera-panel" class="viewport panel probe-camera" aria-label="Probe camera">
-        <video id="aux-video" autoplay muted playsinline class="aux-camera hidden" aria-label="Probe camera"></video>
-        <img id="aux-network-camera" draggable="false" class="aux-camera hidden" alt="Probe camera stream">
-        <div class="camera-label aux-camera-label hidden" id="aux-camera-label">PROBE CAMERA</div>
-        <div class="aux-camera-latency hidden" id="aux-camera-latency">--</div>
-        <div id="probe-camera-empty" class="camera-empty"><strong>Probe camera off</strong><span>Choose the probe-facing camera in Setup → Cameras.</span><button type="button" class="quiet" data-open-settings="cameras">Choose camera</button></div>
-      </section>
-        <button id="camera-swap" type="button" class="camera-swap quiet" title="Swap the large and small camera">⇄ <span id="camera-swap-label">Make probe camera large</span></button>
-      </div>
-        
-      </div>
-        <div class="drive-feedback"><p id="drive-block">Take control when RC permits ROS driving.</p><p id="drive-help">Click camera for WASD · Esc releases keys · hold Space to sweep</p></div>
 
+    <section class="workspace" aria-label="Operator workspace">
+      <div class="stage-frame">
+        <div id="camera-stage" class="camera-stage" data-focus="forward">
+          <section id="camera-panel" class="viewport forward-camera" tabindex="0" aria-label="Front camera. Click to drive with WASD. Escape or clicking outside releases the keys.">
+            <canvas id="forward-view" aria-label="Simulated front camera view"></canvas>
+            <video id="forward-video" autoplay muted playsinline class="camera-feed hidden" aria-label="Front camera"></video>
+            <img id="forward-network-camera" draggable="false" class="camera-feed hidden" alt="Front camera stream">
+            <div class="camera-label" id="forward-camera-label">VIRTUAL FORWARD CAMERA</div>
+            <div class="camera-latency hidden" id="forward-camera-latency">CAMERA --</div>
+            <div id="input-lock" class="input-lock hidden">CLICK CAMERA FOR INPUT</div>
+            <div class="speed-readout"><span>SPEED</span><strong id="speed">0.00 m/s</strong></div>
+          </section>
+          <section id="probe-camera-panel" class="viewport probe-camera" aria-label="Probe camera">
+            <video id="aux-video" autoplay muted playsinline class="aux-camera hidden" aria-label="Probe camera"></video>
+            <img id="aux-network-camera" draggable="false" class="aux-camera hidden" alt="Probe camera stream">
+            <div class="camera-label aux-camera-label hidden" id="aux-camera-label">PROBE CAMERA</div>
+            <div class="aux-camera-latency hidden" id="aux-camera-latency">--</div>
+            <div id="probe-camera-empty" class="camera-empty"><strong>No probe camera</strong><span>Pick the probe-facing camera in Setup.</span><button type="button" class="quiet" data-open-settings="cameras">Choose camera</button></div>
+          </section>
+        </div>
+        <button id="camera-swap" type="button" class="camera-swap" title="Swap the large and small camera">⇄ <span id="camera-swap-label">Enlarge probe camera</span></button>
       </div>
-      <aside class="task-workbench" aria-labelledby="task-heading">
-        <div class="panel-heading"><h2 id="task-heading">Search &amp; inspect</h2><button id="inspection-stop" type="button" class="quiet" disabled>Stop inspection</button></div>
-        <nav class="workflow-actions" aria-label="Search and inspection actions">
-      <div class="workflow-buttons">
-        <div class="operation-action">
-        <button id="mode-sweep-btn" type="button" class="mode-btn" title="Toggle coil sweeping (operates while driving)">
-          <span class="mode-text">Search sweep</span>
-          <span id="mode-sweep-pill" class="badge neutral">OFF</span>
-        </button>
-          <small id="mode-sweep-help" class="safety-note"></small>
-        </div>
-        <div class="operation-action">
-        <button id="mode-align-btn" type="button" class="mode-btn" disabled title="Compare the arc on two passes at search speed">
-          <span class="mode-text">Confirm arc</span>
-          <span id="mode-align-pill" class="badge neutral">2 PASSES</span>
-        </button>
-          <small id="mode-align-help" class="safety-note"></small>
-        </div>
-        <div class="operation-action">
-        <button id="mode-probe-btn" type="button" class="mode-btn" disabled title="Probe around the confirmed peak in 5° steps within the saved limits">
-          <span class="mode-text">Probe scan</span>
-          <span id="mode-probe-pill" class="badge neutral">SETUP REQUIRED</span>
-        </button>
-          <small id="mode-probe-help" class="safety-note"></small>
-        </div>
-        <div class="operation-action">
-        <button id="mode-mark-btn" type="button" class="mode-btn" disabled title="Dispense physical ground mark (pump activates for 2s)">
-          <span class="mode-text">Mark ground</span>
-          <span id="mode-mark-pill" class="badge neutral">READY (2s)</span>
-        </button>
-          <small id="mode-mark-help" class="safety-note"></small>
-        </div>
+
+      <div class="drive-bar">
+        <label class="drive-source" for="drive-control-source"><span>Drive with</span>
+          <select id="drive-control-source"><option value="keyboard">Keyboard (WASD)</option><option value="controller">Gamepad</option><option value="wheel">Steering wheel</option></select>
+        </label>
+        <div class="drive-text input-state"><p id="controller">Choose an input</p><p id="controller-mapping"></p></div>
+        <div class="drive-text drive-feedback"><p id="drive-block">Take control when the RC allows driving.</p><p id="drive-help">Click the camera for WASD · Esc releases the keys · hold Space to sweep</p></div>
+        <span id="arm-state" class="badge neutral">DISARMED</span>
+        <button type="button" class="quiet" data-open-settings="input">Input setup</button>
       </div>
-    </nav>
-        <p id="operation-help" class="workflow-status" role="status">Connect to the operator stack, then take control.</p>
-        <div id="inspection-panel" hidden><p id="inspection-status" hidden></p><progress id="inspection-progress" max="1" value="0" aria-label="Inspection progress" hidden></progress><details class="inspection-results"><summary>Scan results</summary><ol id="inspection-points" aria-label="Probe scan results"></ol></details></div>
+
+      <section class="dock" aria-label="Live data">
+        <nav class="dock-tabs" role="tablist" aria-label="Live data views">
+          <button type="button" role="tab" class="dock-tab active" data-dock-tab="overview" aria-selected="true">Signal &amp; map</button>
+          <button type="button" role="tab" class="dock-tab" data-dock-tab="detector" aria-selected="false">Detector</button>
+          <button type="button" role="tab" class="dock-tab" data-dock-tab="probe" aria-selected="false">Probe</button>
+          <button type="button" role="tab" class="dock-tab" data-dock-tab="log" aria-selected="false">Mission log <span id="mission-record-count" class="tab-count">0 entries</span></button>
+          <button type="button" role="tab" class="dock-tab" data-dock-tab="drive" aria-selected="false">Vehicle</button>
+        </nav>
+
+        <div class="dock-pane pane-split pane-signal" data-dock-pane="overview" role="tabpanel">
+          <section class="pane-section detector-panel" aria-labelledby="detector-heading">
+            <div class="section-head"><h2 id="detector-heading">Detector signal</h2><span id="detector-status" class="badge neutral">NO DATA</span><strong id="detector-voltage" class="head-value">— V</strong></div>
+            <div class="chart-box detector-chart"><canvas id="detector-history" role="img" aria-label="Filtered detector voltage over the last 30 seconds"></canvas></div>
+            <div class="section-foot"><p id="detector-detail">Waiting for detector data.</p><span id="sweep-status" role="status"></span></div>
+          </section>
+          <section class="pane-section map-panel" aria-labelledby="map-heading">
+            <div class="section-head"><h2 id="map-heading">Field map</h2><span class="head-note">Local grid · metres</span></div>
+            <canvas id="map-view" aria-label="Local field map"></canvas>
+            <div class="section-foot"><p id="position">X 0.0 &middot; Y 0.0 &middot; heading 0&deg;</p></div>
+          </section>
+        </div>
+
+        <div class="dock-pane pane-split pane-detector" data-dock-pane="detector" role="tabpanel" hidden>
+          <section class="pane-section detector-diagnostics-panel" aria-labelledby="signal-heading">
+            <div class="section-head"><h2 id="signal-heading">Signal strength</h2><span id="detector-raw" class="head-note">-- ADC</span></div>
+            <div class="signal-value"><strong id="signal">0</strong><span>%</span></div>
+            <div class="meter" aria-label="Detector signal"><span id="meter-fill"></span><i id="threshold"></i></div>
+            <canvas id="radar-view" aria-label="Detector sweep radar"></canvas>
+          </section>
+          <section class="pane-section" aria-labelledby="history-heading">
+            <div class="section-head"><h2 id="history-heading">Signal and arm angle</h2><span class="head-note">last 30 s</span></div>
+            <div class="chart-box detector-diagnostics-chart"><canvas id="detector-diagnostics-history" aria-label="Detector reading, arm angle and calibration history"></canvas></div>
+          </section>
+          <section class="pane-section pane-actions" aria-labelledby="align-heading">
+            <div class="section-head"><h2 id="align-heading">Aim the probe</h2></div>
+            <button id="detector-align-probe" type="button" class="quiet" disabled title="Turn the probe to the strongest detector reading">Aim at strongest signal</button>
+            <p id="align-probe-hint" class="note">No detector peak recorded yet.</p>
+            <button type="button" class="quiet" data-open-settings="detector">Calibrate detector</button>
+          </section>
+        </div>
+
+        <div class="dock-pane pane-split pane-probe" data-dock-pane="probe" role="tabpanel" hidden>
+          <section class="pane-section probe-diagnostics-panel" aria-labelledby="manual-probe-heading">
+            <div class="section-head"><h2 id="manual-probe-heading">Manual probe</h2></div>
+            <div class="probe-graphic" aria-hidden="true"><span id="probe-arm"></span><i></i></div>
+            <label class="field-label" for="probe-slider">Push to depth</label>
+            <input id="probe-slider" type="range">
+            <div class="button-row">
+              <button id="start-probing" type="button">Probe once</button>
+              <button id="probe-zero-contact" type="button" class="quiet">Zero motor load</button>
+            </div>
+            <small id="probe-zero-status" class="note">Lift the probe clear of the ground before zeroing.</small>
+          </section>
+          <section class="pane-section probe-load" aria-labelledby="load-heading">
+            <div class="section-head pressure-heading"><h2 id="load-heading">Motor load</h2><span class="head-note">last 30 s</span><strong id="probe-pressure" class="head-value">—</strong></div>
+            <div class="chart-box probe-load-chart"><canvas id="pressure-history" aria-label="Estimated probe motor load over the last thirty seconds"></canvas></div>
+            <details id="probe-diagnostics" class="more"><summary>More readings</summary>
+              <div class="probe-contact-readings">
+                <span>Motor current <strong id="probe-current">—</strong></span>
+                <span><span id="probe-current-change-label">Current magnitude</span> <strong id="probe-current-change">—</strong></span>
+                <span>2 s peak <strong id="probe-contact-peak">—</strong></span>
+                <span>Position error <strong id="probe-position-error">—</strong></span>
+                <span>Data rate <strong id="probe-contact-rate">—</strong></span>
+              </div>
+            </details>
+          </section>
+        </div>
+
+        <div class="dock-pane pane-log" data-dock-pane="log" role="tabpanel" hidden>
+          <section class="pane-section target-log-panel" aria-labelledby="target-log-heading">
+            <div class="section-head">
+              <h2 id="target-log-heading">Mission log</h2>
+              <span id="target-count" class="badge neutral">0 TARGETS</span>
+              <div class="target-log-actions">
+                <button id="mark-target-btn" type="button" class="quiet" title="Save the car's position without running the pump">Log position</button>
+                <button id="export-target-log" type="button" class="quiet">Export CSV</button>
+                <button id="clear-target-log" type="button" class="quiet">Clear</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="target-table">
+                <thead><tr><th scope="col">ID</th><th scope="col">Position (X, Y)</th><th scope="col">Signal %</th><th scope="col">Contact depth</th><th scope="col">Result</th><th scope="col">Time</th></tr></thead>
+                <tbody id="target-log-body"><tr class="empty-row"><td colspan="6">Nothing logged yet. Log a position, mark the ground or run a probe.</td></tr></tbody>
+              </table>
+            </div>
+            <p class="note">Kept in this browser only. Export the CSV before you close the page. A pump run does not prove a visible mark.</p>
+          </section>
+        </div>
+
+        <div class="dock-pane pane-split pane-vehicle" data-dock-pane="drive" role="tabpanel" hidden>
+          <section class="pane-section power-panel" aria-labelledby="power-heading">
+            <div class="section-head"><h2 id="power-heading">Battery</h2><span id="power-status" class="badge neutral">NO DATA</span></div>
+            <div class="power-summary"><div><span>Draw</span><strong id="battery-watts">—</strong></div><div><span>Charge</span><strong id="battery-charge">—</strong></div></div>
+            <progress id="battery-level" max="100" aria-label="Battery charge" hidden></progress>
+            <svg id="power-history" viewBox="0 0 300 38" preserveAspectRatio="none" role="img" aria-label="Battery power over the last minute"><polyline id="power-history-line" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            <div class="power-metrics"><span>Voltage <b id="battery-voltage">—</b></span><span>Current <b id="battery-current">—</b></span><span>Temperature <b id="battery-temperature">—</b></span><span>Cell spread <b id="battery-cells">—</b></span></div>
+          </section>
+          <section class="pane-section motors-panel" aria-labelledby="motors-heading">
+            <div class="section-head"><h2 id="motors-heading">Motors</h2></div>
+            <div class="power-subheading">Drive motor (ESC) <span id="esc-status">No data</span></div>
+            <div id="esc-readings" class="power-esc">Waiting for ESC data</div>
+            <div class="power-subheading">Arm servo <span id="power-arm">No data</span></div>
+            <p class="power-note note">Battery draw is volts × amps; a negative value means charging. Motor readings are separate and not added to it.</p>
+          </section>
+          <section class="pane-section drive-diagnostics" aria-labelledby="link-heading">
+            <div class="section-head"><h2 id="link-heading">Controller &amp; link</h2><span id="client-count" class="head-note">1 viewer</span></div>
+            <p class="pad-raw" id="pad-raw">Waiting for the gamepad…</p>
+            <svg id="pad-visual" class="pad-visual" viewBox="0 0 280 132" role="img" aria-label="Gamepad input preview">
+              <rect class="pad-shell" x="18" y="30" width="244" height="86" rx="32"/>
+              <rect id="pad-lt" class="pad-trigger" x="36" y="8" width="46" height="16" rx="5"/>
+              <rect id="pad-rt" class="pad-trigger" x="198" y="8" width="46" height="16" rx="5"/>
+              <rect id="pad-lb" class="pad-bumper" x="36" y="28" width="46" height="10" rx="3"/>
+              <rect id="pad-rb" class="pad-bumper" x="198" y="28" width="46" height="10" rx="3"/>
+              <text class="pad-label" x="59" y="20">LT</text>
+              <text class="pad-label" x="221" y="20">RT</text>
+              <text class="pad-label" x="59" y="37">LB</text>
+              <text class="pad-label" x="221" y="37">RB</text>
+              <circle class="pad-well" cx="78" cy="82" r="24"/>
+              <circle id="pad-ls" class="pad-stick" cx="78" cy="82" r="9"/>
+              <circle id="pad-y" class="pad-face" cx="202" cy="62" r="7"/>
+              <circle id="pad-b" class="pad-face" cx="220" cy="80" r="7"/>
+              <circle id="pad-a" class="pad-face" cx="202" cy="98" r="7"/>
+              <circle id="pad-x" class="pad-face" cx="184" cy="80" r="7"/>
+              <text class="pad-face-label" x="202" y="65">Y</text>
+              <text class="pad-face-label" x="220" y="83">B</text>
+              <text class="pad-face-label" x="202" y="101">A</text>
+              <text class="pad-face-label" x="184" y="83">X</text>
+            </svg>
+            <div class="latency"><span class="latency-label">Round trip</span><strong id="latency-value">-- ms</strong><canvas id="latency-graph" width="96" height="28" aria-label="Recent connection delay"></canvas></div>
+          </section>
+        </div>
+      </section>
+
+      <aside class="task-workbench mission" aria-labelledby="task-heading">
+        <div class="section-head"><h2 id="task-heading">Mission</h2><button id="inspection-stop" type="button" class="quiet small" disabled>Stop</button></div>
+        <nav class="workflow-actions" aria-label="Mission steps">
+          <div class="workflow-buttons">
+            <div class="operation-action">
+              <button id="mode-sweep-btn" type="button" class="mode-btn" title="Swing the detector coil while you drive">
+                <span class="mode-num">1</span><span class="mode-copy"><span class="mode-text">Search sweep</span><span class="mode-desc">Swing the coil while you drive</span></span>
+                <span id="mode-sweep-pill" class="badge neutral">OFF</span>
+              </button>
+              <small id="mode-sweep-help" class="step-note"></small>
+            </div>
+            <div class="operation-action">
+              <button id="mode-align-btn" type="button" class="mode-btn" disabled title="Sweep the hit twice to confirm where it is">
+                <span class="mode-num">2</span><span class="mode-copy"><span class="mode-text">Confirm arc</span><span class="mode-desc">Sweep the hit twice to pin it down</span></span>
+                <span id="mode-align-pill" class="badge neutral">2 PASSES</span>
+              </button>
+              <small id="mode-align-help" class="step-note"></small>
+            </div>
+            <div class="operation-action">
+              <button id="mode-probe-btn" type="button" class="mode-btn" disabled title="Probe five spots, 5° apart, around the confirmed hit">
+                <span class="mode-num">3</span><span class="mode-copy"><span class="mode-text">Probe scan</span><span class="mode-desc">Probe 5 spots around the hit</span></span>
+                <span id="mode-probe-pill" class="badge neutral">SETUP REQUIRED</span>
+              </button>
+              <small id="mode-probe-help" class="step-note"></small>
+            </div>
+            <div class="operation-action">
+              <button id="mode-mark-btn" type="button" class="mode-btn" disabled title="Run the marking pump for 2 seconds">
+                <span class="mode-num">4</span><span class="mode-copy"><span class="mode-text">Mark ground</span><span class="mode-desc">Pump a mark onto the spot</span></span>
+                <span id="mode-mark-pill" class="badge neutral">READY (2s)</span>
+              </button>
+              <small id="mode-mark-help" class="step-note"></small>
+            </div>
+          </div>
+        </nav>
+        <p id="operation-help" class="workflow-status" role="status">Connecting to the car…</p>
+        <div id="inspection-panel" hidden><p id="inspection-status" hidden></p><progress id="inspection-progress" max="1" value="0" aria-label="Scan progress" hidden></progress><details class="inspection-results"><summary>Scan results</summary><ol id="inspection-points" aria-label="Probe scan results"></ol></details></div>
         <div id="notice" class="notice hidden" role="alert"></div>
-        <details id="search-task" class="task-controls" open><summary>Search settings</summary>
-          <label for="sweep-speed">Sweep speed <output id="sweep-speed-value">36&deg;/s</output></label>
+
+        <details id="search-task" class="task-controls" open><summary>Sweep</summary>
+          <div class="field-row"><label for="sweep-speed">Sweep speed</label><output id="sweep-speed-value">36&deg;/s</output></div>
           <input id="sweep-speed" type="range" value="36">
         </details>
+
         <details id="probe-task" class="task-controls"><summary>Probe controls <span id="probe-status" class="badge neutral">SETUP REQUIRED</span></summary>
           <div class="probe-numbers">
-            <span>Actual <strong id="probe-depth">—</strong></span>
+            <span>Depth now <strong id="probe-depth">—</strong></span>
             <span>Target <strong id="probe-target">—</strong></span>
           </div>
+          <div class="home-row">
+            <button id="probe-home-quick" type="button" class="hold-btn" title="Hold to pull the probe up until it finds the top; release to stop">↑ Hold to home</button>
+            <span id="probe-home-quick-status" class="note" role="status">Not homed</span>
+          </div>
           <div class="probe-cycle-card">
-            <div class="probe-cycle-input-row">
-              <label for="probe-cycle-target">Max depth</label>
-              <div class="probe-cycle-input-wrap">
-                <input id="probe-cycle-target" type="number" min="0.1" step="any" value="80" required>
-                <span class="unit">mm</span>
-              </div>
+            <div class="field-row probe-cycle-input-row">
+              <label for="probe-cycle-target">Deepest probe</label>
+              <div class="probe-cycle-input-wrap"><input id="probe-cycle-target" type="number" min="0.1" step="any" value="80" required><span class="unit">mm</span></div>
             </div>
             <div class="probe-contact-controls">
               <label for="probe-contact-direction">Contact when
                 <select id="probe-contact-direction"><option value="above">Above</option><option value="below">Below</option></select>
               </label>
-              <label for="probe-contact-volts">Contact limit (V)
+              <label for="probe-contact-volts">Limit (V)
                 <input id="probe-contact-volts" type="number" step="any" required>
               </label>
               <button id="probe-contact-save" type="button" class="quiet" disabled>Save contact limit</button>
             </div>
-            <p id="probe-contact-feedback" class="safety-note" role="status">Waiting for contact settings.</p>
-            <p id="probe-adc-contact" role="status">Waiting for contact reading.</p>
-            <button id="probe-stop" type="button">Stop probe</button>
+            <p id="probe-contact-feedback" class="note" role="status">Waiting for contact settings.</p>
+            <p id="probe-adc-contact" class="note" role="status">Waiting for a contact reading.</p>
             <div id="probe-cycle-alert" class="probe-cycle-alert hidden" role="alert">
               <span id="probe-cycle-alert-badge" class="badge active">CONTACT TRIGGER</span>
-              <span id="probe-cycle-alert-text">Contact trigger detected. Retracting.</span>
+              <span id="probe-cycle-alert-text">Contact detected. Retracting.</span>
             </div>
+            <button id="probe-stop" type="button" class="danger-outline">Stop probe</button>
           </div>
-          <p id="probe-cycle-help" class="safety-note" role="status">Home the probe before starting a scan.</p>
-          <p class="safety-note">Stop releases torque. Support the probe.</p>
-
+          <p id="probe-cycle-help" class="step-note" role="status">Home the probe before starting a scan.</p>
+          <p class="note">Stop releases the motor, so hold the probe.</p>
         </details>
-        <p class="setup-shortcuts"><button type="button" class="quiet" data-open-settings="arm">Arm setup</button><button type="button" class="quiet" data-open-settings="probe">Home / travel setup</button></p>
+
+        <div class="setup-shortcuts"><button type="button" class="quiet" data-open-settings="arm">Arm setup</button><button type="button" class="quiet" data-open-settings="probe">Probe setup</button></div>
       </aside>
-      <section class="dock" aria-label="Telemetry"><nav class="dock-tabs" role="tablist" aria-label="Telemetry views"><button type="button" role="tab" class="dock-tab active" data-dock-tab="overview" aria-selected="true">Search</button><button type="button" role="tab" class="dock-tab" data-dock-tab="detector" aria-selected="false">Detector</button><button type="button" role="tab" class="dock-tab" data-dock-tab="drive" aria-selected="false">Vehicle &amp; link</button><button type="button" role="tab" class="dock-tab" data-dock-tab="probe" aria-selected="false">Probe</button><button type="button" role="tab" class="dock-tab" data-dock-tab="log" aria-selected="false">Mission log <span id="mission-record-count" class="tab-count">0 entries</span></button></nav><div class="dock-pane dock-search" data-dock-pane="overview" role="tabpanel"><section class="panel detector-panel" aria-labelledby="detector-heading">
-          <div class="panel-heading"><h2 id="detector-heading">Detector voltage</h2><strong id="detector-voltage">— V</strong><span id="detector-status" class="badge neutral">NO DATA</span><span id="sweep-status" class="safety-note" role="status"></span></div>
-          <div class="detector-chart"><canvas id="detector-history" role="img" aria-label="Filtered detector voltage over the last 30 seconds"></canvas></div>
-          <p id="detector-detail" class="safety-note">Waiting for detector telemetry.</p>
-        </section><section class="panel map-panel">
-        <div class="panel-heading">
-          <h2>Field map</h2>
-          <span>LOCAL GRID &middot; m</span>
-        </div>
-        <canvas id="map-view" aria-label="Local field map"></canvas>
-        <p id="position">X 0.0 &middot; Y 0.0 &middot; heading 0&deg;</p>
-      </section></div><div class="dock-pane " data-dock-pane="detector" role="tabpanel" hidden><section class="panel detector-diagnostics-panel"><h2>Detector signal &amp; angle</h2>
-          <div class="signal-value">
-            <strong id="signal">0</strong>
-            <span>%</span>
-            <span id="detector-raw">-- ADC</span>
-          </div>
-          <div class="meter" aria-label="Detector signal">
-            <span id="meter-fill"></span>
-            <i id="threshold"></i>
-          </div>
-          <canvas id="radar-view" aria-label="Forward metal detector scanning radar"></canvas>
-
-
-          <div class="detector-diagnostics-chart"><canvas id="detector-diagnostics-history" aria-label="Detector ADC, servo angle and calibration history"></canvas></div>
-          <details><summary>Manual alignment</summary>
-            <button id="detector-align-probe" class="quiet" disabled title="Pivot probe to latest metal detection peak">Align probe</button>
-            <p id="align-probe-hint" class="safety-note">No target detection peak recorded.</p>
-          </details>
-
-          <button type="button" class="quiet" data-open-settings="detector">Detector calibration / CSV</button>
-        </section></div><div class="dock-pane dock-vehicle" data-dock-pane="drive" role="tabpanel" hidden><section class="panel power-panel" aria-labelledby="power-heading">
-        <div class="panel-heading"><h2 id="power-heading">Power</h2><span id="power-status" class="badge neutral">NO DATA</span></div>
-        <div class="power-summary"><div><span>Battery draw</span><strong id="battery-watts">—</strong></div><div><span>Charge</span><strong id="battery-charge">—</strong></div></div>
-        <progress id="battery-level" max="100" aria-label="Battery charge" hidden></progress>
-        <svg id="power-history" viewBox="0 0 300 38" preserveAspectRatio="none" role="img" aria-label="Battery power over the last sixty seconds"><polyline id="power-history-line" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-        <div class="power-metrics"><span>Voltage <b id="battery-voltage">—</b></span><span>Current <b id="battery-current">—</b></span><span>Temperature <b id="battery-temperature">—</b></span><span>Cell spread <b id="battery-cells">—</b></span></div>
-        <div class="power-subheading">ESC <span id="esc-status">No telemetry</span></div>
-        <div id="esc-readings" class="power-esc">Waiting for ESC telemetry</div>
-        <div class="power-subheading">Arm servo <span id="power-arm">No telemetry</span></div>
-        <p class="power-note">Battery watts = V × A · negative draw means charging. ESC and arm readings are separate, not added to battery draw.</p>
-      </section><section class="panel drive-diagnostics"><h2>Drive &amp; link</h2><p class="pad-raw" id="pad-raw">Waiting for Gamepad API…</p><svg id="pad-visual" class="pad-visual" viewBox="0 0 280 132" role="img" aria-label="Xbox controller input preview">
-            <rect class="pad-shell" x="18" y="30" width="244" height="86" rx="32"/>
-            <rect id="pad-lt" class="pad-trigger" x="36" y="8" width="46" height="16" rx="5"/>
-            <rect id="pad-rt" class="pad-trigger" x="198" y="8" width="46" height="16" rx="5"/>
-            <rect id="pad-lb" class="pad-bumper" x="36" y="28" width="46" height="10" rx="3"/>
-            <rect id="pad-rb" class="pad-bumper" x="198" y="28" width="46" height="10" rx="3"/>
-            <text class="pad-label" x="59" y="20">LT</text>
-            <text class="pad-label" x="221" y="20">RT</text>
-            <text class="pad-label" x="59" y="37">LB</text>
-            <text class="pad-label" x="221" y="37">RB</text>
-            <circle class="pad-well" cx="78" cy="82" r="24"/>
-            <circle id="pad-ls" class="pad-stick" cx="78" cy="82" r="9"/>
-            <circle id="pad-y" class="pad-face" cx="202" cy="62" r="7"/>
-            <circle id="pad-b" class="pad-face" cx="220" cy="80" r="7"/>
-            <circle id="pad-a" class="pad-face" cx="202" cy="98" r="7"/>
-            <circle id="pad-x" class="pad-face" cx="184" cy="80" r="7"/>
-            <text class="pad-face-label" x="202" y="65">Y</text>
-            <text class="pad-face-label" x="220" y="83">B</text>
-            <text class="pad-face-label" x="202" y="101">A</text>
-            <text class="pad-face-label" x="184" y="83">X</text>
-          </svg>
-          <div class="latency"><span class="latency-label">Gateway round-trip</span><strong id="latency-value">-- ms</strong><canvas id="latency-graph" width="96" height="28" aria-label="Recent connection latency"></canvas></div><p id="client-count">1 viewer</p>
-        </section></div><div class="dock-pane " data-dock-pane="probe" role="tabpanel" hidden><section class="panel probe-diagnostics-panel"><h2>Probe tools</h2><details><summary>Manual probe controls</summary>
-            <button id="start-probing" type="button">Probe once</button>
-            <label for="probe-slider">Manual target depth</label>
-            <input id="probe-slider" type="range">
-            <button id="probe-zero-contact" type="button">Zero motor load</button>
-            <small id="probe-zero-status">Hold clear of the ground before zeroing.</small>
-          </details>
-          <details id="probe-diagnostics" open><summary>Diagnostics</summary>
-            <div class="probe-graphic" aria-hidden="true"><span id="probe-arm"></span><i></i></div>
-            <div class="pressure-heading"><span>Estimated motor load</span><strong id="probe-pressure">—</strong><small>last 30 s</small></div>
-            <div class="probe-load-chart"><canvas id="pressure-history" aria-label="Estimated probe motor load over the latest thirty seconds"></canvas></div>
-            <div class="probe-contact-readings">
-              <span>Motor current <strong id="probe-current">—</strong></span>
-              <span><span id="probe-current-change-label">Current magnitude</span> <strong id="probe-current-change">—</strong></span>
-              <span>2 s peak <strong id="probe-contact-peak">—</strong></span>
-              <span>Position error <strong id="probe-position-error">—</strong></span>
-              <span>Telemetry <strong id="probe-contact-rate">—</strong></span>
-            </div>
-          </details>
-        </section></div><div class="dock-pane " data-dock-pane="log" role="tabpanel" hidden><section class="panel target-log-panel" aria-labelledby="target-log-heading">
-        <div class="panel-heading">
-          <h2 id="target-log-heading">Mission log</h2>
-          <span id="target-count" class="badge neutral">0 TARGETS</span>
-        </div>
-        <div class="table-wrap">
-          <table class="target-table">
-            <thead>
-              <tr>
-                <th scope="col">ID</th>
-                <th scope="col">Pose (X, Y)</th>
-                <th scope="col">Coil %</th>
-                <th scope="col">Contact depth</th>
-                <th scope="col">Status</th>
-                <th scope="col">Time</th>
-              </tr>
-            </thead>
-            <tbody id="target-log-body">
-              <tr class="empty-row"><td colspan="6">No entries yet. Log a pose, activate the marking pump, or run a probe cycle.</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="safety-note">This browser session only · export CSV before closing. Pump activation does not confirm a visible ground mark.</p>
-        <div class="target-log-actions">
-          <button id="mark-target-btn" type="button" class="quiet" title="Record vehicle pose in log without running pump">Log pose</button>
-          <button id="export-target-log" type="button" class="quiet">Export CSV</button>
-          <button id="clear-target-log" type="button" class="quiet">Clear log</button>
-        </div>
-      </section></div></section>
-
-        
     </section>
-    
   </main>
 
   <dialog id="settings-dialog" aria-labelledby="settings-title">

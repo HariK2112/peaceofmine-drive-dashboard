@@ -37,7 +37,7 @@ window.fetch = async () => ({ok:true, json:async () => window.adcResponse});
 const assert = (v,label) => {if(!v) throw Error(label);};
 for(let i=0;i<10;i++) await Promise.resolve();
 state.connected=true; state.drive.you_control_owner=true;
-$('operator-diagnostics').open=true;$('probe-diagnostics').open=true;
+$('probe-diagnostics').open=true;
 $('settings').click(); document.querySelector('[data-settings-tab="adc"]').click();
 await window.nextPoll();
 assert($('adc-status').textContent.includes('DEMO'), 'demo is explicit: '+$('adc-status').textContent+' '+$('adc-error').textContent);
@@ -141,8 +141,8 @@ window.fetch=async()=>{throw Error('offline');}; await window.nextPoll();
 assert($('adc-status').textContent==='DISCONNECTED', 'network failure surfaced');
 document.body.textContent='ADC BROWSER TESTS PASSED';
 '''
-        html = re.sub(r'<script src="/assets/[^"]+"></script>', '', (DASHBOARD/'index.html').read_text())
-        html = html.replace('<link rel="stylesheet" href="/assets/style.css">', '<style>'+(DASHBOARD/'style.css').read_text()+'</style>')
+        html = re.sub(r'<script src="/?assets/[^"]+"></script>', '', (DASHBOARD/'index.html').read_text())
+        html = re.sub(r'<link rel="stylesheet" href="/?assets/style.css">', lambda _:  '<style>'+(DASHBOARD/'style.css').read_text()+'</style>', html)
         scripts = setup + 'window.adcResponse='+json.dumps(value)+';\nwindow.cameraDefaults='+json.dumps(CAMERA_DEFAULTS)+';\n'
         scripts += '\n'.join((DASHBOARD/name).read_text() for name in ('chart-4.4.8.umd.js','keydrown-1.3.0.js','actuator-settings.js','app.js','adc.js','camera-config.js'))
         html += '<script>(async()=>{try{'+scripts+checks+"}catch(e){document.body.textContent='FAILED: '+e.stack;}})();</script>"

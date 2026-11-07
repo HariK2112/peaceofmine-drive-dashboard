@@ -9,7 +9,7 @@
   const pressureHistory = Array(150).fill(0.05);
   const mock = {owner: false, armed: false, sweep: false, linear: 0, angular: 0, pose: {x: 0, y: 0, yaw: 0},
     inspection: {phase: 'IDLE', active: false, message: '', completed: 0, total: 0, confirmed_angle_deg: null, points: []},
-    phaseAt: 0, depth: 0, cycle: false};
+    phaseAt: 0, depth: 0, cycle: false, calibrating: false, homing: 0, homed: false};
   // Show the pretend probe camera (served by the preview at /camera/camera_probe).
   try {
     const key = 'peaceofmine.operator.preferences';
@@ -60,7 +60,7 @@
       drive: {armed: mock.armed, deadman: false, publishing: mock.owner && (mock.linear !== 0 || mock.angular !== 0),
         command_source: 'browser', joy: {seen: false}, cmd_linear_x: mock.linear, cmd_angular_z: mock.angular,
         cmd_vel_topic: 'cmd_vel', timeout_ms: 300, client_count: 1, you_control_owner: mock.owner,
-        control_owner_present: mock.owner, max_velocity_mps: 0.8, max_yaw_rate_rad_s: 1.4, pump_active: false},
+        control_owner_present: mock.owner, calibrating: mock.calibrating, max_velocity_mps: 0.8, max_yaw_rate_rad_s: 1.4, pump_active: false},
       robot: {...mock.pose, speed_mps: Math.abs(mock.linear), stationary: mock.linear === 0, odometry_fresh: true, pose_fresh: true},
       detector: {signal_ratio: ratio, threshold_ratio: 0.6, detected: ratio > 0.6, fresh: true, fixture_angle_deg: angle,
         sweep_enabled: mock.sweep, sweep_speed_deg_s: 36, sweep_speed_min: 5, sweep_speed_max: 180, beam_half_angle_deg: 45,
@@ -75,7 +75,9 @@
           current_a: 3.2, voltage_v: 11.9, remaining_pct: 72, temperature_c: 31, cell_delta_v: 0.012},
         history: Array.from({length: 30}, (_, i) => ({age_s: i * 2, watts: 38 + 6 * Math.sin((t - i * 2) / 3)})),
         esc: {available: true, stale: false, motors: [{id: 1, online: true, power_w: 12, current_a: 1, temperature_c: 34, rpm: 0, faults: 0}]}},
-      actuators: {arm: {connected: true, arm_calibration: true, servo_id: 1, voltage: 11.8, current_a: 0.12, temperature_c: 33}},
+      actuators: {arm: {connected: true, arm_calibration: true, servo_id: 1, voltage: 11.8, current_a: 0.12, temperature_c: 33},
+        probe: {connected: true, servo_id: 2, serial_connected: true, position: 2048, goal_position: 2048, torque: false, reverse: false, position_mode: 'multi-turn',
+          homing: mock.homing > 0, home_position: mock.homed ? 2048 : null, home_status: mock.homed ? 'Homed at top' : mock.homing ? 'Homing…' : 'Not homed', probe: {calibrated: true, max_depth_mm: 110}}},
       inspection: structuredClone(mock.inspection),
       cameras: {camera_probe: {label: 'camera / probe', topic: '/camera/probe/camera_info', fps: 15, frame_age_ms: 60, width: 944, height: 704}},
     };
@@ -98,6 +100,9 @@
       if (m.type === 'release_control' || m.type === 'estop') { mock.owner = mock.armed = false; mock.linear = mock.angular = 0; mock.sweep = false; return; }
       if (m.type === 'drive' && mock.owner) { mock.linear = m.deadman ? m.linear_x : 0; mock.angular = m.deadman ? m.angular_z : 0; return; }
       if (m.type === 'sweep_enabled') { mock.sweep = !!m.enabled; return; }
+      if (m.type === 'calibration_begin' || m.type === 'calibration_end') { mock.calibrating = m.type === 'calibration_begin'; mock.homing = 0; return; }
+      if (m.type === 'arm_servo' && m.role === 'probe' && m.action === 'home' && m.held) { mock.calibrating = true; if (++mock.homing > 15) mock.homed = true; return; }
+      if (m.type === 'arm_servo' && m.action === 'stop') { mock.homing = 0; return; }
       if (m.type === 'inspection') {
         const t = (performance.now() - started) / 1000;
         if (m.action === 'stop') Object.assign(mock.inspection, {phase: 'STOPPED', active: false, message: 'Inspection stopped.'}), mock.cycle = false, mock.depth = 0;

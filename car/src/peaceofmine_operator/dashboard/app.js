@@ -537,7 +537,7 @@ function operationBlock(allowManualTarget = false) {
   if (!state.drive.you_control_owner) return 'Take control first.';
   if (!state.safety?.servo_allowed || !state.drive.armed) return state.safety?.servo_reason || 'RC must permit servo motion.';
   if (state.drive.calibrating) return 'Close Settings before operating.';
-  if (state.inspection?.active) return 'Inspection is running. Stop it before another action.';
+  if (state.inspection?.active) return 'A scan is running. Stop it first.';
   if (state.probe.cycle_active) return 'Probe cycle is running. Stop probe to cancel.';
   if (!allowManualTarget && (state.probe.active || state.probe.holding)) return 'Stop probe before starting another action.';
   if (state.pump_active || state.drive.pump_active) return 'Wait for the marking pump to stop.';
@@ -758,7 +758,7 @@ let inspectionTaskKey = '';
 function renderInspection() {
   const inspection = state.inspection;
   const phase = inspection.phase || 'IDLE';
-  $('inspection-status').textContent = inspection.message || ({IDLE: 'Search → compare the arc on two passes → probe scan → mark.', CONFIRMING: 'Comparing the arc on two passes at search speed…', CONFIRMED: 'Two passes complete. Ready for probe scan.', PROBING: 'Probe scan in progress…', COMPLETE: 'Probe scan complete.', STOPPED: 'Inspection stopped.', ERROR: 'Inspection stopped. Check actuator status.'})[phase];
+  $('inspection-status').textContent = inspection.message || ({IDLE: 'Sweep to find a hit, then confirm, probe and mark it.', CONFIRMING: 'Comparing the arc on two passes at search speed…', CONFIRMED: 'Two passes complete. Ready for probe scan.', PROBING: 'Probe scan in progress…', COMPLETE: 'Probe scan complete.', STOPPED: 'Inspection stopped.', ERROR: 'Inspection stopped. Check actuator status.'})[phase];
   const total = Number.isFinite(inspection.total) && inspection.total > 0 ? inspection.total : 0;
   const completed = Number.isFinite(inspection.completed) ? inspection.completed : 0;
   const probe = state.probe;
@@ -846,7 +846,7 @@ function updateHud() {
   const sweepBlock = otherActionBlock || armSetupBlock();
   const confirmBlock = inspectionBlock('confirm');
   const scanBlock = inspectionBlock('probe_scan');
-  $('operation-help').textContent = otherActionBlock || 'Search → stop → compare the arc on two passes → probe scan → mark. STOP stops all outputs.';
+  $('operation-help').textContent = otherActionBlock || 'Drive with step 1 on until the detector reacts, stop, then run steps 2 to 4. STOP halts everything.';
   const shownBlocks = new Set([otherActionBlock]);
   for (const [id, reason] of [['mode-sweep-help', sweepBlock], ['mode-align-help', confirmBlock],
     ['mode-probe-help', scanBlock], ['mode-mark-help', markBlock], ['probe-cycle-help', scanBlock]]) {
@@ -943,7 +943,7 @@ function updateHud() {
   $('probe-contact-peak').textContent = Number.isFinite(probe.contact_peak_percent) ? `${probe.contact_peak_percent.toFixed(1)}% / ${probe.current_peak_ma.toFixed(1)} mA` : '—';
   $('probe-position-error').textContent = Number.isFinite(probe.position_error_ticks) ? `${(probe.position_error_ticks * 360 / 4096).toFixed(2)}°` : '—';
   $('probe-zero-contact').disabled = !owner || !servoSafe || !probe.contact_can_zero;
-  $('probe-zero-status').textContent = probe.contact_zeroed ? 'Contact reference set · graph shows changes from zero' : 'Absolute readings · hold clear of the ground before zeroing';
+  $('probe-zero-status').textContent = probe.contact_zeroed ? 'Zeroed · the chart shows change from zero' : 'Raw readings · lift the probe clear before zeroing';
   setRange($('probe-slider'), 0, probe.max_depth_mm || 1, .1);
   if (!activeSliders.has('probe-slider')) $('probe-slider').value = probe.target_mm;
   if (!state.connected) drawProbeMotion(probe.depth_mm);
@@ -963,7 +963,7 @@ function updateHud() {
 }
 
 function deadmanHint() {
-  return 'RC switch controls drive authority.';
+  return 'The RC transmitter switch decides who can drive.';
 }
 
 function padDisplayName(pad) {
@@ -1012,14 +1012,14 @@ function driveBlockMessage() {
     return {text: 'Click the forward camera for WASD.', kind: 'blocked'};
   }
   if (preferences.input === 'controller' && !padReady) {
-    return {text: 'No pad seen. Plug the Xbox into this computer or the SVEA USB, then press a button.', kind: 'blocked'};
+    return {text: 'No gamepad found. Plug it into this laptop or the car, then press a button.', kind: 'blocked'};
   }
   if (!state.safety?.allowed) return {text: state.safety?.reason || 'Waiting for PX4 safety status', kind: 'blocked'};
-  if (!owner) return {text: 'Spectator · take control. Pad input stays local until then.', kind: 'blocked'};
-  if (state.inspection?.active) return {text: 'Inspection is running. Stop inspection before driving.', kind: 'blocked'};
+  if (!owner) return {text: 'You are watching. Take control to drive.', kind: 'blocked'};
+  if (state.inspection?.active) return {text: 'A scan is running. Stop it before driving.', kind: 'blocked'};
   if (state.probe.cycle_active || state.probe.depth_mm > 2) return {text: 'Retract the probe before driving.', kind: 'blocked'};
   if (state.pump_active || state.drive.pump_active) return {text: 'Wait for the marking pump to stop.', kind: 'blocked'};
-  if (!state.drive.publishing) return {text: 'Ready. Use the selected input to drive.', kind: 'ready'};
+  if (!state.drive.publishing) return {text: 'Ready to drive.', kind: 'ready'};
   return {
     text: `ROS cmd_vel ${state.drive.cmd_linear_x.toFixed(2)} m/s · ${state.drive.cmd_angular_z.toFixed(2)} rad/s`,
     kind: 'ready',
@@ -1067,7 +1067,7 @@ function updateInputHint() {
   } else {
     setText(padEls.controller, 'No controller connected');
     setText(padEls.mapping,
-      'Plug the Xbox 360 into this computer and press any button so the browser can see it.');
+      'Plug in the Xbox pad and press any button.');
   }
 
   if (padEls.raw) {

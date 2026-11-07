@@ -1,31 +1,9 @@
-.metal-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
-.metal-metrics dt, .metal-diagnostics dt { color: var(--muted); font-size: .75rem; }
-.metal-metrics dd { margin: 6px 0 0; font-size: 1.1rem; font-variant-numeric: tabular-nums; }
-.metal-chart-heading, .metal-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
-.metal-chart-heading { font-size: .8rem; margin: 16px 0 8px; }
-.metal-chart-container { position: relative; width: 100%; min-width: 0; height: 250px; background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 4px; }
-#metal-range, #metal-feedback { min-height: 1.4em; margin: 10px 0 16px; font-size: .8rem; color: var(--muted); }
-.metal-calibration { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 12px; }
-.metal-calibration input { width: 100%; min-width: 0; }
-.metal-actions { justify-content: flex-start; }
-.metal-actions label, .metal-chart-heading label { display: flex; align-items: center; gap: 6px; margin: 0; }
-.metal-actions input[type="checkbox"], .metal-chart-heading input[type="checkbox"] { width: auto; }
-.metal-debug { border-top: 1px solid var(--line); padding: 14px 0; }
-.metal-debug summary { cursor: pointer; }
-.metal-debug textarea { width: 100%; margin-top: 12px; font-family: monospace; font-size: .75rem; resize: vertical; }
-.metal-diagnostics { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr); gap: 8px; font-size: .8rem; }
-.metal-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
-.settings-tabs { flex-wrap: wrap; }
-@media (max-width: 550px) {
-  .metal-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .metal-diagnostics { grid-template-columns: 1fr; }
-  .metal-calibration { gap: 8px; }
-}
-
-/* ===================================================== Design tokens ===
- * One palette, spacing scale, radius and type scale for the whole dashboard.
- * Change values here; components use only these variables.
+/* PeaceOfMine operator dashboard
+ * 1. Tokens  2. Base  3. Controls  4. Settings dialog (kept)  5. Main screen
+ * Colours, spacing and type come only from the tokens below.
  */
+
+/* ============================================================ Tokens === */
 :root {
   color-scheme: dark;
   --bg: #0a1014;
@@ -36,6 +14,7 @@
   --line-strong: #34505a;
   --text: #e9f1ee;
   --muted: #93a8a3;
+  --faint: #5f7772;
   --accent: #4fd1a5;
   --accent-text: #c9f7e6;
   --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
@@ -44,598 +23,97 @@
   --danger: #e5574b;
   --danger-text: #ffd3cd;
   --danger-soft: color-mix(in srgb, var(--danger) 16%, transparent);
-  --violet: #a996f0;
+  --on-accent: #06120e;
+  --on-danger: #ffffff;
+  --overlay: color-mix(in srgb, var(--bg-sunken) 78%, transparent);
+
+  /* spacing: one 4px-based scale */
+  --s1: .25rem;
+  --s2: .5rem;
+  --s3: .75rem;
+  --s4: 1rem;
+  --gap: var(--s2);      /* between cards */
+  --pad: var(--s3);      /* inside cards */
+
   --radius: 8px;
   --radius-sm: 5px;
-  --gap: .5rem;
-  --pad: .75rem;
-  --fs-xs: .68rem;
+  --control-h: 2.25rem;
+  --control-h-sm: 1.85rem;
+
+  --fs-xs: .6875rem;
   --fs-sm: .78rem;
   --fs-md: .875rem;
   --fs-lg: 1.05rem;
+  --fs-xl: 1.5rem;
   --font: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   --mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-  --control-h: 2.4rem;
+
   --background: var(--bg);
   --border: var(--line);
   font-family: var(--font);
   background: var(--bg);
   color: var(--text);
 }
+
+/* ============================================================== Base === */
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body { margin: 0; background: var(--bg); font-size: var(--fs-md); }
-h1, h2, h3, p { margin: 0; }
-h1 { font-size: var(--fs-lg); letter-spacing: -.01em; font-weight: 700; }
+.hidden { display: none !important; }
+body { margin: 0; background: var(--bg); font-size: var(--fs-md); line-height: 1.4; }
+h1, h2, h3, h4, p { margin: 0; }
+h1 { font-size: var(--fs-lg); font-weight: 700; letter-spacing: -.01em; }
 h2 { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
-button, input, select { touch-action: manipulation; }
-button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-::selection { background: var(--accent-soft); color: var(--text); }
 summary { cursor: pointer; }
-input, select { caret-color: var(--accent); }
+::selection { background: var(--accent-soft); color: var(--text); }
 strong, output, b, .badge, td { font-variant-numeric: tabular-nums; }
+button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* ============================================================ Header === */
-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem 1.25rem; padding: .5rem var(--pad); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.brand { display: flex; align-items: baseline; gap: .6rem; }
-#environment-label { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
-.header-actions, .connection { display: flex; align-items: center; flex-wrap: wrap; gap: var(--gap); }
-.connection { color: var(--muted); font-size: var(--fs-sm); max-width: 20rem; overflow-wrap: anywhere; margin-right: .5rem; }
-#connection-dot { width: .55rem; height: .55rem; flex: none; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent); }
-#stop-controls { min-width: 6rem; background: var(--danger); color: #fff; letter-spacing: .08em; }
-#stop-controls:disabled { opacity: .45; }
-.latency { display: flex; align-items: center; gap: .75rem; margin-top: .75rem; font-size: var(--fs-sm); color: var(--muted); }
-#latency-graph { width: 6rem; height: 2rem; }
-#client-count { margin-top: .5rem; color: var(--muted); font-size: var(--fs-sm); }
-
-/* ============================================================ Layout ===
- * Laptop: one screen, no page scroll. Header / [camera | workbench] / [dock].
- * Long content scrolls inside its own panel.
- */
-main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); height: 100dvh; padding: var(--gap); max-width: none; margin: 0; }
-.workspace { display: grid; grid-template-columns: minmax(0, 1fr) clamp(20rem, 26vw, 26rem); grid-template-rows: minmax(0, 1fr) clamp(13rem, 33vh, 22rem); gap: var(--gap); min-height: 0; }
-.camera-workspace { grid-column: 1; grid-row: 1; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: var(--gap); min-width: 0; min-height: 0; }
-.task-workbench { grid-column: 2; grid-row: 1 / span 2; min-width: 0; min-height: 0; overflow: auto; padding: var(--pad); }
-.dock { grid-column: 1; grid-row: 2; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); min-width: 0; min-height: 0; }
-.panel, .task-workbench { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.panel { min-width: 0; padding: var(--pad); }
-.panel-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--gap); margin-bottom: .5rem; }
-.drive-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--gap) .75rem; padding: .4rem var(--pad); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.drive-toolbar label { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
-#drive-control-source { min-width: 11rem; }
-.input-state { flex: 1; min-width: 10rem; }
-#controller { font-size: var(--fs-sm); font-weight: 600; }
-#controller-mapping { font-size: var(--fs-xs); color: var(--muted); }
-.drive-feedback { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .25rem .75rem; font-size: var(--fs-sm); color: var(--muted); padding: 0 .25rem; }
-#drive-help { font-size: var(--fs-xs); }
-#detector-voltage { margin-left: auto; font-family: var(--mono); font-size: var(--fs-lg); color: var(--accent); }
-.detector-chart { position: relative; flex: 1 1 auto; min-height: 5rem; min-width: 0; }
-.detector-diagnostics-chart { height: 12rem; position: relative; margin: .75rem 0; min-width: 0; }
-
-/* Dock: tabbed telemetry under the camera */
-.dock-tabs { display: flex; gap: 2px; padding: 3px; width: max-content; max-width: 100%; overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.dock-tab { min-height: 2rem; padding: .3rem .8rem; background: transparent; color: var(--muted); font-size: var(--fs-sm); font-weight: 600; border-radius: var(--radius-sm); white-space: nowrap; }
-.dock-tab:hover { color: var(--text); background: var(--surface-2); }
-.dock-tab.active { background: var(--surface-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
-.tab-count { margin-left: .35rem; color: var(--muted); font-weight: 500; font-size: var(--fs-xs); }
-.dock-pane { min-height: 0; min-width: 0; }
-.dock-pane > .panel { height: 100%; overflow: auto; }
-.dock-search { display: grid; grid-template-columns: minmax(0, 1fr); height: 100%; }
-.dock-search > .panel { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
-.detector-diagnostics-panel { display: grid; grid-template-columns: minmax(10rem, 14rem) minmax(0, 1fr); gap: .5rem 1rem; align-content: start; }
-.detector-diagnostics-panel > h2, .detector-diagnostics-panel > .signal-value, .detector-diagnostics-panel > .meter, .detector-diagnostics-panel > #radar-view { grid-column: 1; }
-.detector-diagnostics-panel > .detector-diagnostics-chart { grid-column: 2; grid-row: 1 / span 5; height: 100%; min-height: 10rem; margin: 0; }
-.detector-diagnostics-panel > details, .detector-diagnostics-panel > button { grid-column: 1 / -1; justify-self: start; }
-.dock-vehicle { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gap); height: 100%; }
-.dock-vehicle > .panel { min-height: 0; overflow: auto; }
-.drive-diagnostics, .probe-diagnostics-panel { columns: 2 18rem; column-gap: var(--pad); }
-.drive-diagnostics > *, .probe-diagnostics-panel > * { break-inside: avoid; }
-
-/* Smaller or shorter screens fall back to a scrolling page. */
-@media (max-width: 1000px), (max-height: 600px) {
-  main { height: auto; min-height: 100dvh; }
-  .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
-  .camera-workspace, .task-workbench, .dock { grid-column: auto; grid-row: auto; }
-  .camera-workspace { grid-template-rows: auto auto auto; }
-  .viewport { aspect-ratio: 16 / 9; height: auto !important; }
-  .dock-overview { grid-template-columns: minmax(0, 1fr); height: auto; }
-  .dock-overview > .panel { min-height: 14rem; }
-  header { flex-wrap: wrap; }
-}
-/* ------------------------------------------------------ Camera viewport --- */
-
-.viewport {
-  position: relative;
-  overflow: hidden;
-  container-type: inline-size;
-  aspect-ratio: 16 / 9;
-  min-width: 0;
-  padding: 0;
-  background: var(--bg-sunken);
-  outline: none;
-}
-
-.viewport canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  outline: none;
-}
-
-.viewport canvas.hidden {
-  display: none;
-}
-
-.camera-feed {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  background: var(--bg-sunken);
-  outline: none;
-}
-
-.camera-feed.hidden,
-.aux-camera.hidden,
-.aux-camera-label.hidden {
-  display: none;
-}
-
-.aux-camera {
-  position: absolute;
-  right: .7rem;
-  bottom: 3.4rem;
-  width: clamp(6rem, 27cqw, 18rem);
-  aspect-ratio: 4 / 3;
-  object-fit: contain;
-  border: 1px solid var(--line-strong);
-  border-radius: .5rem;
-  background: var(--bg-sunken);
-  box-shadow: 0 .5rem 1.4rem var(--bg-sunken);
-}
-
-.aux-camera-label {
-  position: absolute;
-  right: 1rem;
-  bottom: calc(3.4rem + clamp(4.5rem, 20.25cqw, 13.5rem) - 1.6rem);
-  padding: .25rem .4rem;
-  border-radius: .35rem;
-  background: color-mix(in srgb, var(--bg-sunken) 85%, transparent);
-  color: var(--text);
-  font-size: .58rem;
-  font-weight: 800;
-  letter-spacing: .08em;
-}
-
-.camera-latency,
-.aux-camera-latency {
-  position: absolute;
-  padding: .27rem .42rem;
-  border: 1px solid color-mix(in srgb, var(--line-strong) 46%, transparent);
-  border-radius: .35rem;
-  background: color-mix(in srgb, var(--bg-sunken) 85%, transparent);
-  color: var(--text);
-  font-size: .58rem;
-  font-weight: 800;
-  letter-spacing: .06em;
-}
-
-.camera-latency { top: 2.75rem; left: .7rem; }
-.aux-camera-latency { right: 1rem; bottom: 3.65rem; }
-.camera-latency.stale,
-.aux-camera-latency.stale { border-color: var(--danger); color: var(--danger-text); }
-.camera-latency.hidden,
-.aux-camera-latency.hidden { display: none; }
-
-.viewport:focus-within {
-  border-color: var(--accent);
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.camera-label,
-.speed-readout,
-.input-lock {
-  pointer-events: none;
-  position: absolute;
-  background: color-mix(in srgb, var(--bg-sunken) 74%, transparent);
-  border: 1px solid color-mix(in srgb, var(--line-strong) 46%, transparent);
-  border-radius: .42rem;
-}
-
-.camera-label {
-  top: .7rem;
-  left: .7rem;
-  padding: .35rem .48rem;
-  color: var(--muted);
-  font-size: .61rem;
-  font-weight: 800;
-  letter-spacing: .1em;
-}
-
-.input-lock {
-  bottom: .7rem;
-  left: .7rem;
-  padding: .35rem .48rem;
-  max-width: calc(100% - 1.4rem);
-  color: var(--text);
-  font-size: .61rem;
-  font-weight: 800;
-  letter-spacing: .08em;
-}
-
-.input-lock.locked {
-  border-color: var(--accent);
-  color: var(--accent-text);
-}
-
-.input-lock.hidden {
-  display: none;
-}
-
-.speed-readout {
-  right: .7rem;
-  top: .7rem;
-  padding: .48rem .62rem;
-  text-align: right;
-}
-
-.speed-readout span {
-  display: block;
-  color: var(--muted);
-  font-size: .6rem;
-  font-weight: 700;
-  letter-spacing: .1em;
-}
-
-.speed-readout strong {
-  font-size: 1.12rem;
-}
-
-/* Server-rejected commands land here and stay until superseded. */
-.notice {
-  position: static;
-  margin: .75rem 0;
-  padding: .6rem;
-  border-radius: .42rem;
-  border: 1px solid var(--danger);
-  background: color-mix(in srgb, var(--surface) 90%, transparent);
-  color: var(--danger-text);
-  font-size: .75rem;
-}
-
-.notice.hidden {
-  display: none;
-}
-
-/* ------------------------------------------------------------ Controls --- */
-
+/* ========================================================== Controls === */
 button {
-  border: 0;
-  border-radius: .45rem;
-  min-height: 2.75rem;
-  padding: .5rem .7rem;
-  background: var(--line);
-  color: var(--accent-text);
-  font: inherit;
-  font-size: .78rem;
-  font-weight: 780;
-  cursor: pointer;
+  min-height: var(--control-h); padding: 0 var(--s3);
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+  font: inherit; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
+  cursor: pointer; touch-action: manipulation;
+  transition: background-color .12s, border-color .12s, color .12s;
 }
+button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface-2) 70%, var(--line-strong)); }
+button:disabled { cursor: not-allowed; opacity: .45; }
+button.primary, .primary { background: var(--accent); color: var(--on-accent); }
+button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--text)); }
+button.quiet, .quiet { background: transparent; border-color: var(--line-strong); color: var(--text); }
+button.quiet:hover:not(:disabled) { background: var(--surface-2); border-color: var(--muted); }
+button.danger, .danger { background: var(--danger); color: var(--on-danger); }
+button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 85%, var(--text)); }
+button.danger-outline { background: transparent; border-color: color-mix(in srgb, var(--danger) 60%, transparent); color: var(--danger-text); }
+button.danger-outline:hover:not(:disabled) { background: var(--danger-soft); }
+button.small { min-height: var(--control-h-sm); padding: 0 var(--s2); font-size: var(--fs-xs); }
 
-button:disabled {
-  cursor: not-allowed;
-  opacity: .5;
+input:not([type=range]):not([type=checkbox]):not([type=radio]):not([type=file]), select, textarea {
+  min-height: var(--control-h); padding: 0 var(--s2);
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  background: var(--bg-sunken); color: var(--text); font: inherit; font-size: var(--fs-sm);
+  caret-color: var(--accent);
 }
-
-.primary {
-  background: var(--accent);
-}
-
-.danger {
-  background: var(--line-strong);
-}
-
-.quiet {
-  min-height: 2.75rem;
-  background: var(--surface-2);
-  color: var(--muted);
-}
-
-.buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: .45rem;
-}
+textarea { padding: var(--s2); }
+input[type=range] { width: 100%; margin: 0; accent-color: var(--accent); }
+input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
 
 .badge {
-  border-radius: 999px;
-  padding: .23rem .42rem;
-  font-size: .61rem;
-  font-weight: 850;
-  letter-spacing: .06em;
+  display: inline-flex; align-items: center; gap: var(--s1);
+  padding: .15rem var(--s2); border: 1px solid transparent; border-radius: 999px;
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: .06em; line-height: 1.3; white-space: nowrap;
 }
+.badge::before { content: ""; width: .4rem; height: .4rem; border-radius: 50%; background: currentColor; }
+.badge.neutral { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
+.badge.safe, .badge.ready { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.badge.active, .badge.blocked { background: var(--danger-soft); color: var(--danger-text); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.badge.warn, .badge.warning { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
 
-.badge.neutral {
-  background: var(--surface-2);
-  color: var(--text);
-}
+.note, .safety-note, .dialog-help { color: var(--muted); font-size: var(--fs-xs); line-height: 1.45; }
 
-.badge.active {
-  background: var(--danger);
-  color: var(--text);
-}
-
-.badge.safe {
-  background: var(--line);
-  color: var(--accent);
-}
-
-.controller-text,
-.controller-mapping,
-.safety-note,
-.detector-panel p,
-.map-panel p {
-  color: var(--muted);
-  font-size: .72rem;
-  line-height: 1.35;
-}
-
-.controller-text {
-  margin: .62rem 0 .2rem;
-}
-
-.controller-mapping {
-  margin: 0 0 .25rem;
-}
-
-.pad-raw {
-  margin: 0 0 .35rem;
-  color: var(--muted);
-  font-size: .62rem;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.3;
-  word-break: break-all;
-}
-
-.pad-visual {
-  display: block;
-  width: 100%;
-  max-height: 4.5rem;
-  margin: 0 0 .3rem;
-}
-
-.pad-shell {
-  fill: var(--surface);
-  stroke: var(--line);
-  stroke-width: 2;
-}
-
-.pad-trigger,
-.pad-bumper,
-.pad-face,
-.pad-stick {
-  fill: var(--surface-2);
-  stroke: var(--line-strong);
-  stroke-width: 1.2;
-}
-
-.pad-well {
-  fill: var(--bg-sunken);
-  stroke: var(--line);
-  stroke-width: 1.5;
-}
-
-.pad-label,
-.pad-face-label {
-  fill: var(--text);
-  font-size: 8px;
-  font-weight: 700;
-  text-anchor: middle;
-  pointer-events: none;
-}
-
-.pad-face-label {
-  font-size: 7px;
-}
-
-.pad-trigger.lit,
-.pad-bumper.lit,
-.pad-face.lit,
-.pad-stick.lit {
-  fill: var(--accent);
-  stroke: var(--accent);
-}
-
-.pad-bumper.deadman.lit {
-  fill: var(--warn);
-  stroke: var(--warn);
-}
-
-#drive-block {
-  margin: 0 0 .4rem;
-  color: var(--muted);
-  font-size: .68rem;
-  line-height: 1.35;
-}
-
-#drive-block.ready {
-  color: var(--accent);
-}
-
-#drive-block.blocked {
-  color: var(--warn);
-}
-
-.safety-note {
-  margin-top: .5rem;
-}
-
-input[type=range] {
-  width: 100%;
-  margin: .18rem 0;
-  accent-color: var(--accent);
-}
-
-/* ------------------------------------------------------ Metal detector --- */
-
-#sweep-status { flex: 1 1 6rem; min-width: 0; margin: 0; font-size: .65rem; overflow-wrap: anywhere; }
-
-
-.signal-value strong {
-  font-size: 2.1rem;
-  letter-spacing: -.025em;
-}
-
-.signal-value span {
-  font-size: .94rem;
-  color: var(--muted);
-}
-
-#detector-raw {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
-
-.meter {
-  position: relative;
-  height: .63rem;
-  background: var(--surface-2);
-  border-radius: 999px;
-  overflow: hidden;
-  margin: .3rem 0;
-}
-
-.meter span {
-  display: block;
-  width: 0;
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--warn), var(--danger));
-  transition: width .1s linear;
-}
-
-.meter i {
-  position: absolute;
-  top: -.15rem;
-  bottom: -.15rem;
-  left: 65%;
-  border-left: 2px solid var(--text);
-}
-
-#radar-view {
-  display: block;
-  width: 100%;
-  height: 5rem;
-  min-height: 0;
-  flex: 1 1 5rem;
-  margin-top: .15rem;
-  border-radius: .42rem;
-  background: var(--bg-sunken);
-}
-
-/* ---------------------------------------------------------------- Probe --- */
-
-.probe-graphic {
-  height: 2.8rem;
-  position: relative;
-  margin: .3rem 0 .2rem;
-  border-bottom: 2px solid var(--line-strong);
-  background: linear-gradient(var(--surface) 60%, var(--surface-2) 60%);
-}
-
-.probe-graphic i {
-  position: absolute;
-  bottom: -.15rem;
-  left: 50%;
-  height: .8rem;
-  border-left: 3px solid var(--text);
-}
-
-/* Capped so a full-depth probe stops at the ground line rather than
-   overflowing the 2.8rem graphic. */
-.probe-graphic span {
-  position: absolute;
-  left: 50%;
-  top: .3rem;
-  width: .32rem;
-  height: 2.4rem;
-  max-height: 2.4rem;
-  background: var(--text);
-  transform: scaleY(0);
-  transform-origin: top;
-}
-
-.probe-numbers {
-  display: flex;
-  justify-content: space-between;
-  color: var(--muted);
-  font-size: .68rem;
-}
-
-.probe-numbers strong {
-  color: var(--text);
-  display: block;
-  font-size: .86rem;
-}
-
-.pressure-heading {
-  display: flex;
-  align-items: baseline;
-  gap: .35rem;
-  margin-top: .4rem;
-  color: var(--muted);
-  font-size: .7rem;
-}
-
-.pressure-heading strong {
-  color: var(--text);
-}
-
-.pressure-heading small {
-  margin-left: auto;
-  color: var(--line-strong);
-}
-
-#pressure-history {
-  display: block;
-  width: 100%;
-  height: 4.2rem;
-  border-radius: .38rem;
-  background: var(--bg-sunken);
-  margin: .2rem 0;
-}
-
-/* ------------------------------------------------------------ Field map --- */
-
-.map-panel {
-  min-height: 19rem;
-  display: flex;
-  flex-direction: column;
-}
-
-.map-panel .panel-heading span {
-  color: var(--muted);
-  font-size: .64rem;
-  font-weight: 750;
-  letter-spacing: .08em;
-}
-
-.map-panel canvas {
-  display: block;
-  width: 100%;
-  flex: 1;
-  min-height: 15rem;
-  margin-top: .35rem;
-  border-radius: .45rem;
-  background: var(--bg-sunken);
-}
-
-.map-panel p {
-  margin-top: .32rem;
-  font-variant-numeric: tabular-nums;
-}
-
+/* =================================================== Settings dialog ===
+ * Setup window, connection overlay and calibration tools. */
 /* --------------------------------------------------------------- Dialog --- */
 
 dialog {
@@ -882,31 +360,10 @@ dialog select, #drive-control-source {
 :is(#settings-arm, #settings-probe) .dialog-help { margin: .6rem 0; font-size: .8rem; line-height: 1.5; }
 @media (max-width: 720px) { .arm-workbench { grid-template-columns: 1fr; } .arm-table th, .arm-table td { padding: .5rem .3rem; } .arm-points-table button { padding: .5rem .3rem; font-size: .75rem; } }
 
-/* Measured power diagnostics. */
-.power-panel { padding: .78rem; overflow: auto; font-variant-numeric: tabular-nums; }
-.power-summary { display: flex; justify-content: space-between; gap: 1rem; margin: .65rem 0 .35rem; }
-.power-summary span { display: block; font-size: .7rem; color: var(--muted); }
-.power-summary strong { font-size: 1.6rem; font-weight: 650; }
-#battery-level { width: 100%; height: .35rem; accent-color: var(--accent); display: block; }
-#battery-level[hidden] { display: none; }
-#power-history { width: 100%; height: 2rem; color: var(--accent); background: var(--bg-sunken); border-radius: .3rem; margin: .3rem 0; }
-.power-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem .75rem; font-size: .7rem; color: var(--muted); }
-.power-metrics span { display: flex; justify-content: space-between; gap: .4rem; }
-.power-metrics b { color: var(--text); }
-.power-subheading { display: flex; justify-content: space-between; gap: .6rem; border-top: 1px solid var(--line); padding-top: .5rem; margin-top: .5rem; font-size: .75rem; }
-.power-subheading span, .power-esc { color: var(--muted); font-size: .7rem; }
-.power-esc div { padding-top: .35rem; }
-.power-note { color: var(--muted); font-size: .62rem; line-height: 1.45; margin-top: .55rem; }
-
 #metal-history { display: block; }
 #metal-time-range { width: auto; }
 
 .servo-load-chart{position:relative;height:220px;min-width:0;width:100%}
-
-.probe-load-chart { position: relative; height: 110px; min-width: 0; }
-
-.probe-contact-readings { display: grid; gap: .3rem; font-size: .75rem; }
-
 #settings-adc .fields {display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:16px}
 #settings-adc label {display:flex; flex-direction:column; gap:6px}
 #settings-adc small {display:block; color:var(--muted); font-size:12px}
@@ -917,7 +374,6 @@ dialog select, #drive-control-source {
 #settings-adc td input[type=number] {width:100px}
 .adc-actions {display:flex; align-items:end; flex-wrap:wrap; gap:10px; margin:14px 0}
 .adc-chart {height:260px; position:relative}
-var(--accent)-error {color:var(--danger)}
 #settings-adc pre {white-space:pre-wrap}
 #settings-adc input[type=number] {min-width:0; padding:.65rem; border:1px solid var(--line); border-radius:.4rem; background:var(--bg-sunken); color:var(--text); font:inherit}
 #settings-adc input[type=checkbox] {width:auto; align-self:flex-start; accent-color:var(--accent)}
@@ -927,283 +383,325 @@ var(--accent)-error {color:var(--danger)}
 #camera-capture-settings label {display:grid;grid-template-columns:90px minmax(0,1fr);gap:.5rem;align-items:center;margin:.5rem 0}
 #camera-capture-settings input {min-width:0;padding:.65rem;background:var(--bg-sunken);color:var(--text);border:1px solid var(--line);border-radius:.4rem}
 
-/* --------------------------------------------------------- Task workbench --- */
-.task-workbench > .panel-heading { margin-bottom: .75rem; }
-#inspection-stop { min-height: 2.25rem; padding: .4rem .6rem; font-size: .7rem; }
-.workflow-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
-.operation-action { min-width: 0; }
-.mode-btn { display: flex; align-items: flex-start; justify-content: space-between; flex-direction: column; gap: .3rem; width: 100%; min-height: 3.25rem; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--surface); color: var(--text); text-align: left; transition: background-color .15s ease, border-color .15s ease; }
-.mode-btn .mode-text { font-size: .8rem; }
-.mode-btn .badge { padding: 0; background: none; color: var(--muted); font-size: .6rem; font-weight: 500; }
-.mode-btn:hover:not(:disabled) { background: var(--surface-2); border-color: var(--accent); }
-.mode-btn[data-active=true] { border-color: var(--accent); background: var(--surface-2); }
-.operation-action small { display: block; margin-top: .4rem; font-size: .75rem; line-height: 1.4; color: var(--warn); }
-.workflow-status { margin: .75rem 0; font-size: .8rem; line-height: 1.5; color: var(--muted); }
-#inspection-progress { display: block; width: 100%; height: .5rem; margin: .5rem 0; accent-color: var(--accent); }
-.inspection-results { margin: .75rem 0; font-size: .75rem; }
-#inspection-points { padding-left: 1.25rem; margin: .5rem 0; line-height: 1.65; }
-.task-controls { padding: .75rem 0; border-top: 1px solid var(--border); }
-.task-controls > summary { color: var(--text); font-size: .85rem; font-weight: 600; }
-.task-controls > summary .badge { margin-left: .5rem; }
-.task-controls label { display: block; margin: .75rem 0 .4rem; font-size: .75rem; color: var(--muted); }
-.task-controls output { float: right; color: var(--text); font-variant-numeric: tabular-nums; }
-.setup-shortcuts { display: flex; flex-wrap: wrap; gap: .5rem; padding-top: .5rem; }
-.setup-shortcuts button { font-size: .7rem; }
-.probe-contact-controls { display: grid; grid-template-columns: 1fr 1.3fr; gap: .5rem; }
-.probe-contact-controls label { display: grid; gap: .35rem; margin: 0; }
-.probe-contact-controls input, .probe-contact-controls select { width: 100%; min-width: 0; min-height: 2.75rem; padding: .5rem; border: 1px solid var(--line); border-radius: .4rem; background: var(--bg-sunken); color: var(--text); font: inherit; }
-#probe-contact-save { grid-column: 1 / -1; }
-#keyboard-max-throttle { width: 100%; padding: .65rem; border: 1px solid var(--line); border-radius: .4rem; background: var(--bg-sunken); color: var(--text); font: inherit; }
-#probe-servo-reverse { width: auto; accent-color: var(--accent); }
-@media (prefers-reduced-motion: reduce) { .mode-btn { transition: none; } }
-
-
-/* Probe cycle controls */
-.probe-cycle-card {
-  margin: 0.5rem 0;
-  padding: .5rem 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-}
-.probe-cycle-input-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-.probe-cycle-input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-.probe-cycle-input-wrap input {
-  width: 5rem;
-  min-height: 2.75rem;
-  padding: .5rem;
-  background: var(--bg-sunken);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 0.8rem;
-  text-align: right;
-}
-.probe-cycle-input-wrap .unit {
-  font-size: 0.7rem;
-  color: var(--muted);
-}
-.probe-cycle-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.4rem;
-}
-.probe-cycle-alert {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem;
-  background: color-mix(in srgb, var(--danger) 20%, transparent);
-  border: 1px solid var(--danger);
-  border-radius: 4px;
-  font-size: 0.72rem;
-  color: var(--danger-text);
-}
-.probe-cycle-alert.hidden {
-  display: none;
+/* metal detector settings */
+.metal-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.metal-metrics dt, .metal-diagnostics dt { color: var(--muted); font-size: .75rem; }
+.metal-metrics dd { margin: 6px 0 0; font-size: 1.1rem; font-variant-numeric: tabular-nums; }
+.metal-chart-heading, .metal-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.metal-chart-heading { font-size: .8rem; margin: 16px 0 8px; }
+.metal-chart-container { position: relative; width: 100%; min-width: 0; height: 250px; background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 4px; }
+#metal-range, #metal-feedback { min-height: 1.4em; margin: 10px 0 16px; font-size: .8rem; color: var(--muted); }
+.metal-calibration { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 12px; }
+.metal-calibration input { width: 100%; min-width: 0; }
+.metal-actions { justify-content: flex-start; }
+.metal-actions label, .metal-chart-heading label { display: flex; align-items: center; gap: 6px; margin: 0; }
+.metal-actions input[type="checkbox"], .metal-chart-heading input[type="checkbox"] { width: auto; }
+.metal-debug { border-top: 1px solid var(--line); padding: 14px 0; }
+.metal-debug summary { cursor: pointer; }
+.metal-debug textarea { width: 100%; margin-top: 12px; font-family: monospace; font-size: .75rem; resize: vertical; }
+.metal-diagnostics { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr); gap: 8px; font-size: .8rem; }
+.metal-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
+.settings-tabs { flex-wrap: wrap; }
+@media (max-width: 550px) {
+  .metal-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metal-diagnostics { grid-template-columns: 1fr; }
+  .metal-calibration { gap: 8px; }
 }
 
-/* Target verification log */
-.target-log-panel {
-  padding: 0.78rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  font-variant-numeric: tabular-nums;
-  min-height: 0;
-  overflow: visible;
-}
-.target-log-panel .table-wrap { overflow-x: auto; }
-.target-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.73rem;
-  text-align: left;
-}
-.target-table th {
-  color: var(--muted);
-  font-weight: 500;
-  padding: 0.4rem 0.45rem;
-  border-bottom: 1px solid var(--line);
-}
-.target-table td {
-  padding: 0.4rem 0.45rem;
-  border-bottom: 1px solid var(--surface-2);
-  color: var(--text);
-}
-.target-table tr.contact {
-  background: color-mix(in srgb, var(--danger) 15%, transparent);
-}
-.target-table tr.clear {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-}
-.target-table tr.empty-row td {
-  text-align: center;
-  color: var(--line-strong);
-  padding: 1.2rem;
-}
-.target-log-actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-top: auto;
-}
-.target-log-actions button {
-  padding: 0.35rem 0.6rem;
-  font-size: 0.72rem;
-}
-
-
-
-.pad-visual.hidden, .pad-raw.hidden { display: none; }
-
-
-/* ================================================= Unified components ===
- * Last in the file so every panel and dialog shares the same controls.
- */
-.viewport { aspect-ratio: auto; height: 100%; min-height: 12rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sunken); }
-.viewport:focus-within, .viewport:focus { border-color: var(--accent); }
-
-button { min-height: var(--control-h); padding: .4rem .85rem; border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text); font: inherit; font-size: var(--fs-sm); font-weight: 600; transition: background-color .12s, border-color .12s, color .12s; }
-button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface-2) 70%, var(--line-strong)); }
-button:disabled { cursor: not-allowed; opacity: .45; }
-button.primary, .primary { background: var(--accent); color: var(--bg-sunken); }
-button.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, white); }
-button.quiet, .quiet { min-height: var(--control-h); background: transparent; border-color: var(--line-strong); color: var(--text); }
-button.quiet:hover:not(:disabled) { background: var(--surface-2); border-color: var(--muted); }
-button.danger, .danger { background: var(--danger); color: #fff; }
-button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 85%, white); }
-
-input:not([type=range]):not([type=checkbox]):not([type=radio]):not([type=file]), select, textarea {
-  min-height: var(--control-h); padding: .35rem .6rem; border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
-  background: var(--bg-sunken); color: var(--text); font: inherit; font-size: var(--fs-sm);
-}
-input[type=range] { accent-color: var(--accent); }
-input[type=checkbox], input[type=radio] { accent-color: var(--accent); }
-
-.badge { display: inline-flex; align-items: center; gap: .3rem; border-radius: 999px; padding: .2rem .55rem; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .06em; border: 1px solid transparent; white-space: nowrap; }
-.badge::before { content: ""; width: .4rem; height: .4rem; border-radius: 50%; background: currentColor; opacity: .9; }
-.badge.neutral { background: var(--surface-2); color: var(--muted); border-color: var(--line); }
-.badge.safe { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
-.badge.active { background: var(--danger-soft); color: var(--danger-text); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
-.badge.warn, .badge.warning { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
-
-.safety-note, .controller-text, .controller-mapping, .detector-panel p, .map-panel p, .power-note, .dialog-help { color: var(--muted); font-size: var(--fs-xs); line-height: 1.45; }
-#drive-block { font-size: var(--fs-sm); color: var(--muted); }
-#drive-block.ready { color: var(--accent-text); }
-#drive-block.blocked { color: var(--warn); }
-
-/* Workbench: same card + reason pattern for every action */
-.task-workbench h2#task-heading { font-size: var(--fs-xs); }
-.workflow-buttons { grid-template-columns: minmax(0, 1fr); gap: var(--gap); }
-.operation-action { display: grid; gap: .25rem; }
-.mode-btn { flex-direction: row; align-items: center; min-height: 3rem; padding: .55rem .75rem; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-2); }
-.mode-btn .mode-text { font-size: var(--fs-md); font-weight: 600; }
-.mode-btn .badge { padding: .15rem .5rem; background: var(--bg-sunken); border: 1px solid var(--line); color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
-.mode-btn .badge::before { display: none; }
-.mode-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
-.mode-btn[data-active=true] { border-color: var(--accent); background: var(--accent-soft); }
-.mode-btn[data-active=true] .badge { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-.operation-action small, .operation-action small.safety-note { margin: 0 .25rem; font-size: var(--fs-xs); color: var(--warn); }
-.operation-action small:empty { display: none; }
-.workflow-status { margin: .75rem 0; padding: .5rem .65rem; border-left: 2px solid var(--line-strong); font-size: var(--fs-sm); color: var(--muted); background: var(--bg-sunken); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-.task-controls { padding: .65rem 0; border-top: 1px solid var(--line); }
-.task-controls > summary { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
-.setup-shortcuts { border-top: 1px solid var(--line); padding-top: .65rem; }
-.notice { border-radius: var(--radius-sm); }
-
-/* Tiles */
-.power-summary strong, .probe-numbers strong, .signal-value strong, #speed { font-family: var(--mono); }
-.target-table th { color: var(--muted); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; }
-
-/* Connection overlay and dialog follow the same surface rules */
-.connection-card, dialog { background: var(--surface); border: 1px solid var(--line-strong); border-radius: calc(var(--radius) + 4px); color: var(--text); }
 .settings-tab { background: transparent; border: 1px solid transparent; color: var(--muted); }
 .settings-tab.active { background: var(--surface-2); color: var(--text); border-color: var(--line-strong); box-shadow: inset 0 -2px 0 var(--accent); }
 fieldset { border: 1px solid var(--line); border-radius: var(--radius); }
+dialog label { display: block; margin: .8rem 0 .3rem; }
+dialog input[type=checkbox] { width: auto; }
 
-
-/* ===================================================== Even spacing ===
- * One rhythm: --gap between panels, --pad inside them, --gap between blocks
- * inside a panel. Overrides the older per-panel margins.
+/* ======================================================= Main screen ===
+ * Laptop, one screen, no page scroll:
+ *
+ *   header ─────────────────────────────────────────────
+ *   cameras (front + probe)                 │ Mission
+ *   drive bar                               │ steps,
+ *   live data (tabs)                        │ controls
+ *
+ * Every card: --pad inside, --gap between cards, 1px --line border.
  */
-:root { --gap: .5rem; --pad: .75rem; }
-.panel > * + *, .task-workbench > * + * { margin-top: var(--gap); }
-.panel > .panel-heading, .panel > h2 { margin: 0 0 var(--gap); }
-.panel > .panel-heading + * { margin-top: 0; }
-.task-workbench > .panel-heading { margin: 0 0 var(--pad); }
-.workflow-status, .notice, #inspection-panel { margin: var(--pad) 0 0; }
-.task-controls { margin: var(--pad) 0 0; padding: var(--pad) 0 0; }
-.task-controls label { margin: var(--gap) 0 .25rem; }
-.setup-shortcuts { margin: var(--pad) 0 0; padding: var(--pad) 0 0; gap: var(--gap); }
-.probe-cycle-card { margin: var(--gap) 0 0; padding: 0; gap: var(--gap); }
-.drive-feedback { padding: 0 .25rem; }
-.dock-tabs, .drive-toolbar { margin: 0; }
-.power-summary, .power-metrics { gap: var(--gap); }
-.diagnostics-grid h2 { margin-bottom: var(--gap); }
+main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); height: 100dvh; padding: var(--gap); }
 
-/* ===================================================== Mission stage ===
- * Two cameras side by side. Drive & search: forward large, probe small.
- * Probe stage: probe camera large. layout.js sets data-focus; markup order
- * never changes. The small camera is sized from the stage height (4:3) so
- * both cameras fill the row without empty space.
- */
-.stage-frame { position: relative; min-height: 0; container-type: size; }
-.camera-stage { display: grid; height: 100%; grid-template-columns: minmax(0, 1fr) min(calc(100cqh * 4 / 3), 36%); grid-template-areas: "forward probe"; gap: var(--gap); }
-.camera-stage[data-focus=probe] { grid-template-areas: "probe forward"; }
-.camera-stage > .forward-camera { grid-area: forward; }
-.camera-stage > .probe-camera { grid-area: probe; }
-.camera-stage > * { margin: 0; min-width: 0; }
-.camera-stage > .viewport { height: 100%; min-height: 0; }
-.camera-swap { position: absolute; z-index: 4; bottom: var(--gap); right: var(--gap); min-height: 1.9rem; padding: .2rem .6rem; font-size: var(--fs-xs); background: color-mix(in srgb, var(--bg-sunken) 80%, transparent); backdrop-filter: blur(4px); }
-.probe-camera .aux-camera { position: absolute; inset: 0; width: 100%; height: 100%; right: auto; bottom: auto; aspect-ratio: auto; object-fit: cover; border: 0; border-radius: 0; box-shadow: none; background: var(--bg-sunken); }
-.probe-camera .aux-camera-label { position: absolute; top: var(--gap); left: var(--gap); right: auto; bottom: auto; }
-.probe-camera .aux-camera-latency { top: 2.4rem; left: var(--gap); right: auto; bottom: auto; }
-.camera-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: var(--gap); padding: var(--pad); text-align: center; color: var(--muted); font-size: var(--fs-sm); }
-.camera-empty strong { color: var(--text); font-size: var(--fs-md); }
-.camera-label, .aux-camera-label { padding: .25rem .5rem; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg-sunken) 80%, transparent); border: 1px solid var(--line-strong); color: var(--text); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; }
-/* the small camera hides secondary overlays (the swap button sits there) */
-.camera-stage[data-focus=probe] > .forward-camera .speed-readout,
-.camera-stage[data-focus=probe] > .forward-camera .camera-latency,
-.camera-stage[data-focus=forward] > .probe-camera .aux-camera-latency { display: none; }
+.topbar, .drive-bar, .dock, .task-workbench, .viewport {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0;
+}
 
-/* Search tab: detector chart wide, map beside it */
-.dock-search { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--gap); }
-.dock-search .map-panel #map-view { flex: 1 1 auto; min-height: 4rem; height: auto; width: 100%; }
+/* ------------------------------------------------------------ Header --- */
+.topbar { display: flex; align-items: center; gap: var(--s4); padding: var(--s2) var(--pad); }
+.brand { display: flex; align-items: baseline; gap: var(--s2); margin-right: auto; white-space: nowrap; }
+#environment-label { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.topbar-status, .topbar-actions { display: flex; align-items: center; gap: var(--s2); }
+.topbar-actions { padding-left: var(--s4); border-left: 1px solid var(--line); }
+.connection { display: flex; align-items: center; gap: var(--s2); max-width: 16rem; color: var(--muted); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#connection { overflow: hidden; text-overflow: ellipsis; }
+#connection-dot { width: .5rem; height: .5rem; flex: none; border-radius: 50%; background: var(--danger); }
+#stop-controls { min-width: 5.5rem; letter-spacing: .08em; font-weight: 700; }
+#rc-safety.blocked { color: var(--danger-text); }
+#rc-safety.ready { color: var(--accent-text); }
 
-/* Compact one-line drive toolbar */
-.drive-toolbar { flex-wrap: nowrap; }
-.input-state { overflow: hidden; }
-#controller, #controller-mapping { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-
-/* Probe tab: tools left, live load chart right */
-.probe-diagnostics-panel { columns: auto; display: grid; grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr); grid-template-rows: auto 1fr; gap: var(--gap) var(--pad); }
-.probe-diagnostics-panel > * { margin: 0 !important; }
-.probe-diagnostics-panel > h2 { grid-column: 1; }
-.probe-diagnostics-panel > details:not(#probe-diagnostics) { grid-column: 1; }
-.probe-diagnostics-panel > #probe-diagnostics { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
-#probe-diagnostics[open] .probe-load-chart { flex: 1 1 auto; min-height: 7rem; height: auto; }
-
-/* Header battery chip */
-.power-chip { display: inline-flex; align-items: center; gap: .45rem; min-height: 2rem; padding: .2rem .65rem; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
-.power-chip #power-chip-pct { font-family: var(--mono); color: var(--text); font-size: var(--fs-sm); }
+.power-chip { display: inline-flex; align-items: center; gap: var(--s2); min-height: var(--control-h-sm); padding: 0 var(--s2); border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); font-size: var(--fs-xs); font-weight: 700; color: var(--muted); }
+#power-chip-pct { font-family: var(--mono); font-size: var(--fs-sm); color: var(--text); }
 .power-chip[data-level=ok] #power-chip-pct { color: var(--accent); }
 .power-chip[data-level=mid] #power-chip-pct { color: var(--warn); }
 .power-chip[data-level=low] { border-color: var(--danger); }
 .power-chip[data-level=low] #power-chip-pct { color: var(--danger-text); }
 
-/* Workbench steps follow the mission order: 1 Search … 4 Mark */
-.workflow-buttons { counter-reset: step; }
-.operation-action .mode-btn { counter-increment: step; }
-.operation-action .mode-btn .mode-text::before { content: counter(step); display: inline-grid; place-items: center; width: 1.35rem; height: 1.35rem; margin-right: .6rem; border-radius: 50%; border: 1px solid var(--line-strong); font-size: var(--fs-xs); color: var(--muted); }
-.mode-btn[data-active=true] .mode-text::before { background: var(--accent); border-color: var(--accent); color: var(--bg-sunken); }
+/* --------------------------------------------------------- Workspace --- */
+.workspace {
+  display: grid; gap: var(--gap); min-height: 0;
+  grid-template-columns: minmax(0, 1fr) clamp(19rem, 24vw, 24rem);
+  grid-template-rows: minmax(0, 1fr) auto clamp(14rem, 34vh, 21rem);
+  grid-template-areas: "stage mission" "drive mission" "dock mission";
+}
+.stage-frame { grid-area: stage; }
+.drive-bar { grid-area: drive; }
+.dock { grid-area: dock; }
+.task-workbench { grid-area: mission; }
+
+/* ----------------------------------------------------------- Cameras ---
+ * Both cameras are always visible. layout.js sets data-focus and the grid
+ * areas swap; DOM order never changes. The small one is 4:3 at stage height.
+ */
+.stage-frame { position: relative; min-height: 0; container-type: size; }
+.camera-stage {
+  display: grid; gap: var(--gap); height: 100%;
+  grid-template-columns: minmax(0, 1fr) min(calc(100cqh * 4 / 3), 38%);
+  grid-template-areas: "forward probe";
+}
+.camera-stage[data-focus=probe] { grid-template-areas: "probe forward"; }
+.camera-stage > .forward-camera { grid-area: forward; }
+.camera-stage > .probe-camera { grid-area: probe; }
+
+.viewport { position: relative; overflow: hidden; height: 100%; min-height: 0; padding: 0; background: var(--bg-sunken); outline: none; }
+.viewport:focus, .viewport:focus-within { border-color: var(--accent); }
+.viewport canvas { display: block; width: 100%; height: 100%; outline: none; }
+.camera-feed { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--bg-sunken); }
+.probe-camera .aux-camera { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: var(--bg-sunken); }
+
+.camera-label, .camera-latency, .aux-camera-latency, .speed-readout, .input-lock {
+  position: absolute; pointer-events: none;
+  padding: var(--s1) var(--s2); border: 1px solid var(--line-strong); border-radius: var(--radius-sm);
+  background: var(--overlay); color: var(--text);
+  font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em;
+}
+.camera-label { top: var(--s2); left: var(--s2); }
+.camera-latency, .aux-camera-latency { top: calc(var(--s2) * 2 + 1.4rem); left: var(--s2); }
+.camera-latency.stale, .aux-camera-latency.stale { border-color: var(--danger); color: var(--danger-text); }
+.speed-readout { top: var(--s2); right: var(--s2); text-align: right; }
+.speed-readout span { display: block; color: var(--muted); font-size: .58rem; }
+.speed-readout strong { font-family: var(--mono); font-size: var(--fs-lg); letter-spacing: 0; }
+.input-lock { bottom: var(--s2); left: var(--s2); max-width: calc(100% - 1rem); }
+.input-lock.locked { border-color: var(--accent); color: var(--accent-text); }
+
+.camera-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: var(--s2); padding: var(--pad); text-align: center; color: var(--muted); font-size: var(--fs-sm); }
+.camera-empty strong { color: var(--text); font-size: var(--fs-md); }
+
+.camera-swap {
+  position: absolute; z-index: 3; right: var(--s2); bottom: var(--s2);
+  min-height: var(--control-h-sm); padding: 0 var(--s2);
+  border-color: var(--line-strong); background: var(--overlay); backdrop-filter: blur(4px); font-size: var(--fs-xs);
+}
+/* the small camera shows only its name */
+.camera-stage[data-focus=probe] > .forward-camera :is(.speed-readout, .camera-latency, .input-lock),
+.camera-stage[data-focus=forward] > .probe-camera .aux-camera-latency { display: none; }
+
+/* --------------------------------------------------------- Drive bar --- */
+.drive-bar { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) var(--pad); }
+.drive-source { display: flex; align-items: center; gap: var(--s2); flex: none; margin: 0; }
+.drive-source span { color: var(--muted); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+#drive-control-source { width: 10.5rem; }
+.drive-text { flex: 1 1 0; min-width: 0; padding-left: var(--s3); border-left: 1px solid var(--line); }
+.drive-text p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#controller, #drive-block { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+#controller-mapping, #drive-help { font-size: var(--fs-xs); color: var(--muted); }
+#drive-block.ready { color: var(--accent-text); }
+#drive-block.blocked { color: var(--warn); }
+.drive-bar > .badge, .drive-bar > button { flex: none; }
+
+/* ------------------------------------------------------------- Dock ---
+ * One card: tab row on top, the selected pane below. Panes split into
+ * sections with a hairline between them; no cards inside cards.
+ */
+.dock { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; }
+.dock-tabs { display: flex; gap: var(--s1); padding: var(--s1) var(--s2) 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.dock-tab { min-height: var(--control-h); padding: 0 var(--s3); border: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: transparent; color: var(--muted); box-shadow: inset 0 -2px 0 transparent; }
+.dock-tab:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.dock-tab.active { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.tab-count { margin-left: var(--s1); color: var(--faint); font-weight: 500; font-size: var(--fs-xs); }
+
+.dock-pane { min-height: 0; min-width: 0; padding: var(--pad); overflow: auto; }
+.pane-split { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+.pane-split > .pane-section + .pane-section { margin-left: var(--pad); padding-left: var(--pad); border-left: 1px solid var(--line); }
+.pane-signal { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.pane-detector { grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr) minmax(12rem, 1fr); }
+.pane-probe { grid-template-columns: minmax(14rem, 1fr) minmax(0, 2fr); }
+.pane-vehicle { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); }
+
+.pane-section { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; min-height: 0; }
+.section-head { display: flex; align-items: center; gap: var(--s2); min-height: var(--control-h-sm); }
+.section-head > h2 { margin-right: auto; }
+.head-value { font-family: var(--mono); font-size: var(--fs-lg); color: var(--accent); }
+.head-note { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
+.section-foot { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); color: var(--muted); font-size: var(--fs-xs); }
+.section-foot p { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sweep-status { text-align: right; }
+.chart-box { position: relative; flex: 1 1 auto; min-height: 5rem; min-width: 0; }
+.field-label { color: var(--muted); font-size: var(--fs-xs); }
+.button-row { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.button-row > button { flex: 1 1 auto; }
+.pane-actions > button { align-self: stretch; }
+
+/* signal & map */
+#map-view { display: block; flex: 1 1 auto; width: 100%; min-height: 4rem; border-radius: var(--radius-sm); background: var(--bg-sunken); }
+
+/* detector */
+.signal-value { display: flex; align-items: baseline; gap: var(--s1); }
+.signal-value strong { font-family: var(--mono); font-size: var(--fs-xl); line-height: 1; }
+.signal-value span { color: var(--muted); }
+.meter { position: relative; height: .5rem; flex: none; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.meter span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, var(--accent), var(--warn), var(--danger)); transition: width .1s linear; }
+.meter i { position: absolute; top: 0; bottom: 0; left: 65%; border-left: 2px solid var(--text); }
+#radar-view { display: block; flex: 1 1 auto; width: 100%; min-height: 3rem; border-radius: var(--radius-sm); background: var(--bg-sunken); }
+
+/* probe */
+.probe-graphic { position: relative; height: 2.5rem; flex: none; border-bottom: 2px solid var(--line-strong); border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(var(--surface-2) 60%, var(--bg-sunken) 60%); }
+.probe-graphic i { position: absolute; bottom: -.15rem; left: 50%; height: .7rem; border-left: 3px solid var(--text); }
+.probe-graphic span { position: absolute; left: 50%; top: .25rem; width: .3rem; height: 2.1rem; max-height: 2.1rem; background: var(--text); transform: scaleY(0); transform-origin: top; }
+.pressure-heading small { color: var(--muted); }
+.more { font-size: var(--fs-xs); color: var(--muted); }
+.more > summary { padding: var(--s1) 0; }
+.probe-contact-readings { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: var(--s1) var(--s3); padding-top: var(--s1); }
+.probe-contact-readings > span { display: flex; justify-content: space-between; gap: var(--s2); }
+.probe-contact-readings strong { color: var(--text); }
+
+/* mission log */
+.target-log-panel { height: 100%; }
+.target-log-actions { display: flex; gap: var(--s2); }
+.target-log-actions button { min-height: var(--control-h-sm); padding: 0 var(--s2); font-size: var(--fs-xs); }
+.table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.target-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); text-align: left; }
+.target-table th { position: sticky; top: 0; padding: var(--s2) var(--s3); background: var(--surface-2); color: var(--muted); font-size: var(--fs-xs); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.target-table td { padding: var(--s2) var(--s3); border-top: 1px solid var(--line); }
+.target-table tr.contact { background: var(--danger-soft); }
+.target-table tr.clear { background: var(--accent-soft); }
+.target-table tr.empty-row td { padding: var(--s4); text-align: center; color: var(--faint); border: 0; }
+
+/* vehicle */
+.power-panel { font-variant-numeric: tabular-nums; }
+.power-summary { display: flex; justify-content: space-between; gap: var(--s3); }
+.power-summary span { display: block; color: var(--muted); font-size: var(--fs-xs); }
+.power-summary strong { font-family: var(--mono); font-size: var(--fs-xl); font-weight: 600; line-height: 1.1; }
+.power-summary > div:last-child { text-align: right; }
+#battery-level { display: block; width: 100%; height: .35rem; accent-color: var(--accent); }
+#power-history { display: block; width: 100%; height: 2rem; flex: none; color: var(--accent); background: var(--bg-sunken); border-radius: var(--radius-sm); }
+.power-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s1) var(--s3); color: var(--muted); font-size: var(--fs-xs); }
+.power-metrics span { display: flex; justify-content: space-between; gap: var(--s2); }
+.power-metrics b { color: var(--text); }
+.power-subheading { display: flex; justify-content: space-between; gap: var(--s2); font-size: var(--fs-sm); font-weight: 600; }
+.power-subheading span, .power-esc { color: var(--muted); font-size: var(--fs-xs); font-weight: 400; }
+.power-esc div + div { padding-top: var(--s1); }
+.power-note { margin-top: auto; }
+
+.pad-raw { color: var(--muted); font-size: var(--fs-xs); font-family: var(--mono); word-break: break-all; }
+.pad-visual { display: block; width: 100%; flex: 1 1 auto; min-height: 3rem; max-height: 6rem; }
+.pad-shell { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 2; }
+.pad-trigger, .pad-bumper, .pad-face, .pad-stick { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.2; }
+.pad-well { fill: var(--bg-sunken); stroke: var(--line); stroke-width: 1.5; }
+.pad-label, .pad-face-label { fill: var(--text); font-size: 8px; font-weight: 700; text-anchor: middle; pointer-events: none; }
+.pad-face-label { font-size: 7px; }
+.pad-trigger.lit, .pad-bumper.lit, .pad-face.lit, .pad-stick.lit { fill: var(--accent); stroke: var(--accent); }
+.pad-bumper.deadman.lit { fill: var(--warn); stroke: var(--warn); }
+.latency { display: flex; align-items: center; gap: var(--s3); color: var(--muted); font-size: var(--fs-xs); }
+.latency strong { color: var(--text); font-family: var(--mono); }
+#latency-graph { width: 6rem; height: 1.75rem; margin-left: auto; }
+
+/* ---------------------------------------------------------- Mission ---
+ * Steps 1-4 in mission order, then status, then Sweep and Probe controls.
+ * Each block is separated by one hairline and --pad on both sides.
+ */
+.task-workbench { display: flex; flex-direction: column; gap: var(--pad); padding: var(--pad); min-height: 0; overflow: auto; }
+.task-workbench > .section-head { min-height: var(--control-h-sm); }
+.workflow-buttons { display: grid; gap: var(--s2); }
+.operation-action { display: grid; gap: var(--s1); }
+.mode-btn {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--s3);
+  width: 100%; min-height: 3.25rem; padding: var(--s2) var(--s3);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface-2);
+  text-align: left; white-space: normal;
+}
+.mode-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
+.mode-btn[data-active=true] { border-color: var(--accent); background: var(--accent-soft); }
+.mode-num { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-size: var(--fs-xs); font-weight: 700; }
+.mode-btn[data-active=true] .mode-num { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.mode-copy { display: grid; gap: .1rem; min-width: 0; }
+.mode-text { font-size: var(--fs-md); font-weight: 600; }
+.mode-desc { color: var(--muted); font-size: var(--fs-xs); font-weight: 400; }
+.mode-btn .badge { padding: .1rem var(--s2); background: var(--bg-sunken); border-color: var(--line); color: var(--muted); }
+.mode-btn .badge::before { display: none; }
+.mode-btn[data-active=true] .badge { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.step-note { display: block; padding: 0 var(--s3); color: var(--warn); font-size: var(--fs-xs); line-height: 1.4; }
+.step-note:empty { display: none; }
+
+.workflow-status { padding: var(--s2) var(--s3); border-left: 2px solid var(--line-strong); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--bg-sunken); color: var(--muted); font-size: var(--fs-sm); }
+#inspection-panel { display: grid; gap: var(--s2); }
+#inspection-progress { display: block; width: 100%; height: .5rem; accent-color: var(--accent); }
+.inspection-results { font-size: var(--fs-sm); color: var(--muted); }
+#inspection-points { margin: var(--s2) 0 0; padding-left: var(--s4); line-height: 1.6; color: var(--text); }
+.notice { position: static; padding: var(--s2) var(--s3); border: 1px solid var(--danger); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-sm); }
+
+.task-controls { padding-top: var(--pad); border-top: 1px solid var(--line); }
+.task-controls > summary { display: flex; align-items: center; gap: var(--s2); min-height: var(--control-h-sm); font-size: var(--fs-sm); font-weight: 600; list-style: none; }
+.task-controls > summary::-webkit-details-marker { display: none; }
+.task-controls > summary::before { content: "▸"; color: var(--muted); transition: transform .12s; }
+.task-controls[open] > summary::before { transform: rotate(90deg); }
+.task-controls > summary .badge { margin-left: auto; }
+.task-controls[open] > summary { margin-bottom: var(--s3); }
+.task-controls > * + *:not(summary) { margin-top: var(--s3); }
+.field-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); color: var(--muted); font-size: var(--fs-sm); }
+.field-row label { margin: 0; }
+.field-row output { color: var(--text); font-family: var(--mono); }
+.task-controls > .field-row + input[type=range] { margin-top: var(--s2); }
+
+.probe-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.probe-numbers > span { display: grid; gap: .1rem; padding: var(--s2) var(--s3); border-radius: var(--radius-sm); background: var(--bg-sunken); color: var(--muted); font-size: var(--fs-xs); }
+.probe-numbers strong { font-family: var(--mono); font-size: var(--fs-md); color: var(--text); }
+.home-row { display: flex; align-items: center; gap: var(--s3); }
+.hold-btn { flex: none; touch-action: none; user-select: none; border-color: var(--line-strong); }
+.hold-btn:active:not(:disabled) { background: var(--accent); color: var(--on-accent); }
+.home-row .note { min-width: 0; }
+.probe-cycle-card { display: grid; gap: var(--s2); }
+.probe-cycle-input-wrap { display: flex; align-items: center; gap: var(--s1); }
+.probe-cycle-input-wrap input { width: 5rem; text-align: right; }
+.unit { color: var(--muted); font-size: var(--fs-xs); }
+.probe-contact-controls { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.probe-contact-controls label { display: grid; gap: var(--s1); margin: 0; color: var(--muted); font-size: var(--fs-xs); }
+.probe-contact-controls input, .probe-contact-controls select { width: 100%; min-width: 0; }
+#probe-contact-save { grid-column: 1 / -1; }
+.probe-cycle-alert { display: flex; align-items: center; gap: var(--s2); padding: var(--s2); border: 1px solid var(--danger); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-xs); }
+#probe-stop { width: 100%; }
+
+.setup-shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); margin-top: auto; padding-top: var(--pad); border-top: 1px solid var(--line); }
+
+@media (prefers-reduced-motion: reduce) { .mode-btn, button, .task-controls > summary::before { transition: none; } }
+
+/* ------------------------------------------- Small or short screens ---
+ * Below laptop size the page scrolls: cameras, drive bar, mission, data.
+ */
+@media (max-width: 1000px), (max-height: 600px) {
+  main { height: auto; min-height: 100dvh; }
+  .topbar { flex-wrap: wrap; }
+  .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "stage" "drive" "mission" "dock"; }
+  .stage-frame { aspect-ratio: 16 / 9; container-type: size; }
+  .drive-bar { flex-wrap: wrap; }
+  .dock { min-height: 22rem; }
+  .pane-split { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr) !important; }
+  .pane-split > .pane-section + .pane-section { margin: var(--pad) 0 0; padding: var(--pad) 0 0; border-left: 0; border-top: 1px solid var(--line); }
+  .chart-box { min-height: 10rem; }
+}
+
+/* the setup window wraps long button labels */
+dialog button { white-space: normal; }

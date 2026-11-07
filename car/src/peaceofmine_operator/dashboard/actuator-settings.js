@@ -54,6 +54,7 @@ function createServoSettings(role) {
     loadChart.update('none');
   }
   let armHoldTimer = null;
+  let quickHomePending = false, quickHomeHeld = false;
   let armSliderMoving = false;
   let armSliderDragging = false;
   let armSliderTarget = null;
@@ -176,6 +177,20 @@ function createServoSettings(role) {
         ? 'Multi-turn · −7 to +7 shaft revolutions' : 'Joint mode · enable multi-turn for travel beyond one revolution' : 'Select probe to read position mode';
       $('arm-home').disabled = !ready;
       $('arm-home-load').disabled = armHoldTimer !== null;
+      // Main-screen "Hold to home" in Probe controls: same held command as Setup.
+      const quick = document.getElementById('probe-home-quick');
+      if (quick) {
+        const busy = Boolean(state.inspection?.active || state.probe?.cycle_active);
+        quick.disabled = !ready || busy || (armHoldTimer !== null && !quickHomeHeld);
+        quick.title = !owner ? 'Take control first' : !servo.connected ? 'Probe motor not connected' : busy ? 'Wait for the probe to finish'
+          : !state.safety?.servo_allowed ? state.safety?.servo_reason || 'RC blocks motion' : 'Hold to pull the probe up until it finds the top; release to stop';
+        document.getElementById('probe-home-quick-status').textContent = !servo.connected ? 'Probe motor not connected'
+          : quickHomeHeld ? 'Homing… keep holding' : servo.home_status || 'Not homed';
+        if (quickHomePending && armHoldTimer === null && !$('settings-dialog').open) {
+          quickHomePending = false; quickHomeHeld = false;
+          if (owner) send({type: 'calibration_end'}); // homing pauses driving; resume it
+        }
+      }
       $('arm-home-status').textContent = servo.connected ? servo.home_status || 'Not homed' : 'Not homed · connect probe';
       $('arm-home-travel').textContent = servo.connected && Number.isFinite(servo.home_position)
         ? `${(travel * 360 / 4096).toFixed(1)}° from top (shaft)` : 'Home required';
@@ -268,10 +283,21 @@ function createServoSettings(role) {
     const jogOptions = () => ({speed_deg_s: Number($('arm-jog-speed').value)});
     bindHold($('arm-jog-left'), 'jog', () => ({direction: -1, ...jogOptions()}));
     bindHold($('arm-jog-right'), 'jog', () => ({direction: 1, ...jogOptions()}));
-    if (role === 'probe') bindHold($('arm-home'), 'home', () => ({
+    const homeValues = () => ({
       hold_id: `${Date.now()}-${++servoRequestSequence}`,
       load_percent: Number($('arm-home-load').value),
-    }));
+    });
+    if (role === 'probe') bindHold($('arm-home'), 'home', homeValues);
+    const quickHome = role === 'probe' && document.getElementById('probe-home-quick');
+    if (quickHome) {
+      bindHold(quickHome, 'home', homeValues);
+      const mark = () => { if (!quickHome.disabled) quickHomePending = quickHomeHeld = true; };
+      quickHome.addEventListener('pointerdown', mark, true);
+      quickHome.addEventListener('keydown', event => { if ([' ', 'Enter'].includes(event.key) && !event.repeat) mark(); }, true);
+      const release = () => { quickHomeHeld = false; };
+      ['pointerup', 'pointercancel', 'lostpointercapture', 'blur'].forEach(type => quickHome.addEventListener(type, release));
+      quickHome.addEventListener('keyup', event => { if ([' ', 'Enter'].includes(event.key)) release(); });
+    }
     const positionSlider = $('arm-position-slider');
     positionSlider.onpointerdown = () => { armSliderDragging = true; };
     positionSlider.onpointerup = positionSlider.onpointercancel = positionSlider.onlostpointercapture = () => {

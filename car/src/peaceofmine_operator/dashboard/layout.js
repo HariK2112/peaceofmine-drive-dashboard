@@ -46,7 +46,7 @@
   function applyFocus() {
     const probeLarge = (stage === 'probe') !== swapped;
     stageEl.dataset.focus = probeLarge ? 'probe' : 'forward';
-    $('camera-swap-label').textContent = probeLarge ? 'Make forward camera large' : 'Make probe camera large';
+    $('camera-swap-label').textContent = probeLarge ? 'Enlarge front camera' : 'Enlarge probe camera';
     document.body.dataset.stage = stage;
     window.dispatchEvent(new Event('resize'));
   }
@@ -69,6 +69,7 @@
     chip.dataset.level = !live || !Number.isFinite(pct) ? 'none' : pct < 20 ? 'low' : pct < 40 ? 'mid' : 'ok';
   }
 
+  const fullTextIds = ['controller', 'controller-mapping', 'drive-block', 'drive-help', 'detector-detail', 'position', 'connection'];
   function tick() {
     const next = missionStage();
     if (next !== stage) {
@@ -80,6 +81,8 @@
     }
     $('probe-camera-empty').hidden = probeCameraShown();
     renderChip();
+    // one-line status texts are cut with an ellipsis; keep the full text on hover
+    for (const id of fullTextIds) { const el = $(id); if (el && el.title !== el.textContent) el.title = el.textContent; }
   }
   tick();
   setInterval(tick, 250);
