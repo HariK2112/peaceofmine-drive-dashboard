@@ -31,6 +31,7 @@ const assert = (condition, label) => { if (!condition) throw Error(label); };
 const latestDrive = () => sent.filter(m => m.type === 'drive').at(-1);
 assert(!$('probe-diagnostics').open && !$('arm-diagnostics').open && !$('probe-servo-diagnostics').open,'technical diagnostics are collapsed by default');
 assert(document.querySelector('[data-dock-tab="overview"]').classList.contains('active') && $('target-log-body').closest('[data-dock-pane]').hidden,'live data starts on the signal view; the mission log is a tab');
+assert($('search-alert').hidden && preferences.searchAlert.level===60 && preferences.searchAlert.enabled,'search alert starts hidden at the default 60% level');
 assert(document.querySelectorAll('#drive-control-source').length===1 && !document.querySelector('.operation-modes-strip'),'one input selector and no separate workflow strip');
 assert(document.querySelectorAll('.workflow-actions').length===1 && document.querySelector('.task-workbench').contains($('inspection-progress')),'workflow and progress share one workbench');
 assert($('probe-servo-home-load').value==='10','homing starts at the requested 10%');
@@ -43,6 +44,7 @@ else {
   assert(taskBounds.top>=cameraBounds.bottom && detectorBounds.top>=taskBounds.bottom,'phone order is camera then workflow then detector graph');
 }
 assert($('search-task').open && $('probe-task').open,'sweep and probe controls (with Hold to home) start open on the main screen');
+document.querySelectorAll('[data-dock-pane]').forEach(pane => { pane.hidden = false; }); // layout.js is not loaded here; show every tab so its charts draw
 $('probe-diagnostics').open=$('arm-diagnostics').open=$('probe-servo-diagnostics').open=true;
 state.connected = true;
 state.robot.stationary = true;
@@ -515,6 +517,8 @@ for (const [minimum, maximum] of [[-20, 80], [-120, 220], [-1, 2]]) {
   state.detector.beam_max_angle_deg = maximum;
   state.detector.fixture_angle_deg = 0;
   state.detector.beam = Array(101).fill(.5);
+  const radarPane = $('radar-view').closest('[data-dock-pane]');
+  if (radarPane) radarPane.hidden = false; // detector charts live in a dock tab; keep it shown for the checks below
   drawRadar();
   const canvas = $('radar-view');
   const geometry = radarGeometry(canvas.clientWidth, canvas.clientHeight, minimum, maximum);
@@ -555,7 +559,7 @@ assert(detectorDiagnosticsChart.data.datasets[0].data.length === 2 && detectorDi
 assert(detectorDiagnosticsChart.data.datasets[1].data.at(-1).y === 25, 'panel charts actual arm angle');
 assert(detectorDiagnosticsChart.data.datasets[1].yAxisID === 'angle', 'angle has independent axis');
 assert(detectorDiagnosticsChart.data.datasets[2].data[0].y === 20 && detectorDiagnosticsChart.data.datasets[3].data[0].y === 150, 'panel includes calibration lines');
-assert($('sweep-status').parentElement.classList.contains('panel-heading'), 'sweep status moved to title');
+assert($('sweep-status').parentElement.classList.contains('section-foot'), 'sweep status sits under the detector chart');
 const panelPixels = $('detector-history').getContext('2d').getImageData(0, 0, $('detector-history').width, $('detector-history').height).data;
 assert(panelPixels.some((v, i) => i % 4 === 3 && v > 0), 'panel chart renders nonblank');
 state.arm_servo.connected = false;

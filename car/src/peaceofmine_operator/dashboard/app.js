@@ -16,6 +16,53 @@ const MAX_LINEAR_MPS = 0.8;
 const MAX_ANGULAR_RAD_S = 1.4;
 const DRIVE_EPSILON = 1e-4;
 
+// search-alert:start
+// Operator-side search alert. It only informs the operator; it never moves
+// anything. Levels are percent of the calibrated mine level (signal_ratio).
+const SEARCH_ALERT_DEFAULT_LEVEL = 60;
+const SEARCH_ALERT_MIN_LEVEL = 20;
+const SEARCH_ALERT_MAX_LEVEL = 100;
+const SEARCH_ALERT_HOLD_MS = 150;    // reading must stay above the level this long
+const SEARCH_ALERT_REARM_MS = 1500;  // and fall clearly below it this long before it can fire again
+const SEARCH_ALERT_HYSTERESIS = 5;   // percentage points below the level that count as "clearly below"
+function clampSearchAlertLevel(level) {
+  const value = Number(level);
+  if (!Number.isFinite(value)) return SEARCH_ALERT_DEFAULT_LEVEL;
+  return Math.max(SEARCH_ALERT_MIN_LEVEL, Math.min(SEARCH_ALERT_MAX_LEVEL, Math.round(value / 5) * 5));
+}
+// Pure step: returns the next alert state and whether it just fired.
+// phase: idle → pending (above level) → active (fired) → cooling (below) → idle.
+function stepSearchAlert(alert, {enabled, level, signal, live, suppressed, now}) {
+  const next = {...alert};
+  let fired = false;
+  if (!enabled || !live || suppressed || !Number.isFinite(signal)) {
+    if (next.phase === 'active' || next.phase === 'cooling') next.clearedAt = now;
+    next.phase = 'idle';
+    return {alert: next, fired};
+  }
+  if (next.phase === 'active' || next.phase === 'cooling') next.peak = Math.max(next.peak || 0, signal);
+  switch (next.phase) {
+    case 'pending':
+      if (signal < level) next.phase = 'idle';
+      else if (now - next.since >= SEARCH_ALERT_HOLD_MS) {
+        Object.assign(next, {phase: 'active', firedAt: now, peak: signal});
+        fired = true;
+      }
+      break;
+    case 'active':
+      if (signal < level - SEARCH_ALERT_HYSTERESIS) Object.assign(next, {phase: 'cooling', since: now});
+      break;
+    case 'cooling':
+      if (signal >= level) next.phase = 'active';
+      else if (now - next.since >= SEARCH_ALERT_REARM_MS) Object.assign(next, {phase: 'idle', clearedAt: now});
+      break;
+    default:
+      if (signal >= level) Object.assign(next, {phase: 'pending', since: now});
+  }
+  return {alert: next, fired};
+}
+// search-alert:end
+
 const state = {
   connected: false,
   drive: {
@@ -120,6 +167,10 @@ let selectedPadId = null;
 const keys = new Set();
 const activeSliders = new Set();
 if (!['auto', 'standard', 'xbox360'].includes(preferences.mapping)) preferences.mapping = 'auto';
+preferences.searchAlert = Object.assign({enabled: true, level: SEARCH_ALERT_DEFAULT_LEVEL, sound: true}, preferences.searchAlert);
+preferences.searchAlert.level = clampSearchAlertLevel(preferences.searchAlert.level);
+preferences.searchAlert.enabled = preferences.searchAlert.enabled !== false;
+preferences.searchAlert.sound = preferences.searchAlert.sound !== false;
 const triggerSeen = {lt: false, rt: false};
 const lastInput = {
   linear: 0,
@@ -447,6 +498,106 @@ function playContactAlertSound() {
     osc.start(now);
     osc.stop(now + 0.45);
   } catch (e) {}
+}
+
+/* ------------------------------------------------------- Search alert ---
+ * Warns the operator that a reading may be worth stopping for. Uses the
+ * pure stepSearchAlert() above; never sends commands.
+ */
+const SEARCH_ALERT_LINGER_MS = 8000;
+let searchAlert = {phase: 'idle'};
+let searchAlertDismissedAt = -Infinity;
+let searchAlertLevelKey = '';
+const searchAlertSpots = []; // where the car stood when an alert fired (this page only)
+
+function ensureAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch {}
+}
+// Browsers only allow sound after a click or key press, so unlock it early.
+window.addEventListener('pointerdown', ensureAudio, {once: true, capture: true});
+window.addEventListener('keydown', ensureAudio, {once: true, capture: true});
+
+function playSearchAlertSound() {
+  try {
+    ensureAudio();
+    const now = audioCtx.currentTime;
+    for (const start of [0, 0.18]) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(740, now + start);
+      gain.gain.setValueAtTime(0.0001, now + start);
+      gain.gain.exponentialRampToValueAtTime(0.25, now + start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + start + 0.14);
+      osc.start(now + start);
+      osc.stop(now + start + 0.15);
+    }
+  } catch {}
+}
+
+function searchAlertVolts() {
+  const sensor = state.detector.sensor || {};
+  const reference = sensor.reference_voltage;
+  if (!(reference > 0) || !Number.isFinite(sensor.baseline_adc) || !Number.isFinite(sensor.full_response_adc)) return NaN;
+  const base = sensor.baseline_adc * reference / 255;
+  const full = sensor.full_response_adc * reference / 255;
+  return base + (full - base) * preferences.searchAlert.level / 100;
+}
+
+function renderSearchAlertLevel() {
+  const {enabled, level} = preferences.searchAlert;
+  const volts = searchAlertVolts();
+  const key = `${enabled}:${level}:${volts}`;
+  if (key === searchAlertLevelKey) return;
+  searchAlertLevelKey = key;
+  const text = enabled ? `Alert at ${level}%` : 'Alert off';
+  $('alert-marker').style.left = `${level}%`;
+  $('alert-marker').hidden = !enabled;
+  $('detector-alert-note').textContent = text;
+  $('metal-alert-level').textContent = enabled
+    ? `${level}% of mine level${Number.isFinite(volts) ? ` · ${volts.toFixed(3)} V` : ''}` : 'Off';
+}
+
+function updateSearchAlert(now) {
+  const settings = preferences.searchAlert;
+  const detector = state.detector;
+  const live = state.connected && detector.fresh !== false && detector.sensor?.fresh !== false;
+  const suppressed = Boolean(state.inspection?.active || state.probe?.cycle_active);
+  const signal = detector.signal_ratio * 100;
+  const step = stepSearchAlert(searchAlert, {enabled: settings.enabled, level: settings.level, signal, live, suppressed, now});
+  searchAlert = step.alert;
+  if (step.fired) {
+    searchAlertDismissedAt = -Infinity;
+    if (settings.sound) playSearchAlertSound();
+    const robot = state.robot;
+    if (robot.pose_fresh === true && Number.isFinite(robot.x) && Number.isFinite(robot.y)) {
+      searchAlertSpots.push({x: robot.x, y: robot.y});
+      if (searchAlertSpots.length > 50) searchAlertSpots.shift();
+    }
+  }
+  renderSearchAlertLevel();
+
+  const active = searchAlert.phase === 'active' || searchAlert.phase === 'cooling';
+  const recent = !active && Number.isFinite(searchAlert.firedAt) && Number.isFinite(searchAlert.clearedAt)
+    && searchAlert.clearedAt >= searchAlert.firedAt && now - searchAlert.clearedAt < SEARCH_ALERT_LINGER_MS;
+  const shown = (active || recent) && searchAlertDismissedAt < searchAlert.firedAt;
+  const banner = $('search-alert');
+  if (banner.hidden === shown) banner.hidden = !shown;
+  document.body.dataset.searchAlert = active ? 'active' : recent ? 'recent' : '';
+  if (!shown) return;
+  const peak = Math.round(searchAlert.peak || 0);
+  banner.dataset.kind = active ? 'active' : 'recent';
+  const title = active ? 'Possible metal here' : 'Possible metal behind you';
+  const detail = active
+    ? `${Math.round(signal)}% now · peak ${peak}%. Stop and run Confirm arc.`
+    : `Peak ${peak}% ${Math.max(1, Math.round((now - searchAlert.firedAt) / 1000))} s ago. Back up to check it.`;
+  if ($('search-alert-title').textContent !== title) $('search-alert-title').textContent = title;
+  if ($('search-alert-detail').textContent !== detail) $('search-alert-detail').textContent = detail;
 }
 
 function logTarget({x, y, heading_deg, metal_signal_pct, contact_depth_mm, status, statusType}) {
@@ -1415,8 +1566,35 @@ function savePreferences() {
   $('steering-sensitivity').value = preferences.sensitivity;
   $('sensitivity-value').textContent = `${preferences.sensitivity}%`;
   $('pad-mapping').disabled = preferences.input !== 'controller';
+  const alertSettings = preferences.searchAlert;
+  if (!activeSliders.has('search-alert-level')) $('search-alert-level').value = alertSettings.level;
+  $('search-alert-value').textContent = alertSettings.enabled ? `${alertSettings.level}%` : 'Off';
+  $('search-alert-enabled').checked = alertSettings.enabled;
+  $('search-alert-sound').checked = alertSettings.sound;
+  $('search-alert-level').disabled = !alertSettings.enabled;
+  $('search-alert-sound').disabled = !alertSettings.enabled;
+  renderSearchAlertLevel();
   updateInputHint();
 }
+
+$('search-alert-level').oninput = event => {
+  preferences.searchAlert.level = clampSearchAlertLevel(event.target.value);
+  savePreferences();
+};
+$('search-alert-enabled').onchange = event => {
+  preferences.searchAlert.enabled = event.target.checked;
+  savePreferences();
+};
+$('search-alert-sound').onchange = event => {
+  preferences.searchAlert.sound = event.target.checked;
+  savePreferences();
+  if (event.target.checked) playSearchAlertSound(); // let the operator hear it
+};
+$('search-alert-dismiss').onclick = event => {
+  event.stopPropagation();
+  searchAlertDismissedAt = performance.now();
+  $('search-alert').hidden = true;
+};
 
 $('settings').onclick = () => {
   stopInput(true);
@@ -1696,6 +1874,20 @@ function drawMap(pose = state.robot) {
   context.strokeStyle = '#d4ce8a';
   context.lineWidth = 2;
   context.strokeRect(laneTopLeft.x, laneTopLeft.y, laneWidth, laneHeight);
+
+  // Search alerts: hollow amber diamonds where the operator was warned.
+  context.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--warn').trim() || '#f0b44c';
+  context.lineWidth = 1.5;
+  for (const spot of searchAlertSpots) {
+    const point = toScreen(spot.x, spot.y);
+    context.beginPath();
+    context.moveTo(point.x, point.y - 5);
+    context.lineTo(point.x + 5, point.y);
+    context.lineTo(point.x, point.y + 5);
+    context.lineTo(point.x - 5, point.y);
+    context.closePath();
+    context.stroke();
+  }
 
   // Detections mark where the rover stood when the signal crossed threshold.
   for (const detection of state.detections) {
@@ -2369,6 +2561,32 @@ function updateMetalSettings() {
 
 let metalChart = null;
 let detectorChart = null;
+// Draws the operator's search-alert level as a dashed line (not a dataset).
+const searchAlertLinePlugin = {
+  id: 'searchAlertLine',
+  afterDatasetsDraw(chart) {
+    const volts = preferences.searchAlert.enabled ? searchAlertVolts() : NaN;
+    const y = chart.scales.y;
+    if (!Number.isFinite(volts) || !y || volts < y.min || volts > y.max) return;
+    const {ctx, chartArea} = chart;
+    const py = y.getPixelForValue(volts);
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--warn').trim() || '#f0b44c';
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(chartArea.left, py);
+    ctx.lineTo(chartArea.right, py);
+    ctx.stroke();
+    ctx.font = '600 10px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`Alert ${preferences.searchAlert.level}%`, chartArea.right - 4, py - 2);
+    ctx.restore();
+  },
+};
 let detectorHistoryAt = 0;
 let detectorDiagnosticsChart = null;
 const detectorAngles = [];
@@ -2390,6 +2608,7 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
     ? (sensor.history || []).filter(p => p.age_s + elapsed <= 30 && Number.isFinite(p.filtered_adc)) : [];
   if (!detectorChart) detectorChart = new Chart($('detector-history'), {
     type: 'line',
+    plugins: [searchAlertLinePlugin],
     data: {datasets: [{label: 'Filtered voltage (V)', borderColor: '#6edcc7', borderWidth: 2, data: [], pointRadius: 0, spanGaps: .25}]},
     options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
       plugins: {decimation: {enabled: true, algorithm: 'min-max'}, legend: {display: false}},
@@ -2399,6 +2618,9 @@ function drawDetectorHistory(now = performance.now(), animate = false) {
       }},
   });
   detectorChart.data.datasets[0].data = samples.map(p => ({x: -p.age_s - elapsed, y: p.filtered_adc * reference / 255}));
+  // keep the alert line in view so the operator sees how close the signal is
+  const alertVolts = preferences.searchAlert.enabled ? searchAlertVolts() : NaN;
+  detectorChart.options.scales.y.suggestedMax = Number.isFinite(alertVolts) ? alertVolts * 1.04 : undefined;
   detectorChart.$scrollPixels = 0;
   detectorChart.$renderedAt = now;
   detectorChart.update('none');
@@ -2458,7 +2680,7 @@ function drawMetalHistory(animate = false) {
   const values = samples.map(sample => sample.filtered_adc * reference / 255).filter(Number.isFinite);
   const baseline = sensor.baseline_adc * reference / 255;
   const trigger = baseline + (sensor.full_response_adc * reference / 255 - baseline) * state.detector.threshold_ratio;
-  const plotValues = [...values, baseline, trigger].filter(Number.isFinite);
+  const plotValues = [...values, baseline, trigger, preferences.searchAlert.enabled ? searchAlertVolts() : NaN].filter(Number.isFinite);
   let low = 0, high = reference;
   if ($('metal-autoscale').checked && plotValues.length) {
     const minimum = Math.min(...plotValues), maximum = Math.max(...plotValues);
@@ -2476,6 +2698,8 @@ function drawMetalHistory(animate = false) {
           borderDash: [5, 4], pointRadius: 0},
         {label: 'Mine level (V)', data: [], borderColor: '#ed7770', borderWidth: 1,
           borderDash: [5, 4], pointRadius: 0},
+        {label: 'Search alert (V)', data: [], borderColor: '#f0b44c', borderWidth: 1,
+          borderDash: [2, 3], pointRadius: 0},
       ]},
       options: {
         responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
@@ -2497,6 +2721,9 @@ function drawMetalHistory(animate = false) {
     ? [{x: -seconds, y: baseline}, {x: 0, y: baseline}] : [];
   metalChart.data.datasets[2].data = Number.isFinite(trigger)
     ? [{x: -seconds, y: trigger}, {x: 0, y: trigger}] : [];
+  const alertVolts = preferences.searchAlert.enabled ? searchAlertVolts() : NaN;
+  metalChart.data.datasets[3].data = Number.isFinite(alertVolts) && alertVolts >= low && alertVolts <= high
+    ? [{x: -seconds, y: alertVolts}, {x: 0, y: alertVolts}] : [];
   metalChart.options.scales.x.min = -seconds;
   metalChart.options.scales.y.min = low;
   metalChart.options.scales.y.max = high;
@@ -2701,6 +2928,7 @@ inputLoop();
 function drawDashboard(now) {
   if (!document.hidden) {
     const motion = displayMotion(now);
+    updateSearchAlert(now);
     drawForwardView(motion.robot);
     drawRadar(now);
     drawMap(motion.robot);
