@@ -54,12 +54,12 @@ class ProbeContact:
         self.samples.clear()
         self.filtered = None
 
-    def snapshot(self, now):
+    def snapshot(self, now, include_history=True):
         fresh = bool(self.valid and self.samples and now - self.samples[-1][0] < .3)
         base_load, base_current = self.baseline or (0, 0)
         latest = self.samples[-1] if fresh else None
         recent = [s for s in self.samples if now - s[0] <= 2]
-        return dict(contact_rate_hz=(len(recent) - 1) / (recent[-1][0] - recent[0][0]) if fresh and len(recent) > 1 and recent[-1][0] > recent[0][0] else 0,
+        summary = dict(contact_rate_hz=(len(recent) - 1) / (recent[-1][0] - recent[0][0]) if fresh and len(recent) > 1 and recent[-1][0] > recent[0][0] else 0,
                     contact_fresh=fresh, contact_zeroed=self.baseline is not None,
                     contact_can_zero=self.can_zero(now),
                     current_a=latest[2] if latest else None,
@@ -67,5 +67,8 @@ class ProbeContact:
                     contact_load_percent=abs(latest[1] - base_load) if latest else None,
                     position_error_ticks=latest[3] if latest else None,
                     contact_peak_percent=max((abs(s[1] - base_load) for s in recent), default=None) if fresh else None,
-                    current_peak_ma=max((abs(s[2] - base_current) * 1000 for s in recent), default=None) if fresh else None,
-                    contact_samples=[dict(x=round(s[0] - now, 4), load=s[5], current=s[6], depth_mm=s[7]) for s in self.samples if now - s[0] <= 30])
+                    current_peak_ma=max((abs(s[2] - base_current) * 1000 for s in recent), default=None) if fresh else None)
+        if include_history:
+            summary['contact_samples'] = [dict(x=round(s[0]-now, 4), load=s[5], current=s[6], depth_mm=s[7])
+                                          for s in self.samples if now-s[0] <= 30]
+        return summary

@@ -34,7 +34,7 @@ assert(document.querySelector('[data-dock-tab="overview"]').classList.contains('
 assert($('search-alert').hidden && preferences.searchAlert.level===60 && preferences.searchAlert.enabled,'search alert starts hidden at the default 60% level');
 assert(document.querySelectorAll('#drive-control-source').length===1 && !document.querySelector('.operation-modes-strip'),'one input selector and no separate workflow strip');
 assert(document.querySelectorAll('.workflow-actions').length===1 && document.querySelector('.task-workbench').contains($('inspection-progress')),'workflow and progress share one workbench');
-assert($('probe-servo-home-load').value==='10','homing starts at the requested 10%');
+assert(!$('probe-servo-home') && !$('probe-home-quick'), 'manual homing buttons removed from both surfaces');
 const cameraBounds=cameraPanel.getBoundingClientRect(), taskBounds=document.querySelector('.task-workbench').getBoundingClientRect();
 assert(cameraBounds.width>0 && cameraBounds.left>=0 && cameraBounds.right<=innerWidth,'camera fits the viewport');
 assert(taskBounds.left>=0 && taskBounds.right<=innerWidth && document.documentElement.scrollWidth<=innerWidth,'workbench has no horizontal overflow');
@@ -43,7 +43,7 @@ else {
   const detectorBounds=document.querySelector('.detector-panel').getBoundingClientRect();
   assert(taskBounds.top>=cameraBounds.bottom && detectorBounds.top>=taskBounds.bottom,'phone order is camera then workflow then detector graph');
 }
-assert($('search-task').open && $('probe-task').open,'sweep and probe controls (with Hold to home) start open on the main screen');
+assert($('search-task').open && $('probe-task').open,'sweep and probe controls start open on the main screen');
 document.querySelectorAll('[data-dock-pane]').forEach(pane => { pane.hidden = false; }); // layout.js is not loaded here; show every tab so its charts draw
 $('probe-diagnostics').open=$('arm-diagnostics').open=$('probe-servo-diagnostics').open=true;
 state.marking = {settings:{duration_s: 1.5, idle_percent: 0, active_percent: 70, manual_percent: 30}, mode:'idle', output_percent: 0};
@@ -577,14 +577,20 @@ state.arm_servo = savedServo;
 state.drive.armed = true; state.drive.calibrating = true;
 state.arm_servo = {...savedServo, active_role: 'probe', home_position: 2100, position: 2000};
 updateArmSettings();
-assert(!$('probe-servo-home').disabled, 'probe home requires calibration permission');
-$('probe-servo-home').onkeydown({key: ' ', repeat: false, preventDefault() {}});
-assert(sent.at(-1).action === 'home' && sent.at(-1).role === 'probe' && sent.at(-1).held
-  && sent.at(-1).hold_id && sent.at(-1).load_percent === 10, 'home sends load threshold and unique deadman hold');
-$('probe-servo-home').onkeyup({key: ' '});
-assert(sent.at(-1).action === 'home_release' && sent.at(-1).hold_id, 'release accepts this home gesture');
+const priorStrokeSettings=state.settings;
+state.settings={...state.settings,probe_stroke:{down_mm_s:5,retract_mm_s:5,home_load_percent:10}};
+updateAlignmentSettings();
+assert($('probe-servo-home-load').value==='10' && $('probe-down-speed').value==='5','car stroke settings shown');
+const strokeSave=$('probe-stroke-save');$('probe-down-speed').value='0';$('probe-down-speed').dispatchEvent(new Event('input'));
+assert(strokeSave.disabled,'zero speed cannot save');
+$('probe-down-speed').value='1.5';$('probe-retract-speed').value='12';$('probe-servo-home-load').value='25';
+$('probe-retract-speed').dispatchEvent(new Event('input'));updateHud();strokeSave.click();
+assert(sent.at(-1).section==='probe_stroke' && sent.at(-1).value.down_mm_s===1.5 && sent.at(-1).value.retract_mm_s===12 && sent.at(-1).value.home_load_percent===25,'stroke save sends independent speeds and home load');
+state.settings.probe_stroke={...sent.at(-1).value};updateHud();assert(strokeSave.disabled && $('probe-stroke-status').textContent.includes('Saved on car'),'stroke settings confirmed from car');
+state.drive.you_control_owner=false;updateAlignmentSettings();assert(strokeSave.disabled && $('probe-retract-speed').readOnly,'spectators cannot save stroke settings');
+state.drive.you_control_owner=true;state.settings=priorStrokeSettings;updateAlignmentSettings();
 assert($('probe-servo-home-travel').textContent.includes('8.8°'), 'probe travel uses top reference');
-state.arm_servo.last_command={request_id:sent.at(-1).request_id,success:true,message:'Stopped'};
+state.arm_servo.last_command={request_id:sent.findLast(m=>m.type==='arm_servo' && m.role==='probe' && m.request_id)?.request_id,success:true,message:'Stopped'};
 state.arm_servo.reverse=false; updateArmSettings();
 const reverseControl=$('probe-servo-reverse');
 assert(!reverseControl.disabled && !reverseControl.checked,'probe reverse is a stopped persistent setting');
@@ -609,7 +615,7 @@ assert(reverseControl.checked && $('probe-servo-feedback').textContent==='Save f
 state.arm_servo={...state.arm_servo,reverse:false,home_position:2100,position:2000};
 
 state.safety.servo_allowed = false; updateArmSettings();
-assert($('probe-servo-home').disabled, 'RC kill blocks homing');
+assert($('probe-servo-jog-left').disabled, 'RC kill blocks probe motion');
 state.safety.servo_allowed = true;
 state.arm_servo = savedServo;
 updateArmSettings();
@@ -820,8 +826,7 @@ assert(probeLoadChart.data.datasets[0].data.length === sampleCount, 'repeated te
 state.arm_servo.sample_time = 2; state.arm_servo.load_percent = 42; updateArmSettings();
 assert(probeLoadChart.data.datasets[0].data.at(-1).y === 42, 'fresh load appends to history');
 assert(probeLoadChart.scales.y.min === -100 && probeLoadChart.scales.y.max === 100, 'load axis shows full signed percent range');
-$('probe-servo-home-load').value = '20';
-$('probe-servo-home-load').oninput();
+state.settings={...state.settings,probe_stroke:{down_mm_s:5,retract_mm_s:5,home_load_percent:20}};updateArmSettings();
 assert(probeLoadChart.data.datasets[1].data[0].y === 20 && probeLoadChart.data.datasets[2].data[0].y === -20,
   'contact threshold markers cover both load directions');
 const loadPixels = $('probe-servo-load-history').getContext('2d').getImageData(0, 0, probeLoadChart.width, probeLoadChart.height).data;
@@ -1034,6 +1039,12 @@ assert(document.querySelector('.task-workbench').contains($('notice')) && !camer
 
 socket.onmessage({data: JSON.stringify({type: 'error', message: 'Motor unavailable. Reconnect in Settings → Arm.'})});
 assert(noticeExpiry === Infinity && $('notice').textContent.includes('Motor unavailable'), 'server errors remain visible until replaced');
+const noticeWrites = new MutationObserver(()=>{});noticeWrites.observe($('notice'),{childList:true,subtree:true,characterData:true});
+pendingPumpMark = {id:'my-shot',at:performance.now()};metalPending={id:'my-calibration',at:performance.now()};
+socket.onmessage({data:JSON.stringify({type:'error',message:'Motor unavailable',request_id:'older-request'})});
+assert(!noticeWrites.takeRecords().length && pendingPumpMark.id==='my-shot' && metalPending.id==='my-calibration','duplicate and unrelated errors leave other pending work intact');
+noticeWrites.disconnect();pendingPumpMark=null;metalPending=null;
+
 state.connected=true;state.drive.you_control_owner=true;state.drive.armed=true;state.drive.calibrating=false;
 state.safety={allowed:true,servo_allowed:true,mode:'simulation'};
 state.actuators={arm:{connected:true,calibration:{minimum:0,center:2048,maximum:4095}}};

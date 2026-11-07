@@ -49,6 +49,9 @@ class OperatorTransportTest(unittest.TestCase):
             self.assertTrue(bridge.owns_lease(owner))
             self.assertFalse(bridge.owns_lease(spectator))
             bridge.handle_command(spectator,dict(type='drive',linear_x=.8,angular_z=0)); spin(.1)
+            self.assertNotIn(.8, twists)
+            self.assertFalse(bridge.replies())  # In-flight drive frames after takeover are quiet.
+            bridge.handle_command(spectator,dict(type='start_probe_cycle', depth_mm=5.)); spin(.1)
             self.assertTrue(any(ws is spectator and result['type']=='error' for ws,result in bridge.replies()))
             bridge.handle_command(owner,dict(type='arm')); spin(.1)
             bridge.handle_command(owner,dict(type='drive',linear_x=.4,angular_z=0,deadman=True)); spin(.1)
@@ -71,6 +74,19 @@ class OperatorTransportTest(unittest.TestCase):
             executor.shutdown()
             for node in (bridge,control,observer): node.destroy_node()
             rclpy.shutdown()
+
+    def test_local_boot_timestamp_survives_wall_clock_step(self):
+        from unittest.mock import patch
+        from peaceofmine_operator import transport_clock
+        with patch.object(transport_clock, 'BOOT_ID', 'local-boot'), patch.object(transport_clock, '_boot_time', return_value=42.) as clock:
+            envelope = transport_clock.transport_stamp()
+            clock.return_value = 42.1
+            with patch.object(transport_clock.time, 'time', return_value=envelope['stamp']-12):
+                self.assertAlmostEqual(transport_clock.transport_age(envelope), .1)
+            clock.return_value = 43.
+            self.assertGreater(transport_clock.transport_age(envelope), .5)
+            with patch.object(transport_clock.time, 'time', return_value=envelope['stamp']+2):
+                self.assertEqual(transport_clock.transport_age(dict(envelope,boot_id='remote')), 2.)
 
     def test_camera_registry_and_settings_are_ros_owned(self):
         from peaceofmine_operator.web_bridge import OperatorWebBridge

@@ -159,6 +159,29 @@ def contact_trigger(settings):
     return dict(enabled=False, mux=assigned[0] if len(assigned) == 1 else 4, level=1.0, direction='above')
 
 
+def unreachable_hysteresis(trigger, config):
+    """The latch must be able to cross its release threshold on this ADC input."""
+    h = trigger.get('hysteresis', 0.)
+    if not h:
+        return False
+    mux = trigger['mux']
+    gain = config['channels'][mux]['multiplier']
+    offset = config['channels'][mux]['offset']
+    full = RANGES[config['pga']]
+    low_v = 0. if mux >= 4 else -full
+    high_v = full * 32767 / 32768
+    low, high = sorted((low_v*gain+offset, high_v*gain+offset))
+    room = trigger['level']-low if trigger['direction']=='above' else high-trigger['level']
+    return h >= min(high-low, room)
+
+
+def saved_contact_trigger(settings):
+    trigger = contact_trigger(settings)
+    if unreachable_hysteresis(trigger, settings.get('config') or DEFAULTS):
+        return dict(trigger, hysteresis=0.)
+    return trigger
+
+
 class OperatorADC:
     def __init__(self, path, demo=False, initial_settings=None):
         self.path = Path(path).expanduser()
@@ -169,13 +192,14 @@ class OperatorADC:
         for ch in config['channels']:
             ch['enabled'] = ch['mux'] in (4, 6)
         self.section = 'adc_simulation' if demo else 'adc'
-        self.load_error = None
+        self.load_error = self.contact_warning = None
         try:
             saved = configuration.load(str(self.path))
             section = 'adc_simulation' if demo else 'adc'
             value = saved.get(section, initial_settings)
             if value is not None:
-                config, self.routes, self.probe_trigger = self.validate(value)
+                config, self.routes, self.probe_trigger = self.validate(value, restoring=True)
+                self.contact_warning = self.recovery_notice(value, self.probe_trigger)
         except FileNotFoundError:
             pass
         except (ValueError, TypeError, OSError) as exc:
@@ -185,7 +209,7 @@ class OperatorADC:
         self.acquisition.thread.start()
 
     @staticmethod
-    def validate(value):
+    def validate(value, restoring=False):
         if not isinstance(value, dict) or set(value) not in ({'config', 'routes'}, {'config', 'routes', 'probe_trigger'}):
             raise ValueError('Expected config and routes')
         config = validate(value['config'])
@@ -207,6 +231,10 @@ class OperatorADC:
             value = trigger.get(key,0.)
             if type(value) not in (int,float) or not math.isfinite(value) or not 0 <= value <= maximum:
                 raise ValueError('Invalid trigger hysteresis or debounce')
+        if unreachable_hysteresis(trigger, config):
+            if not restoring:
+                raise ValueError('Choose a smaller hysteresis so the contact input can clear within its voltage range.')
+            trigger = dict(trigger, hysteresis=0.)
         # Keep legacy plot exports and consumers compatible. Derive the probe
         # role from its physical trigger input, preserving all detector routes.
         normalized = []
@@ -218,9 +246,15 @@ class OperatorADC:
                 normalized.append('detector' if detector else 'none')
         return config, normalized, dict(trigger)
 
-    def command(self, payload, persist=True):
+    @staticmethod
+    def recovery_notice(saved, effective):
+        if contact_trigger(saved).get('hysteresis', 0.) != effective.get('hysteresis', 0.):
+            return 'Saved hysteresis is outside the input range. Applying 0 V until contact settings are saved.'
+        return None
+
+    def command(self, payload, persist=True, restoring=False):
         if payload.get('action') == 'settings':
-            config, routes, trigger = self.validate(payload.get('settings'))
+            config, routes, trigger = self.validate(payload.get('settings'), restoring=restoring)
             with self.acquisition.lock:
                 if persist:
                     configuration.save_section(str(self.path), self.section, dict(
@@ -229,6 +263,7 @@ class OperatorADC:
                 self.routes = routes
                 self.probe_trigger = trigger
                 self.load_error = None
+                self.contact_warning = self.recovery_notice(payload['settings'], trigger)
                 self.acquisition.run(True)
         elif payload.get('action') == 'run':
             raise ValueError('ADC acquisition runs automatically; start/stop commands are not supported')
@@ -238,7 +273,7 @@ class OperatorADC:
     def snapshot(self, after=0):
         with self.acquisition.lock:
             return {**self.acquisition.snapshot(after), 'routes': list(self.routes),
-                    'load_error': self.load_error, 'probe_trigger': dict(self.probe_trigger),
+                    'load_error': self.load_error, 'contact_warning': self.contact_warning, 'probe_trigger': dict(self.probe_trigger),
                     'probe_contact': dict(enabled=self.probe_trigger['enabled'], fresh=False, detected=None)}
 
     def close(self):

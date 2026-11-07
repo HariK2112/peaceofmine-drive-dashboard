@@ -50,6 +50,8 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.started = time.monotonic()
         self.probe.reason = 'Idle'
         self.probe.lifecycle = 'IDLE'
+        self.probe.stroke_settings = lambda: dict(down_mm_s=2., retract_mm_s=8., home_load_percent=20.)
+        self.probe.motion_timeout = 60.
         self.probe.motion_speed = 100
         self.probe.acceleration = 10
 
@@ -63,7 +65,7 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.operation = MagicMock()
         self.probe.operation.target = target
         self.probe.operation.operation_id = 'op1'
-        self.probe.operation.speed = self.probe.motion_speed
+        self.probe.operation.speed = kw.get('speed', self.probe.motion_speed)
         self.probe.operation.tolerance = 23
         self.probe.telemetry.goal = target
         self.probe.lifecycle = 'MOVING'
@@ -88,16 +90,42 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertEqual(self.probe.cycle_phase,'DESCENDING')
         self.assertEqual(self.probe.cycle_target_depth,80.)
 
-    def test_cycle_rejects_stale_disabled_and_already_triggered_contact(self):
+    def test_cycle_rejects_stale_or_disabled_contact(self):
         for contact in (dict(enabled=False, fresh=False, detected=None),
-                        dict(enabled=True, fresh=False, detected=None),
-                        dict(enabled=True, fresh=True, detected=True)):
+                        dict(enabled=True, fresh=False, detected=None)):
             self.probe.contact.snapshot.side_effect = None
             self.probe.contact.snapshot.return_value = contact
             with self.assertRaises(ValueError):
                 self.probe.start_probe_cycle(80.)
             self.assertFalse(self.probe.cycle_active)
             self.probe.start.assert_not_called()
+
+    def test_contact_active_at_home_completes_without_motor_command(self):
+        self.probe.contact.detected = True
+        self.probe.contact.filtered_volts = 3.95
+        self.probe.start_probe_cycle(80.)
+        self.probe.start.assert_not_called()
+        self.assertFalse(self.probe.cycle_active)
+        self.assertEqual(self.probe.last_probe_result['status'], 'CONTACT')
+        self.assertEqual(self.probe.last_probe_result['contact_depth_mm'], 0.)
+        self.assertEqual(self.probe.last_probe_result['contact_volts'], 3.95)
+
+    def test_contact_active_below_home_only_commands_retraction(self):
+        self.probe.telemetry.position = 3750
+        self.probe.contact.detected = True
+        self.probe.start_probe_cycle(80.)
+        self.assertEqual(self.probe.cycle_phase, 'RETRACTING')
+        self.assertEqual(self.probe.contact_depth_mm, 10.)
+        self.assertEqual(self.probe.start.call_args.args[0], 4000)
+        self.assertEqual(self.probe.start.call_count, 1)
+
+    def test_contact_before_descent_ack_retargets_to_home(self):
+        self.probe.start_probe_cycle(80.)
+        self.probe.telemetry.operation_id = 'old'
+        self.probe.contact.detected = True
+        self.probe.update_behavior()
+        self.assertEqual(self.probe.cycle_phase, 'RETRACTING')
+        self.assertEqual(self.probe.operation.target, 4000)
 
     def test_cycle_never_reports_clear_when_contact_input_dies(self):
         self.probe.start_probe_cycle(80.)
@@ -267,6 +295,37 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.start_action(SimpleNamespace(operation='probe_cycle',target=1.,speed=5.))
         self.assertEqual(self.probe.operation.speed,16)
         self.assertTrue(self.probe.action_probe_cycle)
+
+    def test_manual_targets_and_cycle_apply_independent_calibrated_speeds(self):
+        self.probe.start_target(20.)
+        self.assertEqual(self.probe.operation.speed, 6)
+        self.probe.telemetry.position = 3500
+        self.probe.start_target(0.)
+        self.assertEqual(self.probe.operation.speed, 26)
+        self.probe.operation = None
+        self.probe.telemetry.position = 4000
+        self.probe.start_probe_cycle(80.)
+        self.assertEqual(self.probe.operation.speed, 6)
+        self.probe.telemetry.position = 3000
+        self.probe.contact.detected = True
+        self.probe.update_behavior()
+        self.assertEqual(self.probe.cycle_phase, 'RETRACTING')
+        self.assertEqual(self.probe.operation.speed, 26)
+        self.assertEqual(self.probe.operation.operation_id, 'op1')
+
+    def test_automatic_home_uses_saved_load_and_retract_speed(self):
+        from types import SimpleNamespace
+        self.probe.start_action(SimpleNamespace(operation='home', speed=0., load_percent=0.))
+        self.assertEqual(self.probe.start.call_args.kwargs, dict(speed=26, load=20., autonomous=True))
+        self.probe.start_action(SimpleNamespace(operation='home', speed=0., load_percent=15.))
+        self.assertEqual(self.probe.start.call_args.kwargs['load'], 15.)
+
+    def test_slow_return_timeout_uses_both_legs_and_caps_motor_speed(self):
+        self.probe.stroke_settings = lambda: dict(down_mm_s=200., retract_mm_s=.1, home_load_percent=10.)
+        self.probe.start_probe_cycle(120.)
+        self.assertEqual(self.probe.operation.speed, self.probe.motion_speed)
+        self.assertEqual(self.probe.return_speed, 1)
+        self.assertGreater(self.probe.cycle_timeout, self.probe.travel_seconds(3000, 1))
 
     def test_sub_encoder_cycle_depth_is_rejected(self):
         with self.assertRaisesRegex(ValueError,'encoder tick'):

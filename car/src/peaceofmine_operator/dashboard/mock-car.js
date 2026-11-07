@@ -16,6 +16,7 @@
   mock.settings = {
     gnss: {max_wait_s: 5, target_accuracy_m: 1},
     inspection:{passes:2}, probe_alignment:{offset_deg:30}, probe_scan:{point_count:7,spacing_deg:10},
+    probe_stroke:{down_mm_s:5,retract_mm_s:5,home_load_percent:10},
     marking:{duration_s:2, idle_percent:0, active_percent:100, manual_percent:0},
     saved:true, driving:{input:'controller',forward_percent:100,reverse_percent:100},
     display:{mapping:'auto',sensitivity:100,wheel:{steering:0,throttle:1,brake:2,deadman:0,invertSteering:false,
@@ -38,9 +39,21 @@
     pump.output = mock.owner && mock.armed ? mock.settings.marking.idle_percent : 0;
   }
 
-  // Simulate two seconds per confirmation pass and per probe point.
+  // The preview compresses confirmation passes to two seconds each.
   function stepInspection(t) {
-    const i = mock.inspection, dt = t - mock.phaseAt;
+    const i = mock.inspection;
+    const dt = t - mock.phaseAt - 1; // First second is the automatic home.
+    if (i.active && dt < 0) {
+      i.message = i.phase === 'CONFIRMING' ? 'Homing probe before confirmation.' : 'Homing probe before scan.';
+      mock.homing = 1;
+      return;
+    }
+    if (mock.homing && i.active) {
+      mock.depth = 0;
+      mock.homed = true;
+      mock.homing = 0;
+      i.message = '';
+    }
     i.probe_offset_deg = mock.settings.probe_alignment.offset_deg;
     i.probe_reachable = Number.isFinite(i.confirmed_angle_deg) && Math.abs(i.confirmed_angle_deg - i.probe_offset_deg) <= 45;
     if (i.phase === 'CONFIRMING') {
@@ -48,34 +61,35 @@
       i.completed = Math.floor(i.progress);
       if (i.completed >= i.total) Object.assign(i, {phase: 'CONFIRMED', active: false, message: '', confirmed_angle_deg: 6, probe_reachable: Math.abs(6-i.probe_offset_deg) <= 45, progress:i.total});
     } else if (i.phase === 'PROBING') {
-      const point = Math.floor(dt / 2), within = (dt % 2) / 2;
-      const contact = mockContact();
-      while (i.points.length < Math.min(point, i.total)) {
-        const n = i.points.length;
-        const result = mock.pointResult?.index === n ? mock.pointResult : {status:'UNKNOWN'};
-        i.points.push({angle_deg:i.probe_angles_deg[n], status:result.status, contact_depth_mm:result.contact_depth_mm ?? null});
-        previewLog({status:result.status === 'CONTACT' ? 'CONTACT TRIGGER' : 'PROBE ' + result.status,
-          statusType:result.status.toLowerCase(), contact_volts:result.contact_volts ?? null,
-          contact_depth_mm:result.contact_depth_mm ?? null});
-      }
-      i.completed = i.points.length; i.progress = i.completed;
-      mock.cycle = point < i.total;
-      if (!mock.cycle) {
-        mock.depth = 0; i.probe_goal_id = null;
-        const count = i.points.filter(point => point.status === 'CONTACT').length;
-        Object.assign(i, {phase:'COMPLETE', active:false, message:`Probe scan complete · ${count} contact${count === 1 ? '' : 's'}.`});
-        return;
-      }
+      const point = i.points.length;
+      const stroke = mock.settings.probe_stroke;
+      mock.cycle = true;
       i.probe_goal_id = `preview-${mock.phaseAt}-${point}`;
-      if (mock.pointResult?.index !== point) mock.pointResult = null;
-      mock.depth = i.probe_target_depth_mm * Math.sin(Math.PI * within);
-      if (!mock.pointResult && (within >= .5 || contact.detected === true)) {
-        const hit = within < .5 && contact.detected === true;
-        mock.pointResult = {index:point, within, depth:mock.depth, status:hit ? 'CONTACT' : contact.fresh ? 'CLEAR' : 'UNKNOWN',
+      if (!mock.pointResult) {
+        mock.cyclePhase = 'DESCENDING';
+        mock.depth = Math.min(i.probe_target_depth_mm, Math.max(0, t - mock.pointAt) * stroke.down_mm_s);
+        const contact = mockContact();
+        const hit = contact.detected === true && mock.depth < i.probe_target_depth_mm;
+        if (!hit && mock.depth < i.probe_target_depth_mm) return;
+        mock.pointResult = {at:t, depth:mock.depth, status:hit ? 'CONTACT' : contact.fresh ? 'CLEAR' : 'UNKNOWN',
           contact_depth_mm:hit ? mock.depth : null, contact_volts:contact.filtered_volts};
       }
-      mock.cyclePhase = mock.pointResult ? 'RETRACTING' : 'DESCENDING';
-      if (mock.pointResult) mock.depth = mock.pointResult.depth * (1-within)/(1-mock.pointResult.within);
+      mock.cyclePhase = 'RETRACTING';
+      const result = mock.pointResult;
+      mock.depth = Math.max(0, result.depth - (t - result.at) * stroke.retract_mm_s);
+      if (mock.depth > 0) return;
+      i.points.push({angle_deg:i.probe_angles_deg[point], status:result.status, contact_depth_mm:result.contact_depth_mm});
+      previewLog({status:result.status === 'CONTACT' ? 'CONTACT TRIGGER' : 'PROBE ' + result.status,
+        statusType:result.status.toLowerCase(), contact_volts:result.contact_volts, contact_depth_mm:result.contact_depth_mm});
+      i.completed = i.progress = i.points.length;
+      mock.pointAt = t;
+      mock.pointResult = null;
+      if (i.completed === i.total) {
+        mock.cycle = false;
+        i.probe_goal_id = null;
+        const hits = i.points.filter(p => p.status === 'CONTACT').length;
+        Object.assign(i, {phase:'COMPLETE', active:false, message:`Probe scan complete · ${hits} of ${i.total} positions had contact.`});
+      }
     }
   }
 
@@ -187,7 +201,7 @@
         this.emit({type:'adc_result',ok:true,message:'Applied in preview.'});
         return;
       }
-      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection','probe_alignment','probe_scan'].includes(m.section)) {
+      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection','probe_alignment','probe_scan','probe_stroke'].includes(m.section)) {
         mock.settings[m.section] = m.value;
         this.emit({type:'settings_result',section:m.section,ok:true,message:'Saved in preview.'});
         return;
@@ -230,11 +244,13 @@
             return Number(Math.max(-45, Math.min(45, angle)).toFixed(4));
           }))];
           mock.pointResult = null;
+          mock.pointAt = t + 1;
           Object.assign(mock.inspection, {phase:'PROBING', active:true, total:angles.length, completed:0, progress:0,
             points:[], probe_angles_deg:angles.map(angle => angle+offset), probe_target_bearing_deg:bearing,
             scan_point_count:point_count, scan_spacing_deg:spacing_deg,
             probe_arm_center_deg:center, scan_offset_deg:offset, probe_target_depth_mm:m.depth_mm, message:''});
         }
+        mock.homing = mock.inspection.active ? 1 : 0;
         mock.phaseAt = t;
       }
     }
@@ -287,8 +303,8 @@
     for (let t = adcLast + 0.02; t <= now; t += 0.02) {
       const volts = detectorVoltage(t - started / 1000);
       // A physical fixture presses the preview probe sensor on the third stroke.
-      const scanTime = t-started/1000-mock.phaseAt;
-      const pressing = mock.inspection.phase === 'PROBING' && scanTime >= 4.35 && scanTime < 5;
+      const pressing = mock.inspection.phase === 'PROBING' && mock.inspection.completed === 2 &&
+        mock.depth >= mock.inspection.probe_target_depth_mm * .4;
       for (const ch of adcConfig.channels.filter(ch => ch.enabled)) {
         const value = ch.mux === 6 ? volts : (ch.mux === 4 && pressing ? 1.5 : .2);
         const old = adcFiltered.get(ch.mux);

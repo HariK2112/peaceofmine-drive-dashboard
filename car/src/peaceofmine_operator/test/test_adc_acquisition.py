@@ -5,10 +5,38 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
-from peaceofmine_operator.adc_acquisition import OperatorADC
+from peaceofmine_operator.adc_acquisition import OperatorADC, saved_contact_trigger
+from peaceofmine_operator.ads1115 import DEFAULTS
+from peaceofmine_operator import configuration
 
 
 class OperatorADCTest(unittest.TestCase):
+    def test_impossible_release_voltage_recovers_without_mutating_saved_settings(self):
+        trigger = dict(enabled=True, mux=4, level=3.9, direction='above', hysteresis=50., debounce_ms=50)
+        settings = dict(config=copy.deepcopy(DEFAULTS), routes=['none']*8, probe_trigger=trigger)
+        with self.assertRaisesRegex(ValueError, 'can clear'):
+            OperatorADC.validate(settings)
+        self.assertEqual(saved_contact_trigger(settings)['hysteresis'], 0.)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'operator_config.json'
+            configuration.save_section(path, 'adc_simulation', settings)
+            original = path.read_bytes()
+            adc = OperatorADC(path, demo=True)
+            try:
+                state = adc.snapshot()
+                self.assertTrue(state['running'])
+                self.assertEqual(state['probe_trigger']['hysteresis'], 0.)
+                self.assertIn('0 V', state['contact_warning'])
+                self.assertEqual(path.read_bytes(), original)
+            finally:
+                adc.close()
+        settings['config']['channels'][4].update(multiplier=-2., offset=10.)
+        trigger.update(level=2.2, direction='below', hysteresis=.1)
+        self.assertEqual(OperatorADC.validate(settings)[2]['hysteresis'], .1)
+        trigger.update(hysteresis=8.)
+        with self.assertRaisesRegex(ValueError, 'can clear'):
+            OperatorADC.validate(settings)
+
     def test_persist_routes_and_restart_acquire_automatically(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'adc.json'

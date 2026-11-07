@@ -13,7 +13,7 @@ from peaceofmine_interfaces.msg import ServoCommand, ServoState, ServoTelemetry
 from peaceofmine_interfaces.srv import ServoConfigure
 from peaceofmine_operator import configuration
 from peaceofmine_operator.servo_transport import ArbotiX
-from peaceofmine_operator.servo_runtime import ServoRuntime
+from peaceofmine_operator.servo_runtime import ServoRuntime, StaleServoCommand
 from peaceofmine_operator.servo_pid import apply_arm_pid
 from peaceofmine_operator.simulated_servo_bus import SimulatedServoBus
 from peaceofmine_operator.rc_safety import RcSafety
@@ -154,12 +154,18 @@ class ServoDriver(Node):
     def command(self, message):
         try:
             if not self.runtime or message.session != self.session:
-                raise ValueError('Driver session changed')
+                return  # A packet from a previous driver session has no authority.
+            issued = None
             if message.mode != ServoCommand.STOP:
                 issued = self.challenge_times.get(message.challenge)
                 if issued is None or time.monotonic()-issued >= .25:
-                    raise ValueError('Expired driver challenge')
-            self.runtime.submit(message)
+                    # A delayed packet is not proof the current controller has
+                    # stopped. Only fresh renewals can keep its watchdog alive.
+                    self.runtime.enforce()
+                    return
+            self.runtime.submit(message, challenge_at=issued)
+        except StaleServoCommand:
+            return
         except ValueError as exc:
             self.reason = str(exc)
             if self.runtime and message.servo_id in self.runtime.motors:

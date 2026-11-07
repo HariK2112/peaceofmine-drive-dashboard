@@ -279,10 +279,6 @@
             <span>Depth now <strong id="probe-depth">—</strong></span>
             <span>Target <strong id="probe-target">—</strong></span>
           </div>
-          <div class="home-row">
-            <button id="probe-home-quick" type="button" class="hold-btn" title="Hold to pull the probe up until it finds the top; release to stop">↑ Hold to home</button>
-            <span id="probe-home-quick-status" class="note" role="status">Not homed</span>
-          </div>
           <div class="probe-cycle-card">
             <div class="field-row probe-cycle-input-row">
               <label for="probe-cycle-target">Deepest probe</label>
@@ -556,7 +552,7 @@
       <!-- =============================================================== Probe -->
       <section id="settings-probe" class="settings-panel" role="tabpanel" data-settings-panel="probe" hidden>
         <header class="panel-head">
-          <h3>Probe <span class="tip" data-tip="Home the probe at the top, then save how far down it can safely go. Set the contact limit in Setup → Probe contact."></span></h3>
+          <h3>Probe <span class="tip" data-tip="Calibrate travel and set the speeds for probing and returning. The probe homes automatically before a scan. Set the contact limit in Setup → Probe contact."></span></h3>
           <div class="panel-tools"><button type="button" class="quiet" data-goto-settings="contact" data-tip="Contact input and voltage calibration">Probe contact →</button><button type="button" id="probe-servo-calibration-stop" class="danger">Stop · release motor</button></div>
         </header>
         <div class="status-bar">
@@ -576,13 +572,18 @@
         </section>
         <div class="panel-grid cols-2">
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">2</span>Home at the top <span class="tip" data-tip="Hold to lift the probe. Release at the top to set zero, or let the load threshold stop it. At startup the first encoder position is treated as zero."></span></h4></header>
-            <button type="button" id="probe-servo-home" class="hold-btn">↑ Hold to home</button>
-            <p id="probe-servo-home-status" class="status-msg" role="status">Not homed</p>
-            <label class="field"><span class="field-name">Stop at load <span class="unit">%</span> <span class="tip" data-tip="Homing stops when the motor load reaches this. 10–60%."></span></span><input id="probe-servo-home-load" type="number" min="10" max="60" step="1" value="10" required></label>
+            <header class="card-head"><h4>Probe motion <span class="tip" data-tip="Down and retract speeds apply to probe cycles and manual depth targets. The motor uses the nearest supported speed within its saved shaft speed limit."></span></h4></header>
+            <div class="fields-2">
+              <label class="field"><span class="field-name">Down speed <span class="unit">mm/s</span></span><input id="probe-down-speed" type="number" min="0" step="any" data-positive required readonly></label>
+              <label class="field"><span class="field-name">Retract speed <span class="unit">mm/s</span></span><input id="probe-retract-speed" type="number" min="0" step="any" data-positive required readonly></label>
+            </div>
+            <label class="field"><span class="field-name">Automatic home load <span class="unit">%</span> <span class="tip" data-tip="During automatic homing, the probe retracts to the top and sets zero at this motor load."></span></span><input id="probe-servo-home-load" type="number" min="10" max="60" step="any" required readonly></label>
+            <div class="card-actions"><button id="probe-stroke-save" type="button" class="primary" disabled>Save on car</button></div>
+            <p id="probe-stroke-status" class="status-msg" role="status">Waiting for car settings.</p>
+            <p id="probe-servo-home-status" class="meta" role="status">Waiting for probe encoder</p>
           </section>
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">3</span>Save the deepest point <span class="tip" data-tip="Jog down to the deepest safe point, measure from the top, enter it and save."></span></h4></header>
+            <header class="card-head"><h4><span class="step">2</span>Save the deepest point <span class="tip" data-tip="Jog down to the deepest safe point, measure from the top, enter it and save."></span></h4></header>
             <div class="hold-row">
               <button type="button" id="probe-servo-jog-left">↓ Hold down</button>
               <button type="button" id="probe-servo-jog-right">↑ Hold up</button>
@@ -680,6 +681,7 @@
             <header class="card-head"><h4>Live contact signal</h4><output class="head-value" id="contact-live-volts">—</output></header>
             <div class="metal-chart-container"><canvas id="contact-history" role="img" aria-label="Filtered contact sensor voltage and contact limit over the last 30 seconds"></canvas></div>
             <p id="contact-chart-error" class="error-line" role="status" hidden></p>
+            <p id="contact-draft-preview" class="meta" hidden></p>
           </section>
           <section class="set-card">
             <header class="card-head"><h4>Contact calibration</h4></header>
@@ -688,7 +690,7 @@
             <div class="fields-2">
               <label class="field"><span class="field-name">Contact when</span><select id="probe-contact-direction"><option value="above">Above</option><option value="below">Below</option></select></label>
               <label class="field"><span class="field-name">Limit <span class="unit">V</span></span><input id="probe-contact-volts" type="number" step="any" required></label>
-              <label class="field"><span class="field-name">Hysteresis <span class="unit">V</span><span class="tip" data-tip="Voltage change back from the limit needed to clear contact."></span></span><input id="adc-trigger-hysteresis" type="number" min="0" step="any" required></label>
+              <label class="field"><span class="field-name">Hysteresis <span class="unit">V</span><span class="tip" data-tip="After contact, the filtered voltage must cross the clear level shown above. Use 0 V to clear at the contact limit."></span></span><input id="adc-trigger-hysteresis" type="number" min="0" step="any" required></label>
               <label class="field"><span class="field-name">Debounce <span class="unit">ms</span><span class="tip" data-tip="Time the voltage must remain past the limit before contact changes."></span></span><input id="adc-trigger-debounce" type="number" min="0" max="10000" step="any" required></label>
             </div>
             <div class="card-actions"><button id="probe-contact-save" type="button" class="primary" disabled>Save contact settings</button><button type="button" class="quiet" id="contact-revert">Undo edits</button></div>

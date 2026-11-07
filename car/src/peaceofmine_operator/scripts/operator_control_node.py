@@ -19,6 +19,7 @@ from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool, Float32, String
 from peaceofmine_operator import marking_settings
 from peaceofmine_operator.rc_safety import RcSafety
+from peaceofmine_operator.transport_clock import transport_age
 from peaceofmine_operator import driving_settings, inspection, probe_alignment, probe_scan
 from peaceofmine_operator.detector import DetectorTelemetry
 from peaceofmine_operator.inspection import InspectionWorkflow
@@ -87,6 +88,7 @@ class OperatorControl(Node):
         # for ROS service clients while its executor spins.
         self._connected_clients = set()
         self._client_seen = {}
+        self._motion_fence = {}
         self._calibrating = False
         self._armed = False
         self._deadman = False
@@ -283,26 +285,27 @@ class OperatorControl(Node):
     def _inspection_tick(self, now):
         if not self._inspection.active:
             return
-        if now-self._arm_state_at >= .5 or not self._arm_state.get('connected'):
-            reason = ('Arm telemetry timed out' if now-self._arm_state_at >= .5
-                      else self._arm_state.get('reason') or 'Arm driver disconnected')
-            self._inspection.stop(reason, error=True)
-            return
-        if self._inspection.phase == 'PROBING' and (now-self._probe_state_at >= .5 or not self._probe_state.get('connected')):
-            reason = ('Probe telemetry timed out' if now-self._probe_state_at >= .5
-                      else self._probe_state.get('reason') or 'Probe driver disconnected')
-            self._inspection.stop(reason, error=True)
-            return
-        detector = self._inspection_detector
-        if self._inspection.phase == 'CONFIRMING' and (now-self._inspection_detector_at >= .5 or not detector.get('fresh')):
+        step = self._inspection.pending
+        next_step = step or (self._inspection.queue[0][0] if self._inspection.queue else None)
+        needs_probe = self._inspection.phase == 'PROBING' or next_step == 'home'
+        for role, last_update in (('arm', self._arm_state_at), ('probe', self._probe_state_at)):
+            if (role == 'arm' or needs_probe) and now-last_update >= 1.:
+                self._inspection.stop(f'{role.title()} telemetry timed out', error=True)
+                return
+        if step == 'pass' and (now-self._inspection_detector_at >= .5 or not self._inspection_detector.get('fresh')):
             self._inspection.stop('Detector readings lost during confirmation', error=True)
             return
-        role = 'probe' if self._inspection.pending == 'probe' else 'arm'
-        if self._inspection.pending and not self._inspection_clients[role].server_is_ready():
+        role = 'probe' if step in ('home', 'probe') else 'arm'
+        if step and not self._inspection_clients[role].server_is_ready():
             self._inspection.stop(f'{role.title()} action server disconnected', error=True)
             return
-        idle = (not self._arm_state.get('torque') and self._arm_state.get('lifecycle') == 'IDLE'
-                and (not self._probe_state.get('connected') or (not self._probe_state.get('torque') and self._probe_state.get('lifecycle') == 'IDLE')))
+        # The action reports the actual motor outcome. Between actions wait for
+        # fresh, released servos so an old status cannot start the next move.
+        arm_idle = (now-self._arm_state_at < .5 and self._arm_state.get('connected')
+                    and not self._arm_state.get('torque') and self._arm_state.get('lifecycle') == 'IDLE')
+        probe_idle = (now-self._probe_state_at < .5 and self._probe_state.get('connected')
+                      and not self._probe_state.get('torque') and self._probe_state.get('lifecycle') == 'IDLE')
+        idle = arm_idle and (probe_idle or (not needs_probe and not self._probe_state.get('connected')))
         self._inspection.tick(idle)
 
     def _start_inspection(self, payload):
@@ -313,7 +316,7 @@ class OperatorControl(Node):
             raise ValueError('An inspection is already running')
         if self._calibrating:
             raise ValueError('Finish actuator calibration before inspecting')
-        if self._probe_active() or self._pump_active:
+        if self._probe_state.get('probe', {}).get('cycle_active') or self._pump_active:
             raise ValueError('Finish the active probe or marking operation first')
         calibration = self._arm_state.get('calibration')
         if time.monotonic()-self._arm_state_at >= .5 or not self._arm_state.get('connected') or not calibration:
@@ -326,9 +329,9 @@ class OperatorControl(Node):
         if action == 'confirm':
             if time.monotonic()-self._inspection_detector_at >= .5 or not self._inspection_detector.get('fresh'):
                 raise ValueError('Fresh detector readings are required for confirmation')
-            self._stop_motion_locked()
+            self._stop_motion_locked(for_inspection=True)
             self._inspection.confirm(lower, upper, self._inspection_detector.get('sweep_speed_deg_s'),
-                                     self._confirmation_passes)
+                                     self._confirmation_passes, home_probe=bool(self._probe_state.get('connected')))
         else:
             if self._inspection.confirmed_angle is None:
                 raise ValueError('Confirm a detection before starting the probe scan')
@@ -345,7 +348,7 @@ class OperatorControl(Node):
                 raise ValueError('Save the measured probe travel in Setup → Probe')
             if not self._inspection_clients['probe'].server_is_ready():
                 raise ValueError('Probe action server unavailable')
-            self._stop_motion_locked(stop_inspection=False)
+            self._stop_motion_locked(stop_inspection=False, for_inspection=True)
             self._inspection.probe(lower, upper, depth, self._probe_pattern)
         self._stop_until = time.monotonic()+STOP_TAIL_S
         self._publish_twist(0., 0.)
@@ -407,16 +410,18 @@ class OperatorControl(Node):
         self._permission_pub.publish(Bool(data=False))
         self._stop_motion_locked(stop_inspection=self._inspection.active)
 
-    def _stop_motion_locked(self, stop_inspection=True):
+    def _stop_motion_locked(self, stop_inspection=True, for_inspection=False):
         if stop_inspection:
             self._inspection.stop()
         self._calibrating = False
         self._rc_enabled_until = 0.
         self._deadman = False
         self._command = (0.0, 0.0)
-        self._sweep_enabled_pub.publish(command_message(dict(action='sweep',enabled=False)))
-        self._arm_command_pub.publish(command_message(dict(action='stop')))
-        self._probe_command_pub.publish(command_message(dict(action='stop')))
+        action = 'stop_manual' if for_inspection else 'stop'
+        if not for_inspection:
+            self._sweep_enabled_pub.publish(command_message(dict(action='sweep',enabled=False)))
+        self._arm_command_pub.publish(command_message(dict(action=action)))
+        self._probe_command_pub.publish(command_message(dict(action=action)))
         self._stop_pump(0.)
 
     def _marking_settings_cb(self, message):
@@ -850,15 +855,16 @@ class OperatorControl(Node):
             elif message_type == 'clear_log':
                 self._field_clear.publish(Bool(data=True))
             elif message_type == 'inspection' and payload.get('action') == 'stop':
-                self._stop_motion_locked()
-                self._stop_until = time.monotonic()+STOP_TAIL_S
-                flush_drive = True
+                if self._inspection.active:
+                    self._stop_motion_locked()
+                    self._stop_until = time.monotonic()+STOP_TAIL_S
+                    flush_drive = True
             elif message_type in ('calibration_begin', 'calibration_end'):
                 self._stop_motion_locked(stop_inspection=self._inspection.active)
                 self._calibrating = message_type == 'calibration_begin'
                 flush_drive = True
             elif message_type in ('adc', 'settings'):
-                next_scan_setting = message_type == 'settings' and payload.get('section') in ('inspection', 'probe_alignment', 'probe_scan')
+                next_scan_setting = message_type == 'settings' and payload.get('section') in ('inspection', 'probe_alignment', 'probe_scan', 'probe_stroke')
                 if self._inspection.active and not next_scan_setting:
                     self._stop_motion_locked()
                 publisher = self._adc_command_pub if message_type == 'adc' else self._settings_command_pub
@@ -872,8 +878,8 @@ class OperatorControl(Node):
                     return {'type': 'error', 'message': 'Fresh detector readings required to measure a baseline.'}
                 command = {key: payload[key] for key in ('action', 'request_id', 'baseline_adc', 'full_response_adc', 'reference_voltage') if key in payload}
                 self._detector_command_pub.publish(String(data=json.dumps(command)))
-            elif message_type == 'arm_servo' and payload.get('action') in ('select', 'select_role', 'reconnect', 'capture', 'configure', 'configure_motion', 'configure_direction', 'enable_multiturn', 'save_probe_extension', 'stop'):
-                command = {key: payload[key] for key in ('action', 'request_id', 'servo_id', 'role', 'point', 'minimum', 'center', 'maximum', 'max_speed_deg_s', 'acceleration_deg_s2', 'max_extension_mm', 'enabled') if key in payload}
+            elif message_type == 'arm_servo' and payload.get('action') in ('select', 'select_role', 'reconnect', 'capture', 'configure', 'configure_motion', 'configure_direction', 'enable_multiturn', 'save_probe_extension', 'stop', 'home_release'):
+                command = {key: payload[key] for key in ('action', 'request_id', 'hold_id', 'servo_id', 'role', 'point', 'minimum', 'center', 'maximum', 'max_speed_deg_s', 'acceleration_deg_s2', 'max_extension_mm', 'enabled') if key in payload}
                 if self._inspection.active:
                     self._stop_motion_locked()
                 return self._actuator_command(command)
@@ -1015,6 +1021,21 @@ class OperatorControl(Node):
             self._emit_cmd_vel()
         return error
 
+    def _command_scopes(self, kind, payload):
+        if kind == 'inspection':
+            return ('inspection',) if payload.get('action') == 'stop' else ('inspection', 'arm', 'probe')
+        if kind == 'arm_servo' and payload.get('action') in ('stop','home_release','home','move','jog','position','angle'):
+            return (str(payload.get('role', self._selected_actuator)),)
+        if kind in ('start_probe_cycle', 'probe_cycle', 'probe_target'):
+            return ('probe',)
+        if kind in ('align_probe', 'sweep_enabled', 'sweep_speed'):
+            return ('arm',)
+        if kind in ('pump_manual', 'pump_mark'):
+            return ('pump',)
+        if kind in ('calibration_begin', 'calibration_end'):
+            return ('arm', 'probe', 'inspection', 'pump')
+        return ()
+
     def _transport_command(self, message):
         client = None
         payload = {}
@@ -1023,27 +1044,65 @@ class OperatorControl(Node):
             client = envelope['client_id']
             if not isinstance(client, str) or not 1 <= len(client) <= 100:
                 raise ValueError('Invalid client ID')
-            stamp = envelope['stamp']
-            if type(stamp) not in (float, int) or not math.isfinite(stamp) or not 0 <= time.time() - stamp < .5:
-                raise ValueError('Expired operator command')
             payload = envelope['payload']
             if not isinstance(payload, dict):
                 raise ValueError('Invalid command payload')
             event = envelope.get('event', 'command')
-            if event == 'heartbeat':
-                self.connect_client(client)
-                self._client_seen[client] = time.monotonic()
-                return
             if event == 'disconnect':
+                # Socket IDs are unique. Even a delayed disconnect revokes
+                # that socket's lease without disturbing a new owner.
                 self.release(client)
                 self._client_seen.pop(client, None)
                 return
-            if event != 'command' or client not in self._client_seen:
+            age = transport_age(envelope)
+            fresh = 0 <= age < .5
+            if event == 'heartbeat':
+                if fresh:
+                    self.connect_client(client)
+                    self._client_seen[client] = max(self._client_seen.get(client, -math.inf), time.monotonic() - age)
+                return
+            kind = payload.get('type')
+            stream = kind in ('drive', 'rc_drive_enable') or (
+                kind == 'arm_servo' and payload.get('held') and not payload.get('request_id')
+            ) or (kind == 'pump_manual' and payload.get('action') == 'renew')
+            stop = (kind in ('disarm', 'estop') or (kind in ('inspection', 'pump_manual') and payload.get('action') == 'stop')
+                    or (kind == 'arm_servo' and payload.get('action') in ('stop', 'home_release')))
+            # The writer sequence orders a client's starts, renewals and
+            # releases even when the Pi clock steps. Legacy messages use
+            # their send timestamp within that socket's lease.
+            order = envelope.get('sequence', envelope.get('stamp'))
+            if type(order) not in (float, int) or not math.isfinite(order):
+                raise ValueError('Invalid command sequence')
+            scopes = self._command_scopes(kind, payload)
+            owner = self._lease == client
+            if event != 'command':
+                raise ValueError('Invalid operator event')
+            if owner and kind == 'take_control' and order <= self._motion_fence.get('lease', -math.inf):
+                return
+            if owner and kind != 'take_control' and order <= max(
+                    (self._motion_fence.get(scope, -math.inf) for scope in ('lease', *scopes))):
+                return  # An ordered-out release/renewal cannot affect later work.
+            owner_stop = owner and stop and math.isfinite(age) and age >= 0
+            if not fresh and not owner_stop:
+                if stream or stop:
+                    return
+                raise ValueError('Operator request expired before execution.')
+            if client not in self._client_seen and not owner_stop:
+                if stream or stop:
+                    return
                 raise ValueError('Client heartbeat required')
+            if (stream or stop) and not owner:
+                return
             result = self.handle_command(client, payload)
-            if result:
+            if not result:
+                if kind == 'take_control':
+                    self._motion_fence = {'lease': order}
+                elif not stream or stop:
+                    for scope in scopes:
+                        self._motion_fence[scope] = order
+            if result and not stream:
                 self._result_pub.publish(String(data=json.dumps(dict(
-                    client_id=client, request_id=payload.get('request_id'), **result))))
+                    client_id=client, request_id=payload.get('request_id'), command_type=kind, **result))))
         except (ValueError, TypeError, KeyError) as exc:
             self._result_pub.publish(String(data=json.dumps(dict(
                 type='error', client_id=client, request_id=payload.get('request_id') if isinstance(payload, dict) else None, message=str(exc)))))

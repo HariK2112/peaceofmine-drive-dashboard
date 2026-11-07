@@ -686,10 +686,8 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 .probe-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
 .probe-numbers > span { display: grid; gap: .1rem; padding: var(--s2) var(--s3); border-radius: var(--radius-sm); background: var(--bg-sunken); color: var(--muted); font-size: var(--fs-xs); }
 .probe-numbers strong { font-family: var(--mono); font-size: var(--fs-md); color: var(--text); }
-.home-row { display: flex; align-items: center; gap: var(--s3); }
 .hold-btn { flex: none; touch-action: none; user-select: none; border-color: var(--line-strong); }
 .hold-btn:active:not(:disabled) { background: var(--accent); color: var(--on-accent); }
-.home-row .note { min-width: 0; }
 .probe-cycle-card { display: grid; gap: var(--s2); }
 .probe-cycle-input-wrap { display: flex; align-items: center; gap: var(--s1); }
 .probe-cycle-input-wrap input { width: 5rem; text-align: right; }

@@ -84,7 +84,7 @@ class InspectionWorkflow:
                                               if self.probe_arm_center is not None else None),
                     probe_reachable=self.confirmed_angle is not None and self.lower <= self.confirmed_angle - self.probe_offset <= self.upper, points=list(self.points), passes=list(self.passes))
 
-    def confirm(self, lower, upper, speed, passes=2):
+    def confirm(self, lower, upper, speed, passes=2, *, home_probe=False):
         validate({'passes': passes})
         if not all(math.isfinite(v) for v in (lower, upper)) or lower >= upper:
             raise ValueError('Calibrated arm limits are required')
@@ -103,9 +103,11 @@ class InspectionWorkflow:
         self.scan_offset = None
         self.scan_pattern = None
         self.total = passes
+        if home_probe:
+            self.queue.append(('home', 0.))
         self.queue.append(('start', lower))
         self.queue.extend(('pass', upper if index % 2 == 0 else lower) for index in range(passes))
-        self.message = f'Moving to sweep start at {speed:g}°/s.'
+        self.message = 'Homing probe before confirmation.' if home_probe else 'Moving to sweep start.'
 
     def probe(self, lower, upper, depth, pattern=None):
         if self.confirmed_angle is None:
@@ -129,9 +131,10 @@ class InspectionWorkflow:
         self.probe_depth = depth
         self.probe_arm_center = center
         self.total = len(angles)
+        self.queue.append(('home', 0.))
         for angle in angles:
             self.queue.extend([('position', angle), ('probe', depth)])
-        self.message = f'Probing {self.total} positions around {self.confirmed_angle:.1f}°.'
+        self.message = 'Homing probe before scan.'
 
     def _begin(self, phase):
         if self.active:
@@ -209,6 +212,8 @@ class InspectionWorkflow:
             self.pass_to = target
             self.progress = float(self.completed)
             self.message = f'Confirmation pass {self.completed+1} of {self.total} at {self.confirm_speed:g}°/s.'
+        elif kind == 'start':
+            self.message = f'Moving to sweep start at {self.confirm_speed:g}°/s.'
         elif kind == 'position':
             self.angle = target
             self.message = f'Position {self.completed+1} of {self.total}: moving to {target+self.scan_offset:.1f}°.'
@@ -265,8 +270,10 @@ class InspectionWorkflow:
                     self.message = f'Probe scan complete: contact at {hits} of {self.total} positions.'
 
         try:
-            self.execute('probe' if kind == 'probe' else 'arm',
-                         'probe_cycle' if kind == 'probe' else 'angle', target,
-                         self.confirm_speed if self.phase == 'CONFIRMING' else 5., complete)
+            if kind in ('home', 'probe'):
+                self.execute('probe', 'home' if kind == 'home' else 'probe_cycle', target, 0., complete)
+            else:
+                speed = self.confirm_speed if self.phase == 'CONFIRMING' else 5.
+                self.execute('arm', 'angle', target, speed, complete)
         except (ValueError, RuntimeError) as exc:
             self.stop(str(exc), error=True)

@@ -119,7 +119,7 @@ class ArmController(ActuatorController):
             if not math.isfinite(request.speed) or request.speed < 0:
                 raise ValueError('Arm action speed must be finite and nonnegative')
             speed = max(1, min(self.motion_speed, round(request.speed/.684))) if request.speed else self.motion_speed
-            self.start(target, calibration['minimum'], calibration['maximum'], speed=speed)
+            self.start(target, calibration['minimum'], calibration['maximum'], speed=speed, autonomous=True)
             self.auto_position, self.started = True, time.monotonic()
             self.position_timeout = 10+abs(target-self.telemetry.position)*360/(4096*speed*.684)
 
@@ -141,7 +141,7 @@ class ArmController(ActuatorController):
                     self.auto_position = False
                     self.lifecycle, self.reason = 'HOLDING', 'Target position reached; holding position'
 
-    def behavior_state(self):
+    def behavior_state(self, include_history=True):
         calibration = self.calibration()
         if self.connected() and calibration:
             angle = (self.telemetry.position-calibration['center'])*360/4096+self.offset

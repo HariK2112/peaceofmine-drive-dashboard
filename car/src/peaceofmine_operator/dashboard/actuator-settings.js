@@ -43,7 +43,7 @@ function createServoSettings(role) {
     });
     loadChart.data.datasets[0].data = loadHistory.map(sample => ({x: (sample.at - now) / 1000, y: sample.value}));
     if (role === 'probe') {
-      const threshold = Number($('arm-home-load').value);
+      const threshold = state.settings?.probe_stroke?.home_load_percent;
       [1, -1].forEach((sign, index) => {
         loadChart.data.datasets[index + 1].data = Number.isFinite(threshold) && threshold >= 10 && threshold <= 60
           ? [{x: -60, y: sign * threshold}, {x: 0, y: sign * threshold}] : [];
@@ -54,8 +54,6 @@ function createServoSettings(role) {
     loadChart.update('none');
   }
   let armHoldTimer = null;
-  let homeGesture = null;
-  let quickHomePending = false, quickHomeHeld = false;
   let armSliderMoving = false;
   let armSliderDragging = false;
   let armSliderTarget = null;
@@ -99,16 +97,12 @@ function createServoSettings(role) {
       error = `Centre must be between Right (${armAngle(values.minimum)}) and Left (${armAngle(values.maximum)}). Check the captured positions.`;
     return {captured, values, error};
   }
-  function stopArmMove(acceptHome = false) {
+  function stopArmMove() {
     armSliderMoving = false;
     if (armHoldTimer !== null) {
       clearInterval(armHoldTimer);
       armHoldTimer = null;
-      if (state.connected && state.drive.you_control_owner) {
-        if (acceptHome === true && homeGesture) armCommand('home_release', {hold_id:homeGesture});
-        else armCommand('stop');
-      }
-      homeGesture = null;
+      if (state.connected && state.drive.you_control_owner) armCommand('stop');
     }
   }
   function updateArmSettings() {
@@ -202,22 +196,6 @@ function createServoSettings(role) {
       $('arm-enable-multiturn').disabled = !canRecord || servo.position_mode === 'multi-turn';
       $('arm-position-mode').textContent = servo.connected ? servo.position_mode === 'multi-turn'
         ? 'Multi-turn · −7 to +7 shaft revolutions' : 'Joint mode · enable multi-turn for travel beyond one revolution' : 'Select probe to read position mode';
-      $('arm-home').disabled = !ready;
-      $('arm-home-load').disabled = armHoldTimer !== null;
-      // Main-screen "Hold to home" in Probe controls: same held command as Setup.
-      const quick = document.getElementById('probe-home-quick');
-      if (quick) {
-        const busy = Boolean(state.inspection?.active || state.probe?.cycle_active);
-        quick.disabled = !ready || busy || (armHoldTimer !== null && !quickHomeHeld);
-        quick.title = !owner ? 'Take control first' : !servo.connected ? 'Probe motor not connected' : busy ? 'Wait for the probe to finish'
-          : !state.safety?.servo_allowed ? state.safety?.servo_reason || 'RC blocks motion' : 'Hold to lift the probe. Release at the top to set zero.';
-        document.getElementById('probe-home-quick-status').textContent = !servo.connected ? 'Probe motor not connected'
-          : quickHomeHeld ? 'Homing… keep holding' : servo.home_status || 'Not homed';
-        if (quickHomePending && armHoldTimer === null && !$('settings-dialog').open) {
-          quickHomePending = false; quickHomeHeld = false;
-          if (owner) send({type: 'calibration_end'}); // homing pauses driving; resume it
-        }
-      }
       $('arm-home-status').textContent = servo.connected ? servo.home_status || 'Not homed' : 'Not homed · connect probe';
       $('arm-home-travel').textContent = servo.connected && Number.isFinite(servo.home_position)
         ? `${(travel * 360 / 4096).toFixed(1)}° from top (shaft)` : 'Home required';
@@ -275,7 +253,6 @@ function createServoSettings(role) {
       if (!$('arm-max-extension').reportValidity()) return;
       armCommand('save_probe_extension', {max_extension_mm: Number($('arm-max-extension').value)});
     };
-    if (role === 'probe') $('arm-home-load').oninput = updateArmSettings;
     if (role === 'probe') $('arm-reverse').onchange = () => {
       armCommand('configure_direction', {enabled: $('arm-reverse').checked});
       updateArmSettings();
@@ -300,42 +277,25 @@ function createServoSettings(role) {
         if (button.disabled) return;
         stopArmMove();
         const selected = typeof values === 'function' ? values() : values;
-        if (action === 'home' && !$('arm-home-load').reportValidity()) return;
         if (action === 'jog' && (['arm-jog-speed'].some(id => !$(id).checkValidity() || !Number.isFinite(Number($(id).value)) || Number($(id).value) <= 0))) {
           setArmFeedback('Enter a positive jog speed.', 'error'); return;
         }
         const held = {...selected, held: true};
-        homeGesture = action === 'home' ? held.hold_id : null;
         armCommand(action, held);
         armHoldTimer = setInterval(() => armCommand(action, held, false), 80);
         updateArmSettings();
       };
       button.onpointerdown = event => { event.preventDefault(); button.setPointerCapture(event.pointerId); start(); };
-      button.onpointerup = () => stopArmMove(true);
+      button.onpointerup = stopArmMove;
       button.onpointercancel = button.onlostpointercapture = stopArmMove;
       button.onkeydown = event => { if ([' ', 'Enter'].includes(event.key) && !event.repeat) { event.preventDefault(); start(); } };
-      button.onkeyup = event => { if ([' ', 'Enter'].includes(event.key)) stopArmMove(true); };
+      button.onkeyup = event => { if ([' ', 'Enter'].includes(event.key)) stopArmMove(); };
       button.onblur = stopArmMove;
     }
     const jogOptions = () => ({speed_deg_s: Number($('arm-jog-speed').value)});
     const leftDirection = role === 'arm' ? 1 : -1;
     bindHold($('arm-jog-left'), 'jog', () => ({direction:leftDirection, ...jogOptions()}));
     bindHold($('arm-jog-right'), 'jog', () => ({direction:-leftDirection, ...jogOptions()}));
-    const homeValues = () => ({
-      hold_id: `${Date.now()}-${++servoRequestSequence}`,
-      load_percent: Number($('arm-home-load').value),
-    });
-    if (role === 'probe') bindHold($('arm-home'), 'home', homeValues);
-    const quickHome = role === 'probe' && document.getElementById('probe-home-quick');
-    if (quickHome) {
-      bindHold(quickHome, 'home', homeValues);
-      const mark = () => { if (!quickHome.disabled) quickHomePending = quickHomeHeld = true; };
-      quickHome.addEventListener('pointerdown', mark, true);
-      quickHome.addEventListener('keydown', event => { if ([' ', 'Enter'].includes(event.key) && !event.repeat) mark(); }, true);
-      const release = () => { quickHomeHeld = false; };
-      ['pointerup', 'pointercancel', 'lostpointercapture', 'blur'].forEach(type => quickHome.addEventListener(type, release));
-      quickHome.addEventListener('keyup', event => { if ([' ', 'Enter'].includes(event.key)) release(); });
-    }
     const positionSlider = $('arm-position-slider');
     positionSlider.onpointerdown = () => { armSliderDragging = true; };
     positionSlider.onpointerup = positionSlider.onpointercancel = positionSlider.onlostpointercapture = () => {
@@ -390,7 +350,7 @@ function createServoSettings(role) {
     document.addEventListener('visibilitychange', () => { if (document.hidden) stopArmMove(); });
   }
 
-  return {draw() { if (loadLatest) updateLoadChart(loadLatest, loadActive, true); }, update: updateArmSettings, initialize: initializeArmSettings, stop: stopArmMove, error(message) { if (armPending) { armPending = null; setArmFeedback(message, 'error'); } }};
+  return {draw() { if (loadLatest) updateLoadChart(loadLatest, loadActive, true); }, update: updateArmSettings, initialize: initializeArmSettings, stop: stopArmMove, error(message, requestId) { if (requestId && armPending?.id === requestId) { armPending = null; setArmFeedback(message, 'error'); } }};
 }
 const servoSettings = [createServoSettings('arm'), createServoSettings('probe')];
 function updateArmSettings() { servoSettings.forEach(panel => panel.update()); }

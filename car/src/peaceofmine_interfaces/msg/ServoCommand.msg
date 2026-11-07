@@ -7,6 +7,8 @@ uint64 sequence
 uint8 STOP=0
 uint8 POSITION=1
 uint8 SWEEP=2
+# Controller-owned position sequence. Torque still drops at the normal watchdog.
+uint8 AUTONOMOUS_POSITION=3
 uint8 mode
 uint16 servo_id
 int32 target

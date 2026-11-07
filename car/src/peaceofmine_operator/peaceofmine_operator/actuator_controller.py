@@ -19,8 +19,10 @@ from . import configuration
 from .rc_safety import RcSafety
 from .settings_client import SettingsClient
 from .servo_motor import recorded_arm_limits
+from .servo_runtime import AUTONOMOUS_POSITION
 from .actuator_protocol import command_dict
 from peaceofmine_interfaces.msg import ActuatorCommand, ActuatorStatus
+from .servo_runtime import AUTONOMOUS_POSITION
 
 
 class ActuatorController(Node):
@@ -49,6 +51,8 @@ class ActuatorController(Node):
         self.captured = {}
         self.last_command = {}
         self.state = {}
+        self._web_state_at = None
+        self._web_probe_result = None
         self.last_outcome = None
         self.held_key = None
         self.retired_holds = set()
@@ -153,7 +157,7 @@ class ActuatorController(Node):
         self.lifecycle = 'IDLE' if self.connected() else 'DISCONNECTED'
         self.complete_action(success, reason)
 
-    def start(self, target, low, high, speed=None, mode=ServoCommand.POSITION, load=0., lead=114, tolerance=23):
+    def start(self, target, low, high, speed=None, mode=ServoCommand.POSITION, load=0., lead=114, tolerance=23, autonomous=False):
         if not self.interlock():
             raise ValueError('Motion requires fresh telemetry, permission and behavior interlocks')
         if self.driver.config_revision < self.saved.get('revision',0):
@@ -162,7 +166,7 @@ class ActuatorController(Node):
             self.stop('Replaced by a new request')
         self.last_outcome = None
         self.operation = ServoCommand(session=self.driver.session, owner=self.owner,
-            operation_id=uuid.uuid4().hex, servo_id=self.ident, mode=mode,
+            operation_id=uuid.uuid4().hex, servo_id=self.ident, mode=AUTONOMOUS_POSITION if autonomous else mode,
             target=int(target), minimum=int(low), maximum=int(high),
             speed=int(min(self.motion_speed, speed or self.motion_speed)), acceleration=int(self.acceleration),
             lead=int(lead), tolerance=int(tolerance), load_stop_percent=float(load))
@@ -180,10 +184,11 @@ class ActuatorController(Node):
             self.reply(command, ok)
         self.settings.save(section, value, complete)
 
-    def reply(self, command, ok):
+    def reply(self, command, ok, message=None):
         if command.get('request_id'):
-            self.last_command = dict(request_id=command['request_id'], success=ok, message=self.reason)
-            self.result_pub.publish(String(data=json.dumps(dict(request_id=command['request_id'], ok=ok, message=self.reason))))
+            text = self.reason if message is None else message
+            self.last_command = dict(request_id=command['request_id'], success=ok, message=text)
+            self.result_pub.publish(String(data=json.dumps(dict(request_id=command['request_id'], ok=ok, message=text))))
 
     def configure_hardware(self, command, operation):
         if self.operation or (self.telemetry and self.telemetry.torque):
@@ -208,11 +213,15 @@ class ActuatorController(Node):
             if not isinstance(command, dict) or command.get('role', self.role) != self.role:
                 raise ValueError('Wrong actuator command')
             action = command.get('action')
+            if action == 'stop_manual' and (self.action_reserved or self.action_handle):
+                return  # Handoff stop overtaken by the action it was preparing.
             if not hasattr(msg,'data') and action != 'stop':
                 age=time.time()-(msg.stamp.sec+msg.stamp.nanosec/1e9)
                 if not 0 <= age < .25:
-                    raise ValueError('Expired actuator command')
-            if action == 'stop':
+                    # A queued old input cannot stop or renew a newer operation.
+                    self.reply(command, False, 'Actuator command expired before execution.')
+                    return
+            if action in ('stop', 'stop_manual'):
                 self.stop()
                 # Explicit release allows a later fresh manual gesture.
                 self.retired_holds.clear()
@@ -311,7 +320,7 @@ class ActuatorController(Node):
     def update_behavior(self):
         pass
 
-    def behavior_state(self):
+    def behavior_state(self, include_history=True):
         return {}
 
     def tick(self):
@@ -343,7 +352,14 @@ class ActuatorController(Node):
                     position=float(self.telemetry.position if self.telemetry else 0), message=self.reason)
                 self.action_handle.publish_feedback(feedback)
         t = self.telemetry
-        self.state = dict(connected=self.connected(), servo_id=self.ident, active_role=self.role,
+        now = time.monotonic()
+        result = getattr(self, 'last_probe_result', None)
+        # Web clients consume probe history at 5 Hz. Keep the control loop
+        # and typed status at 20 Hz and send every completed result immediately.
+        publish_web = (self.role != 'probe' or self._web_state_at is None or now-self._web_state_at >= .19
+                       or result is not self._web_probe_result or self.lifecycle != self.state.get('lifecycle')
+                       or self.last_command != self.state.get('last_command'))
+        frame = dict(connected=self.connected(), servo_id=self.ident, active_role=self.role,
             saved_config_revision=self.saved.get('revision',0), driver_config_revision=self.driver.config_revision if self.driver else None,
             reason=self.reason, lifecycle=self.lifecycle, position=t.position if t else None,
             sample_time=self.driver_at, goal_position=t.goal if t else None,
@@ -362,12 +378,15 @@ class ActuatorController(Node):
             last_command=self.last_command, serial_connected=bool(self.driver and self.driver.connected),
             serial_port=self.driver.device if self.driver else '',
             discovered_servos=[s.servo_id for s in self.driver.servos] if self.driver else [],
-            safety=self.safety.servo_snapshot(), **self.behavior_state())
-        self.publisher.publish(String(data=json.dumps(self.state, allow_nan=False)))
+            safety=self.safety.servo_snapshot(), **self.behavior_state(include_history=publish_web))
+        if publish_web:
+            self.state = frame
+            self._web_state_at, self._web_probe_result = now, result
+            self.publisher.publish(String(data=json.dumps(frame, allow_nan=False)))
         calibration=self.calibration()
-        probe=self.state.get('probe',{})
+        probe=frame.get('probe',{})
         status=ActuatorStatus(role=self.role,connected=self.connected(),lifecycle=self.lifecycle,reason=self.reason,
-            servo_id=self.ident,sweeping=bool(self.state.get('sweeping')),motion_speed_limit=self.motion_speed,calibrated=bool(calibration),
+            servo_id=self.ident,sweeping=bool(frame.get('sweeping')),motion_speed_limit=self.motion_speed,calibrated=bool(calibration),
             minimum=calibration['minimum'] if calibration else 0,center=calibration['center'] if calibration else 0,
             maximum=calibration['maximum'] if calibration else 0,homed=bool(probe.get('homed')),
             probe_ready=bool(probe.get('ready')),probe_active=bool(probe.get('active')),

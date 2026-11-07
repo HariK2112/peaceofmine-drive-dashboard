@@ -4,6 +4,7 @@ import threading
 import time
 import rclpy
 from rclpy.signals import SignalHandlerOptions
+from rclpy.executors import SingleThreadedExecutor
 
 
 def run_node(factory):
@@ -12,10 +13,12 @@ def run_node(factory):
         signal.signal(sig, lambda *_: stop.set())
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = None
+    executor = SingleThreadedExecutor()
     try:
         node = factory()
+        executor.add_node(node)
         while not stop.is_set() and rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=.05)
+            executor.spin_once(timeout_sec=.05)
     finally:
         # Launch can forward a second signal after the process-group signal.
         # Keep it ignored through interpreter finalization as well as cleanup.
@@ -26,6 +29,8 @@ def run_node(factory):
                 node.begin_shutdown()
                 deadline = time.monotonic() + .15
                 while rclpy.ok() and time.monotonic() < deadline:
-                    rclpy.spin_once(node, timeout_sec=.02)
+                    executor.spin_once(timeout_sec=.02)
+            executor.remove_node(node)
             node.destroy_node()
+        executor.shutdown()
         rclpy.try_shutdown()

@@ -209,6 +209,7 @@ let keyboardSweep = false;
 let lastDriveSent = 0;
 let lastPadUi = 0;
 let noticeExpiry = 0;
+let noticeText = null;
 let pendingPumpMark = null;
 let latencyProbeId = 0;
 let latencyProbeStarted = 0;
@@ -488,10 +489,10 @@ function connect() {
     }
     if (message.type === 'adc_result') { window.operatorADCResult?.(message); return; }
     if (message.type === 'error') {
-      pendingPumpMark = null;
+      if (pendingPumpMark && message.request_id === pendingPumpMark.id) pendingPumpMark = null;
       showNotice(message.message, true);
-      if (metalPending) { metalPending = null; metalFeedback = message.message; }
-      servoSettings.forEach(panel => panel.error(message.message));
+      if (metalPending && message.request_id === metalPending.id) { metalPending = null; metalFeedback = message.message; }
+      servoSettings.forEach(panel => panel.error(message.message, message.request_id));
       return;
     }
     if (message.type !== 'state') return;
@@ -545,6 +546,8 @@ $('retry-connection').onclick = connect;
 
 // Rejected commands remain visible independently of live workflow telemetry.
 function showNotice(text, persistent = false) {
+  if (persistent && noticeExpiry === Infinity && noticeText === text && !$('notice').classList.contains('hidden')) return;
+  noticeText = text;
   const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
   $('notice').textContent = `${time} · ${text}`;
   $('notice').classList.remove('hidden');
@@ -838,7 +841,6 @@ function startProbeCycle() {
   if (state.detector.sweep_enabled) { showNotice('Stop sweeping before probing.'); return; }
   const contact = state.probe.adc_contact_state;
   if (!contact?.enabled || !contact.fresh) { showNotice('Save a contact limit and wait for a fresh reading.'); return; }
-  if (contact.detected) { showNotice('Contact is already active. Check the sensor before probing.'); return; }
   const input = $('probe-cycle-target');
   if (!input.reportValidity()) return;
   send({type: 'start_probe_cycle', depth_mm: input.valueAsNumber});
@@ -901,7 +903,6 @@ function checkProbeCycleState() {
       const contact = probe.contact_detected ? `Contact${Number.isFinite(probe.contact_depth_mm) ? ` at ${probe.contact_depth_mm.toFixed(1)} mm` : ' detected'}. ` : '';
       const message = `${contact}${contact ? 'Return' : 'Cycle'} stopped: ${lastRes.reason || lastRes.status}. Check probe position.`;
       if (alertText) alertText.textContent = message;
-      showNotice(message, true);
     }
 
     if (probeAlertTimeout) clearTimeout(probeAlertTimeout);
@@ -982,17 +983,14 @@ function alignProbeToPeak() {
 }
 
 function inspectionBlock(action) {
-  const blocked = operationBlock() || armSetupBlock();
+  const blocked = operationBlock(true) || armSetupBlock();
   if (blocked) return blocked;
   if (action === 'confirm') return state.detector.fresh === true ? '' : 'Wait for fresh detector readings before confirming.';
-  const probeBlocked = probeActionBlock();
+  const probeBlocked = probeActionBlock(true);
   if (probeBlocked) return probeBlocked;
   if (!Number.isFinite(state.inspection?.confirmed_angle_deg)) return 'Confirm the location first.';
   if (state.inspection?.probe_reachable === false) return 'Confirmed target is outside probe reach. Reposition the rover and confirm again.';
-  const contact = state.probe.adc_contact_state;
-  if (!contact?.enabled || !contact.fresh) return 'Save a contact limit and wait for a fresh reading.';
-  if (contact.detected) return 'Contact is already active. Check the probe before scanning.';
-  return window.operatorContactBlock?.() || '';
+  return ''; // The probe checks the applied contact input when each descent begins.
 }
 
 function startInspection(action) {
@@ -1184,7 +1182,7 @@ function renderInspection() {
   progress.max = total || 1;
   if (inspection.active && phase === 'CONFIRMING' && !Number.isFinite(inspection.progress)) {
     progress.removeAttribute('value');
-    progress.setAttribute('aria-valuetext', 'Moving to sweep start');
+    progress.setAttribute('aria-valuetext', inspection.message || 'Moving to sweep start');
   } else {
     const value = Math.max(0, Math.min(total, Number.isFinite(inspection.progress) ? inspection.progress : completed));
     progress.value = value;
@@ -1264,8 +1262,7 @@ function updateHud() {
   const otherActionBlock = operationBlock();
   const align = getProbeAlignment();
   const contact = probe.adc_contact_state;
-  const contactBlock = !contact?.enabled || !contact.fresh ? 'Save a contact limit and wait for a fresh reading.'
-    : contact.detected ? 'Contact is already active. Check the sensor.' : '';
+  const contactBlock = !contact?.enabled || !contact.fresh ? 'Save a contact limit and wait for a fresh reading.' : '';
   const cycleBlock = blocked || window.operatorContactBlock?.() || (detector.sweep_enabled ? 'Stop sweeping before probing.' : '') || contactBlock;
   const alignBlock = otherActionBlock || armSetupBlock() || (!align.hasPeak || !align.reachable ? align.reason : '');
   const markBlock = otherActionBlock || pumpAuthorityBlock();
@@ -2961,6 +2958,8 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
       const value = available ? String(saved[key]) : '';
       if (!dirty && input.value !== value) input.value = value;
       input.readOnly = !owner || !available || Boolean(pending);
+      if (input.hasAttribute('data-positive'))
+        input.setCustomValidity(input.valueAsNumber <= 0 ? 'Enter a speed greater than zero.' : '');
     }
     const valid = inputs.every(([, input]) => Number.isFinite(input.valueAsNumber) && input.validity.valid);
     const changed = available && inputs.some(([key, input]) => input.valueAsNumber !== saved[key]);
@@ -3028,6 +3027,11 @@ const armSetupForms = new Map([
   ['probe_alignment', armSetupForm({section:'probe_alignment', fields:{offset_deg:'arm-probe-offset'},
     save:'arm-probe-offset-save', status:'arm-probe-offset-status', describe:saved => `${saved.offset_deg}°`,
     invalid:'Enter an offset from −180° to 180°.', applies:'Applies to the next aim or probe scan.'})],
+  ['probe_stroke', armSetupForm({section:'probe_stroke',
+    fields:{down_mm_s:'probe-down-speed', retract_mm_s:'probe-retract-speed', home_load_percent:'probe-servo-home-load'},
+    save:'probe-stroke-save', status:'probe-stroke-status',
+    describe:saved => `${saved.down_mm_s} mm/s down, ${saved.retract_mm_s} mm/s up and ${saved.home_load_percent}% home load`,
+    invalid:'Enter positive speeds and a home load from 10% to 60%.', applies:'Applies to the next probe movement.'})],
   ['probe_scan', armSetupForm({section:'probe_scan', fields:{point_count:'arm-scan-count', spacing_deg:'arm-scan-spacing'},
     save:'arm-scan-save', status:'arm-scan-status', describe:saved => `${saved.point_count} points at ${saved.spacing_deg}° spacing`,
     invalid:'Enter 1–31 whole points and spacing from 0.1° to 180°.', applies:'Applies to the next probe scan.', preview:showScanCoverage})],

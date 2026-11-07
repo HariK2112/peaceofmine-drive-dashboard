@@ -202,8 +202,7 @@ shared ArbotiX. Switching requires stopped motion. Reconnect while stopped to
 rescan after connecting a missing servo. Arm sweep calibration retains its
 three points, saved with **Save recorded limits** in `operator_config.json`.
 
-The probe has one persistent calibration: **maximum extension**. Home first,
-jog down to the desired maximum extension, release, enter the measured travel
+To calibrate **maximum extension**, start with the probe at the physical top when the encoder connects or let Confirm arc home it. Then jog down to the desired maximum extension, release, enter the measured travel
 from the top in millimetres, then choose **Save current position as maximum
 extension**. The saved distance and corresponding encoder span provide the
 millimetre conversion and travel limit for the main Probe slider.
@@ -227,12 +226,11 @@ alternative, pass `config_file:=/absolute/path/operator_config.json`.
 Saved sections take precedence over legacy calibration launch parameters;
 those parameters are fallbacks only when a section is absent.
 Updates are atomic and locked across processes, preserving the other sections.
-The first valid probe encoder position after a controller restart is assumed to be the top. If the probe is extended at startup, hold Home and release at the physical top to set zero. A brief driver reconnect retains the session reference.
+The first valid probe encoder position after a controller restart is assumed to be the top. Confirm arc and Probe scan establish a new zero by retracting the connected probe to its top stop. A brief driver reconnect retains the session reference.
 
 Close Settings, take control, and use the main Probe slider. Hardware targets
 now reach the MX-64 driver; simulation retains its fake payload. The main
-control uses the saved travel and the session zero. It moves at approximately
-50 degrees/s and holds torque at the target to maintain contact. The main
+control uses the saved travel and the session zero. It uses the saved down or retract speed and holds torque at the target. The main
 Chart.js graph shows absolute servo load (0–100%), not calibrated pressure or
 force; missing or stale load displays as unavailable. The hold remains subject
 to the same 60-second command timeout. **Stop probe**, control-owner
@@ -353,30 +351,31 @@ value with the original raw count and timestamp.
 
 ### Confirm and probe scan
 
+Confirm arc homes the connected probe before moving the arm. With the probe disconnected, detector confirmation can still run. Probe scan homes once before the first position and waits for the return stroke between positions.
+
 Search sweeping defaults to 36°/s. Use the main actions in order: Search, Confirm arc, Probe scan. Confirmation
 uses the even pass count saved under Setup → Metal detector (2 by default) at the selected search speed. It compares a broad arc against each pass's
 local noise and compares their measured half-height footprints. A majority must share at least 50% overlap and include both sweep directions.
 The result averages their forward and return median centers. The probe scan uses the point count and spacing from Setup → Arm (default 7 points at 10° over ±30°), clipped to the saved arm limits and corrected for the detector/probe
 mounting offset saved under Setup → Arm (default 30°). To calibrate from an existing scan, subtract the arm angle that physically centered the probe from the confirmed detector bearing. Each new scan uses the saved offset for all its points. The scan map labels the confirmed bearing and the commanded arm center. Each completed marker shows measured contact depth or the configured target depth reached. A dash indicates an unavailable depth. Contact or maximum depth ends each descent; the probe retracts
-before the next angle. Stop inspection cancels the sequence while retaining the
+before the next angle. In Setup → Probe, **Down speed** and **Retract speed** set the two stroke speeds in mm/s (both default to 5). Automatic homing uses the retract speed once travel is calibrated. **Automatic home load** sets the motor load that establishes zero at the top (10% by default). Stop inspection cancels the sequence while retaining the
 dashboard control lease. Global STOP and RC/session loss cancel outstanding goals.
 
 The Probe panel exposes maximum depth and the saved Above/Below contact limit in
 volts. This changes the configured probe input's threshold, not its raw samples.
-During descent the selected filtered ADC input and its configured threshold determine contact. Manual controls and technical motor
+During descent the selected filtered ADC input and its configured threshold determine contact. An input already active at the start of a stroke records contact at the current depth. Setup → Probe contact shows the applied state and the voltage at which contact clears. Manual controls and technical motor
 readings remain available under their details sections.
 
 ### Probe direction
 
 Settings → Probe → **Reverse probe direction** is saved on the vehicle. It reverses
-extend/retract jogging, homing and depth moves together. After changing it, home
-again before using depth targets. The shaft-position slider always uses raw encoder
+extend/retract jogging, homing and depth moves together. After changing direction, Confirm arc can establish a fresh top reference before manual depth moves. The shaft-position slider always uses raw encoder
 position. Simulation stores its direction separately from the car.
 
 ### Probe contact feedback
 
 Probe contact polling targets 20 Hz; voltage and temperature refresh at 1 Hz.
-Actual rate depends on serial response time; watchdog deadlines remain unchanged.
+Actual rate depends on serial response time.
 Below Manual probe, the live chart plots filtered contact sensor voltage and the saved contact threshold in volts, alongside measured encoder depth in millimetres.
 The motor diagnostics chart autoscales load (%) and current (mA) independently,
 expanding immediately and shrinking gradually. Values retain their units.
@@ -416,10 +415,9 @@ provides register settings, live readings, filter preview and file import/export
 In **Probe contact**, watch the filtered voltage with the sensor clear and then
 pressed. Choose the input, direction, voltage limit, hysteresis and debounce,
 enable detection and select **Save contact settings**. The graph previews the
-draft limit against the selected channel. The main screen shows the applied
-contact state and links back to calibration. The probe controller handles
-threshold detection and retracts on contact during a descent. Missing
-or stale readings block probing.
+draft limit against the selected channel. The applied status shows the car's contact decision, the voltage that activates it, the release voltage, and the debounce time. The mission screen uses that same decision. Hysteresis must leave a reachable release voltage. If older settings contain an unreachable hysteresis, the car applies 0 V and shows a notice until you save a correction.
+
+Each descent requires a fresh contact reading. If contact is already active, the car records the measured starting depth and voltage without extending. A probe below its home position retracts. Contact during descent also ends the downstroke and starts retraction.
 
 Relative ROS topics (under `/self/` with the default vehicle name):
 
@@ -453,7 +451,7 @@ See [architecture](architecture.md) for ownership, safety and persistence, and
 
 Both launch commands now run the same arm and probe controllers. In simulation,
 `servo_driver` uses an in-memory device/plant, and ADC acquisition uses generated
-samples. No physical device is opened. Probe simulation uses the same startup zero and hold-to-home behavior as hardware.
+samples. No physical device is opened. Probe simulation uses the same startup zero and automatic inspection homing as hardware.
 
 `servo_driver` owns all serial I/O and enforces bounded speed, acceleration,
 exclusive actuator ownership, operation identities and watchdogs. Controllers
@@ -463,8 +461,7 @@ The website is served by `operator_web`, which communicates through ROS.
 A missing gateway heartbeat stops actuation after 0.5 seconds. The lease survives a brief stall and expires after 3 seconds; closing the socket or taking over releases it immediately. RC
 permission, a control lease and held drive input are required; there is no separate
 browser arming latch. Drive commands expire after 0.25 seconds.
-Servo controller, driver and firmware safety checks remain independent. A timed-out
-operation cannot resume from renewed stale commands. Release and start again.
+If servo commands stop arriving for 250 ms, the driver releases torque. During an automatic positioning or probe action, the same controller can resume with a fresh response to a new driver challenge within 750 ms of its last renewal, while permission and feedback are still live. An expired action requires a new request.
 
 All runtime saves go through `operator_settings` into `operator_config.json`.
 Schema/document/section revisions protect concurrent changes. The old

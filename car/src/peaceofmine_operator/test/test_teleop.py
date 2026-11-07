@@ -60,6 +60,32 @@ class TeleopTest(unittest.TestCase):
         self.assertFalse(self.node.owns_lease(self.owner))
         self.assertTrue(self.node.owns_lease('second'))
 
+    def test_delayed_transport_stops_only_the_same_owner_and_work(self):
+        def deliver(client, seq, payload, age=0., event='command'):
+            self.node._transport_command(String(data=json.dumps(dict(client_id=client, sequence=seq,
+                stamp=gateway_module.time.time()-age, payload=payload, event=event))))
+        deliver('a',1,{},event='heartbeat')
+        deliver('a',2,dict(type='take_control'))
+        with patch.object(self.node._result_pub,'publish') as result, patch.object(self.node,'_actuator_command') as actuator:
+            actuator.return_value=None
+            deliver('a',3,{},age=2.,event='heartbeat')
+            deliver('a',4,dict(type='drive',deadman=True,linear_x=.8),age=2.)
+            result.assert_not_called()
+            deliver('a',6,dict(type='arm_servo',action='home',role='probe',held=True,request_id='start'))
+            actuator.reset_mock()
+            deliver('a',5,dict(type='arm_servo',action='stop',role='probe'),age=1.)
+            actuator.assert_not_called()
+            deliver('a',7,dict(type='arm_servo',action='stop',role='probe'),age=1.)
+            self.assertEqual(actuator.call_args.args[0]['action'],'stop')
+            deliver('a',8,dict(type='probe_target',request_id='expired-click'),age=2.)
+            self.assertEqual(json.loads(result.call_args.args[0].data)['request_id'],'expired-click')
+            deliver('b',9,{},event='heartbeat')
+            deliver('b',10,dict(type='take_control'))
+            deliver('a',11,dict(type='estop'),age=1.)
+            self.assertTrue(self.node.owns_lease('b'))
+            deliver('b',12,dict(type='estop'),age=1.)
+            self.assertFalse(self.node.owns_lease('b'))
+
     def test_detector_calibration_requires_control_and_fresh_sensor(self):
         self.node._odometry_at = 0.
         command = dict(action='apply', request_id='trigger', baseline_adc=20, full_response_adc=150)

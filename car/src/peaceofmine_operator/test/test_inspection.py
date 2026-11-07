@@ -121,7 +121,7 @@ class InspectionTest(unittest.TestCase):
         method=next(node for node in kind.body if isinstance(node,ast.FunctionDef) and node.name=='_start_inspection')
         scope=dict(math=math,time=SimpleNamespace(monotonic=lambda:100.),STOP_TAIL_S=.5)
         exec(compile(ast.Module(body=[method],type_ignores=[]),str(path),'exec'),scope)
-        owner=SimpleNamespace(_inspection=self.flow,_confirmation_passes=4,_calibrating=False,_probe_active=lambda:False,
+        owner=SimpleNamespace(_inspection=self.flow,_confirmation_passes=4,_calibrating=False,_probe_state={},
             _pump_active=False,_arm_state=dict(connected=True,calibration=dict(minimum=1024,center=2048,maximum=3072)),
             _arm_state_at=100.,get_parameter=lambda name:SimpleNamespace(value=0.),
             _inspection_clients={'arm':SimpleNamespace(server_is_ready=lambda:True)},
@@ -191,13 +191,16 @@ class InspectionTest(unittest.TestCase):
         self.flow.probe(-90.,90.,80.)
         self.assertEqual(self.flow.snapshot()['probe_target_bearing_deg'], 3.)
         self.assertEqual(self.flow.snapshot()['probe_arm_center_deg'], -27.)
+        self.tick()
+        self.assertEqual(self.execute.call_args.args[:4], ('probe', 'home', 0., 0.))
+        self.complete()
         for index,angle in enumerate((-27.,-17.,-7.,3.,13.,23.,33.)):
             self.tick()
             self.assertEqual(self.execute.call_args.args[:4],('arm','angle',angle-30.,5.))
             count=self.execute.call_count;self.tick()
             self.assertEqual(self.execute.call_count,count)
             self.complete();self.tick()
-            self.assertEqual(self.execute.call_args.args[:4],('probe','probe_cycle',80.,5.))
+            self.assertEqual(self.execute.call_args.args[:4],('probe','probe_cycle',80.,0.))
             self.tick();self.assertEqual(self.execute.call_count,count+1)
             self.complete(contact=index%2==0,contact_depth_mm=12.+index)
         self.assertEqual(self.flow.phase,'COMPLETE')
@@ -238,6 +241,7 @@ class InspectionTest(unittest.TestCase):
         self.assertAlmostEqual(self.flow.probe_arm_center, -57.4)
         planned = self.flow.snapshot()['probe_angles_deg']
         self.flow.probe_offset = -12.5
+        self.tick(); self.complete()  # Home before positioning.
         for bearing in planned:
             self.tick()
             self.assertAlmostEqual(self.execute.call_args.args[2], bearing - 30.)
@@ -259,6 +263,16 @@ class InspectionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'outside probe reach'):
             self.flow.probe(-45.,45.,80.)
         self.execute.assert_not_called()
+
+    def test_confirmation_waits_for_connected_probe_to_home(self):
+        self.flow.confirm(-10., 10., 36., home_probe=True)
+        self.tick()
+        self.assertEqual(self.execute.call_args.args[:4], ('probe', 'home', 0., 0.))
+        self.tick()
+        self.execute.assert_called_once()
+        self.complete()
+        self.tick()
+        self.assertEqual(self.execute.call_args.args[:4], ('arm', 'angle', -10., 36.))
 
     def test_confirm_does_not_depend_on_probe_setup(self):
         self.flow.confirm(-10.,10.,36.)
@@ -290,7 +304,7 @@ class InspectionTest(unittest.TestCase):
         self.cancel.assert_called_once()
 
     def test_failed_operation_is_not_reported_as_clear(self):
-        self.flow.confirmed_angle=30.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick()
+        self.flow.confirmed_angle=30.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick();self.complete();self.tick()
         self.execute.call_args.args[-1](dict(success=False,message='Contact input lost'))
         self.assertEqual(self.flow.phase,'ERROR')
         self.assertEqual(self.flow.points,[])
@@ -302,7 +316,7 @@ class InspectionTest(unittest.TestCase):
         self.assertIsNone(self.flow.confirmed_angle)
 
     def test_invalid_contact_depth_fails(self):
-        self.flow.confirmed_angle=30.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick()
+        self.flow.confirmed_angle=30.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick();self.complete();self.tick()
         self.complete(contact=True,contact_depth_mm=math.nan)
         self.assertEqual(self.flow.phase,'ERROR')
         self.assertEqual(self.flow.points,[])

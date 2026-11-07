@@ -10,6 +10,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 from .adc_telemetry import ADCTelemetry
+from .transport_clock import transport_stamp
 
 
 class OperatorWebBridge(Node):
@@ -35,6 +36,7 @@ class OperatorWebBridge(Node):
         self._settings = None
         self._settings_at = 0
         self._requests = {}
+        self._send_sequence = 0
         self._replies = deque(maxlen=256)
         self._shutting_down = False
         self._field_state = None
@@ -155,13 +157,16 @@ class OperatorWebBridge(Node):
         if value.get('request_id') in self._requests:
             self._device_result({**value, 'ok': False})
             return
+        if str(value.get('request_id', '')).startswith('webreq-'):
+            return  # This bridge already timed out or completed its request.
         ws = next((ws for ws, client in self._connected_sockets.items() if client == value.get('client_id')), None)
         if ws is not None:
             self._replies.append((ws, value))
 
     def _send(self, client, payload, event='command'):
+        self._send_sequence += 1
         self.publisher.publish(String(data=json.dumps(dict(
-            client_id=client, payload=payload, event=event, stamp=time.time()), allow_nan=False)))
+            client_id=client, payload=payload, event=event, sequence=self._send_sequence, **transport_stamp()), allow_nan=False)))
 
     def _heartbeat(self):
         with self._lock:
@@ -211,7 +216,7 @@ class OperatorWebBridge(Node):
             if kind in ('adc', 'settings', 'actuator'):
                 if len(self._requests) >= 8:
                     return dict(type='error' if kind == 'actuator' else kind+'_result', section=payload.get('section'), ok=False, message='Configuration requests are pending.')
-                request_id = uuid.uuid4().hex
+                request_id = 'webreq-' + uuid.uuid4().hex
                 payload['request_id'] = request_id
                 self._requests[request_id] = (ws, kind, time.monotonic(), payload.get('section'))
             self._send(self._connected_sockets[ws], payload)

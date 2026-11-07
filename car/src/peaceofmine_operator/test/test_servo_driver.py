@@ -1,8 +1,9 @@
 """Driver safety invariants independent of controller or browser behavior."""
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from peaceofmine_interfaces.msg import ServoCommand
-from peaceofmine_operator.servo_runtime import ServoRuntime
+from peaceofmine_operator.servo_runtime import ServoRuntime, AUTONOMOUS_POSITION
 from peaceofmine_operator.simulated_servo_bus import SimulatedServoBus
 
 
@@ -32,6 +33,57 @@ class DriverTest(unittest.TestCase):
             self.runtime.submit(self.command(sequence=2))
         self.runtime.submit(self.command(operation_id='explicit-new-start',sequence=3))
         self.assertIsNotNone(self.runtime.active)
+
+    def test_auto_pause_cuts_torque_and_needs_a_post_pause_challenge(self):
+        self.runtime.submit(self.command(mode=AUTONOMOUS_POSITION))
+        self.runtime.tick()
+        self.now += .28
+        self.runtime.enforce()
+        self.assertFalse(self.runtime.bus.values[1][24])
+        self.assertEqual(self.runtime.outcomes[1][1], 'paused')
+        with self.assertRaisesRegex(ValueError, 'after torque'):
+            self.runtime.submit(self.command(mode=AUTONOMOUS_POSITION,sequence=2), challenge_at=self.now-.01)
+        self.now += .05
+        self.runtime.submit(self.command(mode=AUTONOMOUS_POSITION,sequence=3), challenge_at=self.now)
+        self.runtime.tick()
+        self.assertTrue(self.runtime.bus.values[1][24])
+        self.now += .76
+        self.runtime.enforce()
+        self.assertIsNone(self.runtime.active)
+        with self.assertRaisesRegex(ValueError, 'retired'):
+            self.runtime.submit(self.command(mode=AUTONOMOUS_POSITION,sequence=4), challenge_at=self.now)
+
+    def test_auto_pause_retired_by_stop_and_permission_loss(self):
+        for reason in ('stop', 'rc'):
+            self.allowed = True
+            self.runtime.submit(self.command(mode=AUTONOMOUS_POSITION,operation_id=reason))
+            self.now += .26
+            self.runtime.enforce()
+            if reason == 'stop':
+                self.runtime.submit(self.command(mode=0,operation_id=reason))
+            else:
+                self.allowed=False
+                self.runtime.enforce()
+            self.allowed=True
+            with self.assertRaisesRegex(ValueError, 'retired'):
+                self.runtime.submit(self.command(mode=AUTONOMOUS_POSITION,operation_id=reason,sequence=2), challenge_at=self.now)
+
+    def test_duplicate_and_queued_challenge_do_not_abort_or_renew_live_operation(self):
+        from test_arm_node import module
+        driver = module('servo_driver_node')
+        node = SimpleNamespace(runtime=self.runtime, session='session', reason='Connected', challenge_times={1:self.now})
+        msg = self.command(session='session',challenge=1,sequence=5)
+        with patch.object(driver.time,'monotonic',side_effect=lambda:self.now):
+            driver.ServoDriver.command(node,msg)
+            self.now += .1
+            driver.ServoDriver.command(node,msg)
+            driver.ServoDriver.command(node,self.command(session='session',challenge=0,sequence=6))
+        self.assertIsNotNone(self.runtime.active)
+        self.assertEqual(self.runtime.renewed,self.now-.1)
+        self.assertEqual(node.reason,'Connected')
+        self.now += .16
+        self.runtime.enforce()
+        self.assertIsNone(self.runtime.active)
 
     def test_permission_loss_retires_operation(self):
         self.runtime.submit(self.command())

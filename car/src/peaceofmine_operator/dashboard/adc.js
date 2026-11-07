@@ -79,6 +79,14 @@
     command({action:'settings', settings}, 'smoothing');
     renderSmoothing();
   };
+  function hysteresisProblem(mux, level, width, above, pga) {
+    if (!(width > 0) || !Number.isFinite(level)) return '';
+    const full = ranges[pga], low = mux >= 4 ? 0 : -full, high = full*32767/32768;
+    const room = Math.min(high-low, above ? level-low : high-level);
+    return width < room ? '' : (room > 0
+      ? `Hysteresis must be below ${Number(room.toPrecision(6))} V for this input to clear.`
+      : 'Use 0 V hysteresis or move the limit inside the input range.');
+  }
   function renderSensors() {
     renderSmoothing();
     const trigger = latest?.probe_trigger;
@@ -96,19 +104,28 @@
       debounce.value = trigger.debounce_ms || 0;
       contactDraftKey = key;
     }
-    const issue = inputProblem(Number(muxInput.value), enabledInput.checked);
+    const widthProblem = hysteresisProblem(Number(muxInput.value), contactVolts.valueAsNumber,
+      hysteresis.valueAsNumber, contactDirection.value === 'above', latest.config.pga);
+    hysteresis.setCustomValidity(widthProblem);
+    const issue = inputProblem(Number(muxInput.value), enabledInput.checked) || widthProblem;
     const disabling = trigger.enabled && !enabledInput.checked && Number(muxInput.value) === trigger.mux;
     contactSave.disabled = !owner || Boolean(pending) || Boolean(issue && !disabling);
     for (const input of [muxInput, enabledInput, contactVolts, contactDirection, hysteresis, debounce]) input.disabled = Boolean(pending);
     const contact = latest.probe_contact;
     const reading = contact && Object.hasOwn(contact, 'filtered_volts') ? contact.filtered_volts : unscale(contact?.value, channel);
-    const volts = adcOnline && contact?.fresh && contact.mux === trigger.mux && Number.isFinite(reading) ? reading : null;
+    const volts = adcOnline && latest.connected && latest.running && latest.applied === latest.revision && contact?.fresh && contact.mux === trigger.mux && Number.isFinite(reading) ? reading : null;
     const status = !adcOnline ? 'ADC disconnected' : !trigger.enabled ? 'Contact detection disabled'
       : volts === null ? 'Waiting for contact reading.' : `${contact.detected ? 'CONTACT' : 'Clear'} · ${names[trigger.mux]} · ${volts.toFixed(4)} V`;
     document.getElementById('probe-adc-contact').textContent = status;
     document.getElementById('probe-map-sensor').textContent = status;
+    const limit = unscale(trigger.level, channel);
+    const width = channel?.multiplier ? (trigger.hysteresis || 0)/Math.abs(channel.multiplier) : null;
+    const above = channel?.multiplier < 0 ? trigger.direction === 'below' : trigger.direction === 'above';
+    const levels = trigger.enabled && Number.isFinite(limit) && Number.isFinite(width)
+      ? ` · contact ${above ? '≥' : '≤'} ${limit.toFixed(4)} V · clear ${above ? '<' : '>'} ${(above ? limit-width : limit+width).toFixed(4)} V · ${trigger.debounce_ms || 0} ms debounce` : '';
+    el('trigger-state').textContent = `Applied · ${status}${levels}`;
     renderContactSignal();
-    contactFeedback.textContent = (issue && disabling ? 'Save to disable contact detection.' : issue) || (pending === 'contact' ? 'Saving contact settings…' : contactMessage)
+    contactFeedback.textContent = (issue && disabling ? 'Save to disable contact detection.' : issue) || (pending === 'contact' ? 'Saving contact settings…' : contactMessage) || latest.contact_warning
       || (!owner ? 'Take control to save contact settings.' : contactDirty ? 'Unsaved contact settings' : '');
     const detectors = detectorMuxes(latest);
     const active = detectors.filter(mux => channelAt(mux)?.enabled);
@@ -141,12 +158,19 @@
     if (contactSave.disabled) return;
     const mux = Number(muxInput.value), channel = channelAt(mux);
     const settings = savedSettings();
-    // An old zero-gain mapping has no physical limit. Permit disabling it
-    // before the operator corrects the gain on the sensor board.
-    if (!enabledInput.checked && mux === settings.probe_trigger.mux && channel.multiplier === 0) {
+    const fields = [contactVolts, hysteresis, debounce];
+    // Disabling the applied input must still work with a bad draft or legacy gain.
+    // Retain the applied limit and discard those invalid edits.
+    if (!enabledInput.checked && mux === settings.probe_trigger.mux &&
+        (!channel.multiplier || fields.some(input => !input.validity.valid))) {
       settings.probe_trigger.enabled = false;
+      const saved = settings.probe_trigger;
+      if (!channel.multiplier || hysteresisProblem(mux, unscale(saved.level, channel),
+          (saved.hysteresis || 0)/Math.abs(channel.multiplier),
+          channel.multiplier < 0 ? saved.direction === 'below' : saved.direction === 'above', settings.config.pga))
+        saved.hysteresis = 0;
     } else {
-      if (![contactVolts, hysteresis, debounce].every(input => input.reportValidity())) return;
+      if (!fields.every(input => input.reportValidity())) return;
       settings.probe_trigger = {...settings.probe_trigger, enabled:enabledInput.checked, mux,
         level:contactVolts.valueAsNumber * channel.multiplier + channel.offset,
         direction:channel.multiplier < 0 ? opposite(contactDirection.value) : contactDirection.value,
@@ -246,6 +270,15 @@
     if (!state.connected || !state.drive.you_control_owner) { el('feedback').textContent = 'Take control before changing ADC settings.'; return; }
     if (pending || !adcOnline) return;
     pending = source;
+    // A board range change or imported file can also alter the reachable release voltage.
+    const trigger = value.settings?.probe_trigger;
+    if (trigger) {
+      const config = value.settings.config, channel = config.channels[trigger.mux];
+      const above = channel.multiplier < 0 ? trigger.direction === 'below' : trigger.direction === 'above';
+      const issue = hysteresisProblem(trigger.mux, unscale(trigger.level, channel),
+        (trigger.hysteresis || 0)/Math.abs(channel.multiplier), above, config.pga);
+      if (issue) { window.operatorADCResult({ok:false, message:issue}); return; }
+    }
     el('apply').disabled = true;
     if (source === 'board') el('feedback').textContent = 'Saving…';
     send({type:'adc', ...value, expected_adc_revision:latest?.saved_config_revision});
@@ -453,19 +486,15 @@
     const fresh = adcOnline && latest.connected && latest.running && latest.applied === latest.revision
       && Number.isFinite(sample?.filtered_volts) && now() - sample.time <= maxAge;
     document.getElementById('contact-live-volts').textContent = fresh ? `${sample.filtered_volts.toFixed(4)} V` : '—';
-    let comparison = 'Waiting for a fresh sample';
-    if (fresh) {
-      const level = contactVolts.valueAsNumber;
-      comparison = 'Live reading';
-      if (!enabledInput.checked) comparison = 'Detection disabled';
-      else if (Number.isFinite(level)) {
-        const within = contactDirection.value === 'above' ? sample.filtered_volts >= level : sample.filtered_volts <= level;
-        comparison = within ? 'In contact range' : 'Outside contact range';
-        if (contactDirty) comparison += ' · draft limit';
-      }
-    } else if (!adcOnline) comparison = 'ADC telemetry unavailable';
-    else if (latest.error || latest.load_error) comparison = latest.error || latest.load_error;
-    el('trigger-state').textContent = `${names[mux]} · ${comparison}`;
+    const draft = document.getElementById('contact-draft-preview');
+    draft.hidden = !contactDirty;
+    if (!contactDirty) return;
+    const level = contactVolts.valueAsNumber;
+    const above = contactDirection.value === 'above';
+    const inRange = fresh && Number.isFinite(level) && (above ? sample.filtered_volts >= level : sample.filtered_volts <= level);
+    draft.textContent = !enabledInput.checked ? 'Draft · detection disabled' : !fresh || !Number.isFinite(level)
+      ? 'Draft · waiting for a reading and limit'
+      : `Draft · ${names[mux]} · ${sample.filtered_volts.toFixed(4)} V ${inRange ? 'meets' : 'does not meet'} the ${above ? '≥' : '≤'} ${level.toFixed(4)} V limit`;
   }
 
   function drawContactHistory() {

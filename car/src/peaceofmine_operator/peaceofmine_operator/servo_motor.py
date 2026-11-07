@@ -166,7 +166,7 @@ class ServoMotor:
         self.target = position
 
 
-    def step(self, allowed):
+    def step(self, allowed, measured_position=None):
         # Recheck the independent safety gate before each serial motion write.
         if not allowed() or self.target is None:
             if self.torque or self._home is not None or self._extension_active:
@@ -179,7 +179,7 @@ class ServoMotor:
         if not self.bus.prepare_motion(self.ident, allowed):
             self.stop()
             return
-        self.position = self.decode_position(self.bus.read(self.ident, 36))
+        self.position = measured_position if measured_position is not None else self.decode_position(self.bus.read(self.ident, 36))
         if self._home is not None and not self._check_home():
             return
         low, high = self.jog_limits or (self.calibration['minimum'], self.calibration['maximum'])

@@ -34,6 +34,28 @@ class SettingsServiceTest(unittest.TestCase):
                 node.destroy_node()
                 rclpy.shutdown()
 
+    def test_probe_stroke_speeds_and_home_load_survive_restart(self):
+        rclpy.init()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / 'operator_config.json')
+            options = [Parameter('config_file', value=path)]
+            node_type = module('operator_settings_node').OperatorSettings
+            node = node_type(parameter_overrides=options)
+            try:
+                valid = dict(down_mm_s=1.75, retract_mm_s=13., home_load_percent=15.)
+                request = dict(request_id='stroke', section='probe_stroke', value=valid)
+                node.command(String(data=json.dumps(request)))
+                self.assertEqual(configuration.load(path)['probe_stroke'], valid)
+                for invalid in (dict(valid, down_mm_s=0.), dict(valid, retract_mm_s=-1.), dict(valid, home_load_percent=61.)):
+                    node.command(String(data=json.dumps(dict(request, value=invalid))))
+                    self.assertEqual(configuration.load(path)['probe_stroke'], valid)
+                node.destroy_node()
+                node = node_type(parameter_overrides=options)
+                self.assertEqual(node.shared['probe_stroke'], valid)
+            finally:
+                node.destroy_node()
+                rclpy.shutdown()
+
     def test_detector_accepts_fractional_calibration_span(self):
         rclpy.init()
         with tempfile.TemporaryDirectory() as tmp:

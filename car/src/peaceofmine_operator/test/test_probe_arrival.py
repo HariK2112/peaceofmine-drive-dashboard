@@ -27,7 +27,10 @@ class ProbeArrivalTest(unittest.TestCase):
         self.probe.arrival_tolerance = 23
         self.probe.motion = 'target'
         self.probe.started = 99.
-        self.probe.cycle_timeout = 60.
+        self.probe.cycle_timeout = self.probe.motion_timeout = 60.
+        self.probe.motion_speed = self.probe.return_speed = 73
+        self.probe.stroke_settings = lambda: dict(down_mm_s=5., retract_mm_s=5., home_load_percent=10.)
+        self.probe.at_cycle_depth = False
         self.probe.cycle_active = True
         self.probe.cycle_phase = 'DESCENDING'
         self.probe.cycle_target_depth = 80.
@@ -121,9 +124,12 @@ class ProbeArrivalTest(unittest.TestCase):
         flow = InspectionWorkflow(execute, Mock(), Mock(), clock=lambda:self.now)
         flow.confirmed_angle = 45.
         flow.probe(-50., 50., 80.)
+        for expected in ('home', 'angle'):
+            flow.tick(True, None)
+            self.assertEqual(execute.call_args.args[1], expected)
+            execute.call_args.args[-1](dict(success=True))
         flow.tick(True, None)
-        execute.call_args.args[-1](dict(success=True))
-        flow.tick(True, None)
+        self.assertEqual(execute.call_args.args[1], 'probe_cycle')
         complete = execute.call_args.args[-1]
         self.retract()
         self.probe.stop.side_effect = lambda message, success=False:complete(dict(

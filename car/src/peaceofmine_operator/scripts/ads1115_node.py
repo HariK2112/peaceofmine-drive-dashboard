@@ -30,7 +30,7 @@ class ADS1115Node(Node):
         legacy_value = None
         if section not in saved and legacy.exists():
             value = json.loads(legacy.read_text())
-            config, routes, trigger = OperatorADC.validate(value)
+            config, routes, trigger = OperatorADC.validate(value, restoring=True)
             legacy_value = dict(config=config,routes=routes,probe_trigger=trigger)
             # Legacy file is read-only; persist through the settings service on the next save.
         self.adc = OperatorADC(config_file, demo=demo, initial_settings=legacy_value)
@@ -61,7 +61,7 @@ class ADS1115Node(Node):
             saved=configuration.load(self.config_file)
             revision=saved.get('section_revisions',{}).get(self.adc.section,0)
             if revision != self.config_revision and self.adc.section in saved:
-                self.adc.command(dict(action='settings',settings=saved[self.adc.section]),persist=False)
+                self.adc.command(dict(action='settings',settings=saved[self.adc.section]),persist=False, restoring=True)
                 self.config_revision=revision
         except (OSError,ValueError,TypeError) as exc:
             self.adc.load_error=str(exc)

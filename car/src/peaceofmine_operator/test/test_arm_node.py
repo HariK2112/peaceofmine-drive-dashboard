@@ -74,6 +74,23 @@ class ActuatorTest(unittest.TestCase):
         rclpy.shutdown()
         self.tmp.cleanup()
 
+    def test_manual_handoff_and_stale_input_do_not_abort_new_action(self):
+        from unittest.mock import patch
+        from peaceofmine_operator.actuator_protocol import command_message
+        with patch.object(self.probe, 'stop') as stop:
+            self.probe.action_reserved = True
+            self.probe.command_cb(command_message(dict(action='stop_manual')))
+            stop.assert_not_called()
+            delayed = command_message(dict(action='jog', direction=1, held=True, request_id='late'))
+            delayed.stamp.sec -= 1
+            self.probe.command_cb(delayed)
+            self.assertFalse(self.probe.last_command['success'])
+            self.assertEqual(self.probe.last_command['request_id'], 'late')
+            stop.assert_not_called()
+            self.probe.command_cb(command_message(dict(action='stop')))
+            stop.assert_called_once()
+            self.probe.action_reserved = False
+
     def test_probe_cycle_retracts_without_cancelling_its_operation(self):
         for _ in range(20):
             self.command(self.probe, action='home', held=True, hold_id='cycle-home', load_percent=20.)
