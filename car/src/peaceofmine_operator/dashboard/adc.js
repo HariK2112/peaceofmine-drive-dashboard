@@ -307,9 +307,8 @@
     download(lines.join('\n'), 'text/csv', 'ads1115.csv');
   };
   const now = () => Date.now()/1000 + clockOffset;
-  function datasets(target, quantity, seconds, selectedMux = null) {
+  function datasets(target, quantity, seconds, selectedMux = null, time = now()) {
     if (!latest) return [];
-    const time = now();
     return latest.config.channels.filter(ch => ch.enabled && (selectedMux === null || ch.mux === selectedMux) && (!target || [target,'both'].includes(latest.routes[ch.mux]))).map(ch => {
       const samples = history.filter(s => s.mux === ch.mux && time-s.time <= seconds);
       const data = [];
@@ -367,7 +366,8 @@
     if (!trigger) return {data:[], limit:null, status:'Contact settings unavailable.'};
     const channel = channelAt(trigger.mux);
     const limit = unscale(trigger.level, channel);
-    const data = datasets(null, 'filtered_volts', 30, trigger.mux)[0]?.data || [];
+    const time = now();
+    const data = datasets(null, 'filtered_volts', 30, trigger.mux, time)[0]?.data || [];
     const gap = Math.max(.5, latest.config.interval_ms/1000 + 3*latest.config.channels.filter(c => c.enabled).length/latest.config.rate);
     const last = data.at(-1);
     const online = adcOnline && latest.connected && latest.running && latest.applied === latest.revision;
@@ -376,7 +376,7 @@
     else if (!channel?.enabled) status = 'Contact input disabled.';
     else if (!last || !Number.isFinite(last.y) || last.x < -gap) status = 'Contact voltage stale.';
     else if (limit === null) status = 'Contact threshold unavailable.';
-    return {data, limit, name:names[trigger.mux], enabled:trigger.enabled, status, time:now(), gap,
+    return {data, limit, name:names[trigger.mux], enabled:trigger.enabled, status, time, gap,
       bounds:adcAxis(null, 'filtered_volts', limit, trigger.mux)};
   };
   function render() {

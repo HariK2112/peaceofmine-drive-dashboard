@@ -2376,7 +2376,7 @@ function drawManualProbeHistory(frameTime = performance.now(), animate = false) 
         {label:'Encoder depth', yAxisID:'depth', borderColor:color('--text'), borderWidth:1.5, pointRadius:0, spanGaps:false, data:[]},
       ]},
       options:{responsive:true,maintainAspectRatio:false,parsing:false,animation:false,
-        plugins:{legend:{labels:{color:color('--muted'),boxWidth:10,font:{size:10}}},
+        plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:color('--muted'),boxWidth:10,font:{size:10}}},
           tooltip:{callbacks:{label:({dataset,parsed})=>dataset.label + ': ' +
             (dataset.yAxisID === 'depth' ? parsed.y.toFixed(1) + ' mm' : parsed.y.toFixed(4) + ' V')}}},
         scales:{
