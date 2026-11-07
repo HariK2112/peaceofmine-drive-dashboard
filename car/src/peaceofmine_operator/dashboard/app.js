@@ -1021,7 +1021,7 @@ function returningProbePoint(inspection, probe) {
 function probePlanLabel(count, spacing, requested = count) {
   if (!Number.isInteger(count) || count < 1) return '';
   let label = count + (count === 1 ? ' position' : ' positions');
-  if (Number.isInteger(requested) && requested > count) label += ` in range of ${requested} requested`;
+  if (Number.isInteger(requested) && requested > count) label = `${count} of ${requested} positions in range`;
   if (count > 1 && Number.isFinite(spacing) && spacing > 0) label += ` · ${spacing}° spacing`;
   return label;
 }

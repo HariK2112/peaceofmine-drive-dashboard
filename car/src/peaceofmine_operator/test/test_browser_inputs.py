@@ -1066,7 +1066,7 @@ assert(scanMap.querySelectorAll('[data-result="unknown"]').length===4 && $('prob
 const previousPattern=state.settings?.probe_scan;
 state.settings={...state.settings,probe_scan:{point_count:11,spacing_deg:3}};
 state.inspection.scan_point_count=7;state.inspection.scan_spacing_deg=1.5;updateHud();
-assert($('mode-probe-btn').querySelector('.mode-desc').textContent==='5 positions in range of 7 requested · 1.5° spacing','mission uses captured active scan pattern even as new settings change');
+assert($('mode-probe-btn').querySelector('.mode-desc').textContent==='5 of 7 positions in range · 1.5° spacing','mission uses captured active scan pattern even as new settings change');
 const previousPhase=state.inspection.phase;state.inspection.phase='COMPLETE';updateHud();
 assert($('mode-probe-btn').querySelector('.mode-desc').textContent==='11 positions · 3° spacing' && $('probe-map-plan').textContent.includes('1.5° spacing'),'next mission action uses saved settings while previous map shows recorded pattern');
 state.inspection.phase=previousPhase;delete state.inspection.scan_point_count;delete state.inspection.scan_spacing_deg;
