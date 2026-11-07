@@ -1,5 +1,8 @@
 <?xml version="1.0"?>
 <launch>
+  <arg name="gnss_device" default="/dev/ttyAMA0"/>
+  <arg name="gnss_baud" default="115200"/>
+  <arg name="field_log_path" default=""/>
   <arg name="adc_settings_path" default=""/>
   <!-- Edit these defaults for this setup, then run:
        ros2 launch peaceofmine_operator operator.launch.xml
@@ -176,6 +179,14 @@
       <param name="odometry_topic" value="$(var odometry_topic)"/>
       <param name="config_file" value="$(var config_file)"/>
     </node>
+    <node pkg="peaceofmine_operator" exec="field_recorder_node.py" name="field_recorder" output="screen">
+      <param name="simulation" value="$(var is_sim)"/>
+      <param name="gnss_device" value="$(var gnss_device)" type="str"/>
+      <param name="gnss_baud" value="$(var gnss_baud)" type="int"/>
+      <param name="config_file" value="$(var config_file)" type="str"/>
+      <param name="field_log_path" value="$(var field_log_path)" type="str"/>
+      <param name="rtk_fix" value="$(eval '&quot;$(var use_rtk)&quot; == &quot;true&quot; and &quot;$(var use_localization)&quot; == &quot;true&quot; and &quot;$(var is_indoor)&quot; != &quot;true&quot;')"/>
+    </node>
     <node pkg="peaceofmine_operator" exec="power_node.py" name="operator_power" output="screen"/>
     <node pkg="peaceofmine_operator" exec="camera_registry_node.py" name="camera_registry" output="screen"/>
     <node pkg="peaceofmine_operator" exec="operator_settings_node.py" name="operator_settings" output="screen">
@@ -189,7 +200,7 @@
       <param name="camera_stream_base_url" value="http://127.0.0.1:$(var camera_stream_port)" />
     </node>
     <group if="$(var use_cameras)">
-    <node if="$(var use_front_camera)" pkg="peaceofmine_operator" exec="usb_camera_auto.py" name="usb_camera" namespace="camera_front" output="screen">
+    <node if="$(var use_front_camera)" pkg="peaceofmine_operator" exec="usb_camera_auto.py" respawn="true" respawn_delay="5.0" name="usb_camera" namespace="camera_front" output="screen">
       <env name="POM_CONFIG_FILE" value="$(var config_file)"/>
       <env name="POM_CAMERA_INDEX" value="0"/>
       <env name="POM_CAMERA_DEVICE" value="$(var front_camera_device)"/>
@@ -201,7 +212,7 @@
       <param name="camera_name" value="camera_front"/>
       <param name="frame_id" value="$(var name)/camera_front_link"/>
     </node>
-    <node if="$(var use_auxiliary_camera)" pkg="peaceofmine_operator" exec="usb_camera_auto.py" name="usb_camera" namespace="camera_auxiliary" output="screen">
+    <node if="$(var use_auxiliary_camera)" pkg="peaceofmine_operator" exec="usb_camera_auto.py" respawn="true" respawn_delay="5.0" name="usb_camera" namespace="camera_auxiliary" output="screen">
       <env name="POM_CONFIG_FILE" value="$(var config_file)"/>
       <env name="POM_CAMERA_INDEX" value="1"/>
       <env name="POM_CAMERA_DEVICE" value="$(var auxiliary_camera_device)"/>
@@ -213,7 +224,7 @@
       <param name="camera_name" value="camera_auxiliary"/>
       <param name="frame_id" value="$(var name)/camera_auxiliary_link"/>
     </node>
-    <node if="$(var use_cameras)" pkg="web_video_server" exec="web_video_server" name="camera_stream_server" output="screen">
+    <node if="$(var use_cameras)" pkg="web_video_server" exec="web_video_server" respawn="true" respawn_delay="2.0" name="camera_stream_server" output="screen">
       <param name="port" value="$(var camera_stream_port)"/>
     </node>
     </group>

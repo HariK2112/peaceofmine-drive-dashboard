@@ -51,6 +51,21 @@ class RcSafetyTest(unittest.TestCase):
                 self.assertEqual(snapshot['servo_allowed'],servo)
                 self.assertEqual(snapshot['mode'],mode)
 
+    def test_vehicle_arming_expires_independently_of_rc_and_lease(self):
+        self.assertIsNone(self.safety.px4_armed())
+        healthy(self.safety)
+        self.assertTrue(self.safety.px4_armed())
+        self.now += 3.1
+        self.safety.update_state(state())  # Replay cannot extend the heartbeat.
+        self.assertIsNone(self.safety.px4_armed())
+        self.assertEqual(self.safety.px4_state_status(), 'stale')
+        self.safety.update_rc(rc(2000000))
+        self.assertTrue(self.safety.snapshot()['allowed'])
+        self.safety.update_state(state(2000000, armed=False))
+        self.assertIs(self.safety.px4_armed(), False)
+        self.safety.update_state(state(2000000, connected=False))
+        self.assertIsNone(self.safety.px4_armed())
+
     def test_invalid_channels_reboot_and_disconnect_fail_closed(self):
         healthy(self.safety)
         message = rc(2000000)

@@ -47,6 +47,19 @@ class TeleopTest(unittest.TestCase):
         self.command('take_control')
         self.command('arm')
 
+    def test_refresh_and_steal_preserve_completed_confirmation(self):
+        self.command('take_control')
+        workflow = self.node._inspection
+        workflow.phase = 'CONFIRMED'
+        workflow.confirmed_angle, workflow.lower, workflow.upper = 12., -90., 90.
+        self.node.release(self.owner)
+        self.assertEqual(self.node.snapshot()['inspection']['confirmed_angle_deg'], 12.)
+        self.command('take_control')
+        self.node.handle_command('second', {'type':'take_control'})
+        self.assertEqual(self.node.snapshot()['inspection']['phase'], 'CONFIRMED')
+        self.assertFalse(self.node.owns_lease(self.owner))
+        self.assertTrue(self.node.owns_lease('second'))
+
     def test_detector_calibration_requires_control_and_fresh_sensor(self):
         self.node._odometry_at = 0.
         command = dict(action='apply', request_id='trigger', baseline_adc=20, full_response_adc=150)
@@ -80,9 +93,12 @@ class TeleopTest(unittest.TestCase):
         self.assertFalse(self.node._deadman)
 
     def test_mark_is_independent_of_odometry_and_probe_setup_but_rc_still_stops_it(self):
-        from test_rc_safety import rc
+        from test_rc_safety import rc, state
+        from peaceofmine_operator.marking_settings import DEFAULTS
         self.node._rc_safety.simulation=False
+        self.node._state_cb(state())
         self.node._rc_cb(rc())
+        self.node._marking_settings_cb(String(data=json.dumps(dict(marking=DEFAULTS))))
         self.command('take_control')
         self.node._odometry_at=0.
         self.node._probe_state={}
@@ -238,7 +254,7 @@ class TeleopTest(unittest.TestCase):
         self.node._arm_state=dict(connected=True,torque=False,calibration=dict(minimum=1000,center=1500,maximum=2000))
         self.node._arm_state_at=100.
         self.node._probe_state={}
-        self.node._inspection_detector=dict(fresh=True,latest_peak=None)
+        self.node._inspection_detector=dict(fresh=True,latest_peak=None,sweep_speed_deg_s=36.)
         self.node._inspection_detector_at=100.
         self.node._inspection_clients={'arm':Mock(),'probe':Mock()}
         self.assertIsNone(self.command('inspection',action='confirm'))
@@ -290,6 +306,74 @@ class TeleopTest(unittest.TestCase):
             self.assertFalse(permission.call_args.args[0].data)
             self.assertFalse(sweep.call_args.args[0].enabled)
             self.assertIsNotNone(self.command('sweep_enabled', enabled=True))
+
+    def test_car_enforces_both_keyboard_limits_and_selected_source(self):
+        self.arm()
+        self.node._drive_settings_cb(String(data=json.dumps(dict(
+            driving=dict(input='keyboard', forward_percent=50, reverse_percent=25)))))
+        self.command('drive', input='keyboard', deadman=True, linear_x=1.)
+        self.output.assert_called_with(.4, 0.)
+        self.command('drive', input='keyboard', deadman=True, linear_x=-1.)
+        self.output.assert_called_with(-.2, 0.)
+        self.assertIsNotNone(self.command('drive', input='wheel', deadman=True, linear_x=.8))
+        self.node._joy_cb(Joy(axes=[0., 0., 1., 0., 0., -1.], buttons=[0] * 11))
+        self.assertEqual(self.node._command, (-.2, 0.))
+
+    def test_rc_source_requires_owner_presence_and_new_valid_samples(self):
+        from test_rc_safety import rc
+        self.node._rc_safety.simulation = False
+        self.node._drive_settings_cb(String(data=json.dumps(dict(
+            driving=dict(input='rc', forward_percent=40, reverse_percent=20)))))
+        stamp = 100
+        def sample(position=1000):
+            nonlocal stamp
+            stamp += 1
+            msg = rc(stamp, pwm=position)
+            msg.channels[0], msg.channels[1] = 1750, 1250
+            self.node._rc_cb(msg)
+            return msg
+
+        sample()
+        self.assertIsNotNone(self.command('rc_drive_enable', enabled=True))
+        self.command('take_control')
+        sample()
+        self.assertFalse(self.node.snapshot()['drive']['publishing'])
+        self.command('rc_drive_enable', enabled=True)
+        msg = sample()
+        self.output.assert_called_with(-.4, -.7)
+        self.assertEqual(self.node.snapshot()['drive']['command_source'], 'rc')
+        self.assertIsNotNone(self.command('drive', deadman=False))
+        self.node._joy_cb(Joy(axes=[0., 0., 1., 0., 0., -1.], buttons=[0] * 11))
+        self.assertEqual(self.node._command, (-.4, -.7))
+
+        self.now.return_value += .26
+        sample()
+        self.output.assert_called_with(0., 0.)
+        self.command('rc_drive_enable', enabled=True)
+        msg = sample()
+        self.now.return_value += .26
+        self.command('rc_drive_enable', enabled=True)
+        self.node._rc_cb(msg)  # Repeated PWM frame does not renew motion.
+        self.node._drive_watchdog()
+        self.output.assert_called_with(0., 0.)
+        sample(1500)
+        self.assertEqual(self.node.snapshot()['safety']['mode'], 'override')
+        self.assertFalse(self.node.snapshot()['drive']['publishing'])
+        sample(2000)
+        self.assertFalse(self.node.snapshot()['drive']['armed'])
+        sample()
+        self.assertFalse(self.node.snapshot()['drive']['publishing'])
+        self.command('rc_drive_enable', enabled=True)
+        sample()
+        self.command('calibration_begin')
+        sample()
+        self.output.assert_called_with(0., 0.)
+        self.command('calibration_end')
+        self.command('rc_drive_enable', enabled=True)
+        sample()
+        self.command('estop')
+        sample()
+        self.assertFalse(self.node.snapshot()['drive']['publishing'])
 
     def test_browser_timeout_disarm_and_disconnect_stop(self):
         for stop in ('timeout', 'disarm', 'disconnect'):

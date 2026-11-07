@@ -3,8 +3,10 @@
 from __future__ import annotations
 import json
 import math
+import uuid
 import threading
 import time
+import uuid
 from typing import Any
 
 import rclpy
@@ -15,7 +17,9 @@ from mavros_msgs.msg import State, RCIn
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool, Float32, String
+from peaceofmine_operator import marking_settings
 from peaceofmine_operator.rc_safety import RcSafety
+from peaceofmine_operator import driving_settings
 from peaceofmine_operator.detector import DetectorTelemetry
 from peaceofmine_operator.inspection import InspectionWorkflow
 from peaceofmine_interfaces.action import ActuatorOperation
@@ -61,6 +65,14 @@ class OperatorControl(Node):
         self._permission_pub = self.create_publisher(Bool, 'operator/actuation_enabled', 1)
         self._arm_command_pub = self.create_publisher(ActuatorCommand, 'arm/command', 10)
         self._probe_command_pub = self.create_publisher(ActuatorCommand, 'probe/command', 10)
+        self._field_log = self.create_publisher(String, 'field/log', 10)
+        self._field_clear = self.create_publisher(Bool, 'field/clear', 10)
+        self._alert_options = {'enabled': True, 'level': 60}
+        self._search_alert = {'phase':'idle'}
+        self.create_subscription(String, 'operator/settings', self._alert_settings_cb, 10)
+        self._last_probe_log = None
+        self._last_inspection_phase = 'IDLE'
+        self.create_subscription(String, 'probe/web_state', self._log_probe_result, 10)
         self._probe_state = {}
         self._probe_state_at = 0.0
         self._selected_actuator = 'arm'
@@ -78,6 +90,11 @@ class OperatorControl(Node):
         self._deadman = False
         self._command = (0.0, 0.0)
         self._last_command = 0.0
+        self._drive_input = driving_settings.DEFAULTS['input']
+        self._keyboard_limits = (1., 1.)
+        self._command_source = 'none'
+        self._rc_enabled_until = 0.
+        self.create_subscription(String, 'operator/settings', self._drive_settings_cb, 10)
         self._last_joy = 0.0
         self._joy_prev_a = False
         self._trigger_seen = {'lt': False, 'rt': False}
@@ -113,8 +130,14 @@ class OperatorControl(Node):
         self._probe_speed_limit = float(self.get_parameter('probe_motion_speed_limit_mps').value)
 
         self._pump_active = False
-        self._pump_timer = None
-        self._pump_pub = self.create_publisher(Bool, 'actuation/pump', 1)
+        self._pump_mode = 'idle'
+        self._pump_until = 0.
+        self._pump_output = 0.
+        self._marking = None
+        self._last_shot_request = None
+        self._mark_pub = self.create_publisher(String, 'field/mark', 10)
+        self._pump_pub = self.create_publisher(Float32, 'actuation/pump_percent', 1)
+        self.create_subscription(String, 'operator/settings', self._marking_settings_cb, 10)
 
         self._cmd_pub = self.create_publisher(Twist, str(self.get_parameter('cmd_vel_topic').value), 10)
         self._sweep_enabled_pub = self.create_publisher(ActuatorCommand, 'arm/command', 1)
@@ -139,6 +162,45 @@ class OperatorControl(Node):
         self._inspection = InspectionWorkflow(self._inspection_execute, self._inspection_cancel, self._inspection_clear_peak, clock=lambda:time.monotonic())
         self.create_subscription(String, 'detector/control_state', self._inspection_detector_cb, 1)
         self.create_timer(.05, self.publish_state)
+
+    def _alert_settings_cb(self, msg):
+        try:
+            self._alert_options = json.loads(msg.data)['display']['searchAlert']
+        except (ValueError, KeyError, TypeError):
+            pass
+
+    def _update_search_alert(self, now):
+        reading = self._inspection_detector
+        ratio = reading.get('signal_ratio')
+        alert = self._search_alert
+        level = self._alert_options['level']
+        live = (self._alert_options['enabled'] and now - self._inspection_detector_at < .5 and
+                reading.get('fresh') and isinstance(ratio,(int,float)) and math.isfinite(ratio) and
+                not self._inspection.active and not self._probe_state.get('probe', {}).get('cycle_active'))
+        if not live:
+            if alert['phase'] in ('active', 'cooling'):
+                alert['cleared_at'] = time.time()
+            alert['phase'] = 'idle'
+            return
+        signal = ratio * 100
+        phase = alert['phase']
+        if phase == 'idle' and signal >= level:
+            alert.update(phase='pending', since=now)
+        elif phase == 'pending':
+            if signal < level:
+                alert['phase'] = 'idle'
+            elif now - alert['since'] >= .15:
+                alert.update(phase='active', fired_at=time.time(), peak=signal)
+                self._log_field_event('SEARCH ALERT', 'alert')
+        elif phase in ('active', 'cooling'):
+            alert['peak'] = max(alert['peak'], signal)
+            if phase == 'active' and signal < level - 5:
+                alert.update(phase='cooling', since=now)
+            elif phase == 'cooling':
+                if signal >= level:
+                    alert['phase'] = 'active'
+                elif now - alert['since'] >= 1.5:
+                    alert.update(phase='idle', cleared_at=time.time())
 
     def _inspection_detector_cb(self, message):
         try:
@@ -281,48 +343,139 @@ class OperatorControl(Node):
             self._enforce_safety_locked()
         self._emit_cmd_vel()
 
+    def _drive_settings_cb(self, message):
+        try:
+            settings = driving_settings.validate(json.loads(message.data)['driving'])
+            selected = settings['input']
+            limits = (settings['reverse_percent'] / 100., settings['forward_percent'] / 100.)
+        except (KeyError, TypeError, ValueError):
+            return
+        with self._lock:
+            limits_changed = limits != self._keyboard_limits
+            self._keyboard_limits = limits
+            if selected == self._drive_input and (selected != 'keyboard' or not limits_changed):
+                return
+            self._drive_input = selected
+            self._rc_enabled_until = 0.
+            self._apply_drive_locked(0., 0., False)
+        self._emit_cmd_vel()
+
+    def _rc_controls(self):
+        return self._rc_safety.controls(int(self.get_parameter('rc_steering_channel').value),
+                                        int(self.get_parameter('rc_throttle_channel').value))
+
     def _rc_cb(self, message):
         with self._lock:
-            self._rc_safety.update_rc(message)
-            self._enforce_safety_locked()
+            updated = self._rc_safety.update_rc(message)
+            safety = self._enforce_safety_locked()
+            if updated and self._drive_input == 'rc':
+                controls = self._rc_controls()
+                if (self._armed and safety['allowed'] and controls['fresh'] and not self._calibrating
+                        and time.monotonic() < self._rc_enabled_until and not self._payload_blocks_drive()):
+                    steering, throttle = controls['steering'], controls['throttle']
+                    self._apply_drive_locked(throttle * self._max_velocity, -steering * self._max_yaw_rate,
+                                             bool(steering or throttle), 'rc')
+                else:
+                    self._apply_drive_locked(0., 0., False)
         self._emit_cmd_vel()
 
     def _disable_actuation_locked(self):
         self._armed = False
         self._permission_pub.publish(Bool(data=False))
-        self._stop_motion_locked()
+        self._stop_motion_locked(stop_inspection=self._inspection.active)
 
     def _stop_motion_locked(self, stop_inspection=True):
         if stop_inspection:
             self._inspection.stop()
         self._calibrating = False
+        self._rc_enabled_until = 0.
         self._deadman = False
         self._command = (0.0, 0.0)
         self._sweep_enabled_pub.publish(command_message(dict(action='sweep',enabled=False)))
         self._arm_command_pub.publish(command_message(dict(action='stop')))
         self._probe_command_pub.publish(command_message(dict(action='stop')))
-        if self._pump_active:
-            self._pump_active = False
-            if self._pump_timer is not None:
-                self._pump_timer.cancel()
-                try:
-                    self.destroy_timer(self._pump_timer)
-                except Exception:
-                    pass
-                self._pump_timer = None
-            self._pump_pub.publish(Bool(data=False))
+        self._stop_pump(0.)
 
-    def _pump_timeout_cb(self):
+    def _marking_settings_cb(self, message):
+        try:
+            settings = json.loads(message.data)
+            value = marking_settings.validate(settings['marking']) if isinstance(settings, dict) and not settings.get('error') else None
+        except (ValueError, TypeError, KeyError):
+            value = None
         with self._lock:
-            if self._pump_timer is not None:
-                self._pump_timer.cancel()
-                try:
-                    self.destroy_timer(self._pump_timer)
-                except Exception:
-                    pass
-                self._pump_timer = None
-            self._pump_active = False
-            self._pump_pub.publish(Bool(data=False))
+            if self._marking != value:
+                self._stop_pump(0.)
+                self._marking = value
+
+    def _pump_allowed(self, safety):
+        return bool(self._marking and self._armed and safety['allowed'] and
+                    (self._rc_safety.simulation or self._rc_safety.px4_armed() is True))
+
+    def _publish_pump(self, percent):
+        self._pump_output = percent
+        self._pump_pub.publish(Float32(data=percent))
+
+    def _stop_pump(self, idle):
+        self._pump_active = False
+        self._pump_mode = 'idle'
+        self._pump_until = 0.
+        if self._pump_output != idle:
+            self._publish_pump(idle)
+
+    def _pump_tick(self, now, safety):
+        allowed = self._pump_allowed(safety)
+        idle = self._marking['idle_percent'] if allowed else 0.
+        if self._pump_active and (not allowed or now >= self._pump_until):
+            self._stop_pump(idle)
+        self._publish_pump(self._pump_output if self._pump_active else idle)
+
+    def _pump_command(self, payload, safety):
+        manual = payload['type'] == 'pump_manual'
+        action = payload.get('action') if manual else 'shot'
+        if not self._pump_allowed(safety):
+            return dict(type='error', message='Marking requires car settings, RC in ROS mode and an armed PX4.')
+        if action == 'stop':
+            if self._pump_mode == 'manual':
+                self._stop_pump(self._marking['idle_percent'])
+            return
+        if manual != self._calibrating:
+            return dict(type='error', message='Open Setup to test the pump.' if manual else 'Close Setup before marking.')
+        if self._probe_active():
+            return dict(type='error', message='Stop the active probe operation before marking.')
+        now = time.monotonic()
+        if action == 'renew':
+            # A delayed heartbeat must never restart a released or expired hold.
+            if self._pump_mode == 'manual' and now < self._pump_until:
+                self._pump_until = now + .25
+            return
+        if manual and action != 'start':
+            return dict(type='error', message='Unknown manual pump command.')
+        if self._pump_active:
+            return dict(type='error', message='Pump mark cycle already in progress.')
+        if manual:
+            try:
+                output = marking_settings.percent(payload.get('percent'))
+            except ValueError as exc:
+                return dict(type='error', message=str(exc))
+            duration = .25
+        else:
+            duration = self._marking['duration_s']
+            output = self._marking['active_percent']
+        self._pump_active = True
+        self._pump_mode = 'manual' if manual else 'shot'
+        self._pump_until = now + duration
+        self._publish_pump(output)
+        if not manual:
+            request = payload.get('request_id')
+            self._last_shot_request = request if isinstance(request, str) and len(request) <= 100 else None
+            pose = self._pose if self._pose_at and now - self._pose_at < .5 else {}
+            detector = self._inspection_detector
+            ratio = detector.get('signal_ratio') if detector.get('fresh') and now - self._inspection_detector_at < .5 else None
+            self._mark_pub.publish(String(data=json.dumps(dict(
+                x=pose.get('x'), y=pose.get('y'), heading_deg=math.degrees(pose['yaw']) if pose else None,
+                metal_signal_pct=round(100 * ratio) if type(ratio) in (int, float) and math.isfinite(ratio) else None,
+                id=uuid.uuid4().hex, timestamp=time.time(), duration_s=duration,
+                active_percent=output, idle_percent=self._marking['idle_percent']))))
 
     def begin_shutdown(self):
         """Revoke control before closing transports or invalidating ROS publishers."""
@@ -337,12 +490,16 @@ class OperatorControl(Node):
         safety = self._rc_safety.snapshot()
         # Compatibility telemetry field: readiness is derived from RC and the
         # control lease, never a second dashboard arming latch.
+        was_armed = self._armed
         self._armed = bool(safety['servo_allowed'] and self._lease is not None and not self._shutting_down)
-        if not self._armed:
+        if was_armed and not self._armed:
             self._disable_actuation_locked()
         elif not safety['allowed']:
+            self._rc_enabled_until = 0.
             self._deadman = False
             self._command = (0.0, 0.0)
+        if (self._pump_active or self._pump_output) and not self._pump_allowed(safety):
+            self._stop_pump(0.)
         return safety
 
     ## ROS callbacks ##
@@ -366,6 +523,8 @@ class OperatorControl(Node):
             twist = message.twist.twist
             values = (twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z)
             self._motion_speed = max(abs(v) for v in values) if all(math.isfinite(v) for v in values) else math.inf
+            if self._inspection.confirmed_angle is not None and self._motion_speed > self._probe_speed_limit:
+                self._inspection.stop('Vehicle moved; confirm the target again.')
             self._speed = twist.linear.x if math.isfinite(twist.linear.x) else None
             self._odometry_at = time.monotonic()
 
@@ -446,10 +605,12 @@ class OperatorControl(Node):
             'angular': steering * self._max_yaw_rate,
         }
 
-    def _apply_drive_locked(self, linear: float, angular: float, deadman: bool) -> None:
+    def _apply_drive_locked(self, linear: float, angular: float, deadman: bool, source='browser') -> None:
+        self._command_source = source
         self._deadman = deadman
+        reverse, forward = self._keyboard_limits if self._drive_input == 'keyboard' else (1., 1.)
         self._command = (
-            max(-self._max_velocity, min(self._max_velocity, self._finite(linear))),
+            max(-self._max_velocity * reverse, min(self._max_velocity * forward, self._finite(linear))),
             max(-self._max_yaw_rate, min(self._max_yaw_rate, self._finite(angular))),
         )
         if deadman and self._command != (0., 0.) and not self._inspection.active:
@@ -468,7 +629,7 @@ class OperatorControl(Node):
             safety = self._enforce_safety_locked()
             active = (self._armed and self._deadman and safety['allowed'] and not self._calibrating and self._lease is not None
                       and now - self._last_command <= self._timeout)
-            if self._payload_blocks_drive():
+            if self._payload_blocks_drive() or (self._drive_input == 'rc' and now >= self._rc_enabled_until):
                 self._deadman = False
                 self._command = (0.0, 0.0)
                 active = False
@@ -487,7 +648,7 @@ class OperatorControl(Node):
             parsed = self._parse_xbox_joy(message)
             self._joy = parsed
             self._last_joy = time.monotonic()
-            if self._lease is None or not self._armed or self._calibrating or not self._enforce_safety_locked()['allowed']:
+            if self._drive_input != 'controller' or self._lease is None or not self._armed or self._calibrating or not self._enforce_safety_locked()['allowed']:
                 self._joy_prev_a = bool(parsed['a'])
                 return
             self._joy_prev_a = bool(parsed['a'])
@@ -495,7 +656,7 @@ class OperatorControl(Node):
                 self._deadman = False
                 self._command = (0.0, 0.0)
             else:
-                self._apply_drive_locked(float(parsed['linear']), float(parsed['angular']), bool(parsed['deadman']))
+                self._apply_drive_locked(float(parsed['linear']), float(parsed['angular']), bool(parsed['deadman']), 'joy')
             flush = True
         if flush:
             self._emit_cmd_vel()
@@ -513,8 +674,34 @@ class OperatorControl(Node):
             safety = self._enforce_safety_locked()
             self._permission_pub.publish(Bool(data=bool(self._armed and safety['servo_allowed'] and self._lease is not None)))
             self._inspection_tick(now)
-            self._pump_pub.publish(Bool(data=self._pump_active))
+            self._pump_tick(now, safety)
         self._emit_cmd_vel()
+
+    def _log_field_event(self, status, kind='marked', depth=None, event_id=None, timestamp=None):
+        recent = timestamp is None or 0 <= time.time() - timestamp < 1.
+        pose_fresh = recent and self._pose_at > 0 and time.monotonic() - self._pose_at < .5
+        detector = self._inspection_detector
+        ratio = detector.get('signal_ratio') if recent and detector.get('fresh') and time.monotonic()-self._inspection_detector_at < .5 else None
+        value = dict(id=event_id or uuid.uuid4().hex, timestamp=timestamp or time.time(),
+                     x=self._pose['x'] if pose_fresh else None, y=self._pose['y'] if pose_fresh else None,
+                     heading_deg=round(math.degrees(self._pose['yaw']) % 360) if pose_fresh else None,
+                     metal_signal_pct=round(ratio*100) if isinstance(ratio,(float,int)) else None,
+                     contact_depth_mm=depth, status=status, statusType=kind)
+        self._field_log.publish(String(data=json.dumps(value, allow_nan=False)))
+
+    def _log_probe_result(self, message):
+        try:
+            result = json.loads(message.data).get('probe', {}).get('last_result') or {}
+            stamp = result.get('timestamp')
+            if type(stamp) not in (int,float) or not math.isfinite(stamp) or self._last_probe_log == stamp:
+                return
+            self._last_probe_log = stamp
+            status = result.get('status', 'UNKNOWN')
+            self._log_field_event('CONTACT TRIGGER' if result.get('contact') else 'PROBE ' + status,
+                                  'contact' if result.get('contact') else 'clear', result.get('contact_depth_mm'),
+                                  f'probe-{stamp}', stamp)
+        except (TypeError, ValueError, AttributeError):
+            self.get_logger().warning('Invalid probe result')
 
     def _probe_state_cb(self, message):
         try:
@@ -545,7 +732,8 @@ class OperatorControl(Node):
         """Telemetry shared by every client, without the per-client lease flag."""
         now = time.monotonic()
         with self._lock:
-            publishing = (self._armed and self._deadman and self._rc_safety.snapshot()['allowed'] and not self._calibrating and self._lease is not None
+            rc_enabled = self._drive_input != 'rc' or now < self._rc_enabled_until
+            publishing = (rc_enabled and self._armed and self._deadman and self._rc_safety.snapshot()['allowed'] and not self._calibrating and self._lease is not None
                           and now - self._last_command <= self._timeout)
             joy_live = self._joy_live(now)
             joy = {**self._joy, 'seen': joy_live}
@@ -557,12 +745,14 @@ class OperatorControl(Node):
                 'selected_actuator': self._selected_actuator,
                 'drive': {
                     'armed': self._armed,
-                    'rc': self._rc_safety.controls(int(self.get_parameter('rc_steering_channel').value),
-                                                   int(self.get_parameter('rc_throttle_channel').value)),
+                    'px4_armed': self._rc_safety.px4_armed(),
+                    'px4_state_status': self._rc_safety.px4_state_status(),
+                    'input': self._drive_input,
+                    'rc': self._rc_controls(),
                     'calibrating': self._calibrating,
                     'deadman': self._deadman,
                     'publishing': publishing,
-                    'command_source': 'joy' if joy_live and publishing else ('browser' if publishing else 'none'),
+                    'command_source': self._command_source if publishing else 'none',
                     'joy': joy,
                     'cmd_linear_x': self._command[0] if publishing else 0.0,
                     'cmd_angular_z': self._command[1] if publishing else 0.0,
@@ -575,7 +765,10 @@ class OperatorControl(Node):
                     'pump_active': self._pump_active,
                 },
                 'pump_active': self._pump_active,
+                'marking': dict(settings=self._marking, mode=self._pump_mode,
+                                output_percent=self._pump_output, last_shot_request=self._last_shot_request),
                 'inspection': self._inspection.snapshot(),
+                'search_alert': dict(self._search_alert, server_time=time.time()),
                 'robot': {**self._pose, 'speed_mps': self._speed, 'stationary': self._stationary(),
                           'odometry_fresh': now - self._odometry_at < .5,
                           'pose_fresh': self._pose_at > 0 and now - self._pose_at < .5},
@@ -628,6 +821,12 @@ class OperatorControl(Node):
                 flush_drive = True
             elif self._lease != ws:
                 error = {'type': 'error', 'message': 'Spectator mode: take control before sending commands.'}
+            elif message_type == 'log_pose':
+                if self._pose_at <= 0 or time.monotonic() - self._pose_at >= .5:
+                    return {'type':'error', 'message':'Fresh localization is required to log a pose.'}
+                self._log_field_event('POSE LOGGED')
+            elif message_type == 'clear_log':
+                self._field_clear.publish(Bool(data=True))
             elif message_type == 'inspection' and payload.get('action') == 'stop':
                 self._stop_motion_locked()
                 self._stop_until = time.monotonic()+STOP_TAIL_S
@@ -655,6 +854,17 @@ class OperatorControl(Node):
                 if self._inspection.active:
                     self._stop_motion_locked()
                 return self._actuator_command(command)
+            elif message_type == 'rc_drive_enable':
+                if self._drive_input == 'rc':
+                    if (payload.get('enabled') is True and self._armed and safety['allowed']
+                            and not self._calibrating and not self._payload_blocks_drive()):
+                        self._rc_enabled_until = time.monotonic() + self._timeout
+                    else:
+                        self._rc_enabled_until = 0.
+                        self._apply_drive_locked(0., 0., False)
+                        flush_drive = True
+            elif message_type == 'drive' and (self._drive_input == 'rc' or payload.get('input', self._drive_input) != self._drive_input):
+                return {'type': 'error', 'message': 'The car has a different drive input selected.'}
             elif message_type == 'drive' and payload.get('deadman') is not True:
                 self._apply_drive_locked(0., 0., False)
                 flush_drive = True
@@ -683,7 +893,7 @@ class OperatorControl(Node):
                 return {'type': 'error', 'message': 'Vehicle and probe motion are blocked during arm calibration.'}
             elif message_type == 'inspection':
                 self._start_inspection(payload)
-            elif self._inspection.active and message_type in ('drive','arm_servo','probe_target','start_probe_cycle','probe_cycle','sweep_enabled','sweep_speed','align_probe','pump_mark'):
+            elif self._inspection.active and message_type in ('drive','arm_servo','probe_target','start_probe_cycle','probe_cycle','sweep_enabled','sweep_speed','align_probe','pump_mark','pump_manual'):
                 return {'type':'error', 'message':'Inspection running; stop it before using manual controls.'}
             elif message_type == 'drive':
                 if self._probe_state.get('probe', {}).get('cycle_active'):
@@ -694,7 +904,7 @@ class OperatorControl(Node):
                     return {'type': 'error', 'message': 'Stow the probe before driving.'}
                 # A live ROS pad on the SVEA owns the sticks so the browser
                 # Gamepad API is not required on http://<lan-ip>.
-                if not self._joy_live(time.monotonic()):
+                if self._drive_input != 'controller' or not self._joy_live(time.monotonic()):
                     self._apply_drive_locked(
                             float(payload.get('linear_x', 0.0)),
                             float(payload.get('angular_z', 0.0)),
@@ -737,6 +947,7 @@ class OperatorControl(Node):
             elif message_type == 'sweep_enabled':
                 if payload.get('enabled'):
                     self._inspection.stop('Searching; confirm the next detection before probing.')
+                    self._log_field_event('SEARCH SWEEP')
                 if payload.get('enabled') and (self._probe_active() or self._pump_active):
                     return {'type': 'error', 'message': 'Stop the active probe or marking operation before sweeping.'}
                 if payload.get('enabled') and not self._rc_safety.simulation:
@@ -768,25 +979,8 @@ class OperatorControl(Node):
                     return {'type': 'error', 'message': 'Target angle must be finite'}
                 self._permission_pub.publish(Bool(data=True))
                 self._arm_command_pub.publish(command_message(dict(action='angle', angle_deg=angle, request_id=payload.get('request_id'))))
-            elif message_type == 'pump_mark':
-                duration = float(payload.get('duration_s', 2.0))
-                if not math.isfinite(duration) or duration <= 0 or duration > 10.0:
-                    return {'type': 'error', 'message': 'Invalid pump mark duration.'}
-                if self._calibrating:
-                    return {'type': 'error', 'message': 'Close Setup before marking.'}
-                if self._probe_active():
-                    return {'type': 'error', 'message': 'Stop the active probe operation before marking.'}
-                if self._pump_active:
-                    return {'type': 'error', 'message': 'Pump mark cycle already in progress.'}
-                self._pump_active = True
-                self._pump_pub.publish(Bool(data=True))
-                if self._pump_timer is not None:
-                    self._pump_timer.cancel()
-                    try:
-                        self.destroy_timer(self._pump_timer)
-                    except Exception:
-                        pass
-                self._pump_timer = self.create_timer(duration, self._pump_timeout_cb)
+            elif message_type in ('pump_mark', 'pump_manual'):
+                return self._pump_command(payload, safety)
             else:
                 error = {'type': 'error', 'message': 'Unsupported operator command.'}
         if flush_drive:
@@ -833,6 +1027,12 @@ class OperatorControl(Node):
         return super().destroy_node()
 
     def publish_state(self):
+        self._update_search_alert(time.monotonic())
+        phase = self._inspection.phase
+        if phase != self._last_inspection_phase:
+            self._last_inspection_phase = phase
+            if phase in ('CONFIRMED', 'COMPLETE', 'ERROR'):
+                self._log_field_event(self._inspection.message)
         state = self.snapshot()
         state['control_owner'] = self._lease
         self._state_pub.publish(String(data=json.dumps(state, allow_nan=False)))

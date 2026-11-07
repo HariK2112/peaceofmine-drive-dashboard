@@ -32,3 +32,6 @@ site/
 
 # Operator runtime locks
 .operator_config.json.lock
+
+# Durable vehicle mission data
+field*.sqlite3*

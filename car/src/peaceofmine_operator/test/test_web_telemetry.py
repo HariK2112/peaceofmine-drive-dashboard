@@ -182,6 +182,7 @@ class DetectorControlTest(unittest.TestCase):
             node.baseline=0.
             node.full_response=255.
             node.sensor=SimpleNamespace(state=dict(fresh=True,packet=dict(amplitude_adc=125.7)),updated=99.9)
+            node.signal=.6
             node.signal_at=99.9
             node.configuration_error=None
             node.latest_peak=dict(timestamp=99.8,angle_deg=5.,signal=1.4)

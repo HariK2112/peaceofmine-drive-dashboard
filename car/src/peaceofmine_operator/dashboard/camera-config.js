@@ -20,6 +20,17 @@
     }
     savePreferences(); rebuildCameraOptions(); applyCameraRotations();
   }
+  window.saveCameraView = slot => {
+    const source = preferences.cameras[slot];
+    if (!portable(source) || !latest || !state.connected || !state.drive.you_control_owner) return;
+    const value = structuredClone(latest);
+    for (const view of slots) {
+      if (portable(preferences.cameras[view])) {
+        value[view] = {source:preferences.cameras[view], rotation:preferences.cameraRotation[view]};
+      }
+    }
+    send({type:'settings',section:'cameras',value});
+  };
   window.operatorSettingsState = value => {
     $('camera-save-shared').disabled = !value || !state.connected || !state.drive.you_control_owner;
     if (!value?.cameras) return;
@@ -49,5 +60,5 @@
     } catch (error) { $('camera-config-feedback').textContent=error.message; }
   };
   $('camera-revert-shared').onclick = () => { if (latest) { signature=null; operatorSettingsState(state.settings); } };
-  window.operatorSettingsResult = message => $('camera-config-feedback').textContent = message.message || (message.ok ? 'Saved' : 'Settings rejected');
+  window.operatorSettingsResult = message => { if (message.section === 'cameras') $('camera-config-feedback').textContent = message.message; };
 })();

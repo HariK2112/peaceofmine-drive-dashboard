@@ -178,23 +178,26 @@ blocks driving while calibrating; previews never drive the rover. Closing it
 retains the control lease. Losing browser focus or hiding the page releases
 held input and sends a stop.
 
-Choose one of three schemes:
+Select one of four inputs under **Drive with**.
 
 - **Xbox / standard gamepad**: the dashboard selects an active browser pad
   automatically; Settings can select a specific device and override the
   automatically detected `standard` or Xbox 360 mapping.
   Left stick steers, RT drives forward, LT reverses. RC controls drive authority.
 - **WASD keyboard**: use **Focus camera for WASD**, or close Settings and click
-  the forward camera. Set **WASD max throttle (%)** in Controls.
+  the forward camera. Set the **Forward throttle limit** and **Reverse throttle limit** in Controls.
 - **Steering wheel**: select the wheel, inspect raw axes and buttons, then set
   steering, forward pedal, and reverse pedal indices. Invert axes as
   needed. Defaults are starting points, not a verified G27 mapping. Pedals
   must use distinct axes spanning -1 to +1; combined pedal axes are rejected.
   The reverse pedal commands reverse motion, not a separate vehicle brake.
+- **RC through ROS** uses steering and throttle from the transmitter in the ROS
+  switch position. The dashboard owner keeps the page focused while the car
+  translates fresh RC samples to `cmd_vel`. The physical override switch gives
+  the transmitter direct control regardless of the selected dashboard input.
 
 Before driving, verify released pedals produce zero speed, steering is centered,
-and full pedal travel reaches the expected signed speed. Preferences are stored locally in this browser;
-device selection is deliberately required again after a page reload.
+and full pedal travel reaches the expected signed speed. The car stores the drive input and both keyboard limits in the `driving` section of its operator configuration.
 
 Connect the wheel to the Chrome client computer. Use HTTPS when accessing a
 remote gateway (localhost is also supported), focus the page, and press a
@@ -233,7 +236,7 @@ target for the virtual camera. Unavailable metadata is shown as a dash.
 Rotate changes the local view by 90° and saves the orientation independently for
 each slot; it does not modify the camera sensor or steering directions.
 
-Choose WASD, joystick or wheel above the camera. In WASD mode, click the
+Choose WASD, gamepad, wheel or RC through ROS above the camera. In WASD mode, click the
 forward camera to capture keys. WASD drives; hold Space to sweep. Release Space
 to stop that sweep. Escape, clicking elsewhere, losing focus or opening Settings
 releases keyboard input and sends a stop without giving up dashboard control.

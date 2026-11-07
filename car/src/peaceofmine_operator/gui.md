@@ -20,8 +20,26 @@ the probe is descending or retracting. Configure maximum depth and contact
 voltage there; use Home / travel setup for calibration.
 
 Diagnostics below the workspace holds filtered detector/angle plots, controller,
-probe, map, power and detailed link telemetry. Mission log holds the session
-record and CSV export. Setup retains input, camera and hardware calibration.
+probe, map, power and detailed link telemetry. Mission log reads the shared record on the car and exports it as CSV. Refreshing
+a browser releases its control lease and stops active motion. Completed arc
+confirmation stays available to the next owner while the vehicle remains in place.
+Driving or starting a new search invalidates the previous probe target.
+
+Both cameras are optional with the normal launch command. An enabled camera
+retries independently when disconnected. During a
+probe scan the dashboard promotes the probe feed only when it has frames.
+ADC plots apply a 350 ms minimum display filter and a minimum vertical scale
+of one scaled unit. Contact detection uses the configured acquisition values. Setup retains input, camera and hardware calibration.
+
+## Field map and GNSS
+
+Signal & map opens at street level on the first fresh receiver position. The dot follows the car and the circle shows its estimated horizontal error in metres. Drag to stop following and select **Follow** to resume. The trail and logged ground marks remain visible when the fix becomes stale. The local grid is available in the map selector. OpenStreetMap supplies the base tiles over the browser's internet connection. The car supplies all positions, trails and marks independently of those tiles.
+
+The field recorder reads the Pi GPIO UART at `/dev/ttyAMA0`, 115200 baud. Set `gnss_device` and `gnss_baud` in the operator launch for another receiver. NAV-PVT supplies coordinates and horizontal accuracy together. GGA-only output provides a position with unknown accuracy. Outdoor RTK localization supplies the ROS `/fix` topic when enabled. Simulation skips the UART.
+
+In **Setup → GNSS**, the control owner can set the acceptable horizontal error (default 1 m) and maximum wait (default 5 s, set 0 for immediate capture). A ground mark commands the pump immediately and logs the event on the car. With a fresh fix within target, the recorder attaches it immediately. Otherwise it keeps the best available fix during the wait, ending early on vehicle movement or loss of control telemetry. Outside the target, the log shows an uncertain position and its estimated error. With no fix it records the shot with its position unavailable. Physical paint or water delivery requires visual confirmation.
+
+All clients read the same mission entries and recent trail (up to 900 points). The recorder uses `field.sqlite3` beside the resolved operator config, or `field-simulation.sqlite3` in simulation. The standard container mounts this directory from the host. Override `field_log_path` to choose another persistent location. Clearing the mission log removes its recorded events and map marks. The driven trail remains.
 
 ## Architecture
 
@@ -237,15 +255,13 @@ request are required after reconnection.
 
 Choose WASD above the camera, then click the forward camera to capture keys.
 Escape or clicking elsewhere releases them. Hold Space to sweep; release to stop.
-Set the keyboard-only maximum throttle in Settings → Controls. Shift is not required.
+Set the forward and reverse keyboard throttle limits in Setup → Controls. The car saves both percentages.
 
 The physical RC is authoritative. RC override blocks browser driving but permits
 the control owner to sweep the servo while PX4 is active and RC kill is clear.
 RC loss, kill, stale heartbeat, gateway permission timeout, or control-owner
 disconnect stops the arm. Settings jogging does not require saved limits;
-sweeping requires minimum, center and maximum calibration. The input toolbar shows
-RC channel input in override mode. Visualization defaults to steering CH1 and
-throttle CH2; adjust `rc_steering_channel` and `rc_throttle_channel` in launch XML
+sweeping requires minimum, center and maximum calibration. The input toolbar shows RC channels in physical override and when **RC through ROS** is selected. In the ROS switch position, the latter sends drive commands while fresh transmitter samples and owner presence continue. The default channels are steering CH1 and throttle CH2; adjust `rc_steering_channel` and `rc_throttle_channel` in launch XML
 to match your transmitter. PWM visualization assumes 1000/1500/2000 endpoints.
 
 Settings calibration jog/position controls use the full EEPROM joint range,

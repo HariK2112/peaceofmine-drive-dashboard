@@ -417,6 +417,8 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
   grid-template-areas: "forward probe";
 }
 .camera-stage[data-focus=probe] { grid-template-areas: "probe forward"; }
+.camera-stage.single-camera { grid-template-columns: 1fr; grid-template-areas: "forward"; }
+.camera-stage.single-camera > .probe-camera { display: none; }
 .camera-stage > .forward-camera { grid-area: forward; }
 .camera-stage > .probe-camera { grid-area: probe; }
 
@@ -501,6 +503,14 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
 
 /* signal & map */
 #map-view { display: block; flex: 1 1 auto; width: 100%; min-height: 4rem; border-radius: var(--radius-sm); background: var(--bg-sunken); }
+
+#map-view[hidden], #gnss-map[hidden] { display: none; }
+#gnss-map { position: relative; isolation: isolate; flex: 1 1 auto; min-height: 5rem; width: 100%; background: var(--bg-sunken); border-radius: var(--radius-sm); }
+#gnss-map-empty { position: absolute; inset: 0; display: grid; place-items: center; }
+#gnss-map-empty[hidden] { display: none; }
+#gnss-map-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#gnss-map .leaflet-control-attribution { line-height: 1.1; }
+.map-panel:has(#map-mode option[value="gnss"]:checked) .section-foot { display: none; }
 
 /* detector */
 .signal-value { display: flex; align-items: baseline; gap: var(--s1); }

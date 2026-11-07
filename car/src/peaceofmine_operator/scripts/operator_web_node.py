@@ -97,6 +97,12 @@ def build_ssl_context(cert: str, key: str) -> ssl.SSLContext | None:
 def build_app(node: OperatorGateway) -> web.Application:
     app = web.Application()
     dashboard = dashboard_directory()
+    async def field_handler(request):
+        field = node.field_snapshot(request.query.get('revision'))
+        if field is None:
+            raise web.HTTPServiceUnavailable(text='Waiting for field recorder')
+        return web.json_response(field, headers={'Cache-Control': 'no-store'})
+
     async def adc_handler(request):
         try:
             after = max(0, int(request.query.get('after', '0')))
@@ -124,7 +130,7 @@ def build_app(node: OperatorGateway) -> web.Application:
         # development, and aiohttp's generic static route refuses symlinks by
         # design, so serve this small explicit allow-list instead.
         filename = request.match_info['filename']
-        if filename not in {'app.js', 'layout.js', 'actuator-settings.js', 'adc.js', 'camera-config.js', 'style.css', 'keydrown-1.3.0.js', 'chart-4.4.8.umd.js'}:
+        if filename not in {'field-map.js', 'leaflet.js', 'leaflet.css', 'app.js', 'layout.js', 'actuator-settings.js', 'marking.js', 'adc.js', 'camera-config.js', 'style.css', 'keydrown-1.3.0.js', 'chart-4.4.8.umd.js'}:
             raise web.HTTPNotFound()
         return web.FileResponse(dashboard / filename, headers={'Cache-Control': 'no-store'})
 
@@ -173,6 +179,7 @@ def build_app(node: OperatorGateway) -> web.Application:
     app.router.add_get('/assets/{filename}', asset_handler)
     app.router.add_get('/camera/{camera}', camera_handler)
     app.router.add_get('/ws', socket_handler)
+    app.router.add_get('/api/field', field_handler)
     app.router.add_get('/api/adc', adc_handler)
     return app
 

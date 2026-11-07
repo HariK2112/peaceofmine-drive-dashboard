@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09131a">
   <title>PeaceOfMine Operator</title>
+  <link rel="stylesheet" href="assets/leaflet.css">
   <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -24,6 +25,7 @@
       <div class="brand"><h1>PeaceOfMine</h1><span id="environment-label">Connecting</span></div>
       <div class="topbar-status" aria-label="Vehicle status">
         <div class="connection"><span id="connection-dot"></span><span id="connection">Connecting</span></div>
+        <span id="px4-arming" class="badge neutral" role="status" title="Waiting for MAVROS state">PX4 UNKNOWN</span>
         <span id="rc-safety" class="badge neutral" title="PX4 safety status">RC UNKNOWN · LOCKED</span>
         <button id="power-chip" type="button" class="power-chip" title="Battery · opens the Vehicle tab"><span id="power-chip-pct">—</span><span id="power-chip-w">— W</span></button>
         <span id="control-owner" class="badge neutral">SPECTATING</span>
@@ -57,7 +59,7 @@
             <img id="aux-network-camera" draggable="false" class="aux-camera hidden" alt="Probe camera stream">
             <div class="camera-label aux-camera-label hidden" id="aux-camera-label">PROBE CAMERA</div>
             <div class="aux-camera-latency hidden" id="aux-camera-latency">--</div>
-            <div id="probe-camera-empty" class="camera-empty"><strong>No probe camera</strong><span>Pick the probe-facing camera in Setup.</span><button type="button" class="quiet" data-open-settings="cameras">Choose camera</button></div>
+            <div id="probe-camera-empty" class="camera-empty"><strong>No probe camera</strong><span>A probe camera is optional.</span><button type="button" class="quiet" data-open-settings="cameras">Choose camera</button></div>
           </section>
         </div>
         <button id="camera-swap" type="button" class="camera-swap" title="Swap the large and small camera">⇄ <span id="camera-swap-label">Enlarge probe camera</span></button>
@@ -65,7 +67,7 @@
 
       <div class="drive-bar">
         <label class="drive-source" for="drive-control-source"><span>Drive with</span>
-          <select id="drive-control-source"><option value="keyboard">Keyboard (WASD)</option><option value="controller">Gamepad</option><option value="wheel">Steering wheel</option></select>
+          <select id="drive-control-source"><option value="keyboard">Keyboard (WASD)</option><option value="controller">Gamepad</option><option value="wheel">Steering wheel</option><option value="rc">RC through ROS</option></select>
         </label>
         <div class="drive-text input-state"><p id="controller">Choose an input</p><p id="controller-mapping"></p></div>
         <div class="drive-text drive-feedback"><p id="drive-block">Take control when the RC allows driving.</p><p id="drive-help">Click the camera for WASD · Esc releases the keys · hold Space to sweep</p></div>
@@ -89,8 +91,10 @@
             <div class="section-foot"><p id="detector-detail">Waiting for detector data.</p><span id="sweep-status" role="status"></span></div>
           </section>
           <section class="pane-section map-panel" aria-labelledby="map-heading">
-            <div class="section-head"><h2 id="map-heading">Field map</h2><span class="head-note">Local grid · metres</span></div>
-            <canvas id="map-view" aria-label="Local field map"></canvas>
+            <div class="section-head"><h2 id="map-heading">Field map</h2><select id="map-mode" aria-label="Field map view"><option value="gnss">GNSS map</option><option value="local">Local grid</option></select><button id="map-follow" type="button" class="quiet" aria-pressed="true" disabled>Follow</button></div>
+            <div id="gnss-map" aria-label="Geographic field map"><span id="gnss-map-empty" class="meta">Waiting for GNSS position</span></div>
+            <p id="gnss-map-status" class="meta">Waiting for field recorder</p>
+            <canvas hidden id="map-view" aria-label="Local field map"></canvas>
             <div class="section-foot"><p id="position">X 0.0 &middot; Y 0.0 &middot; heading 0&deg;</p></div>
           </section>
         </div>
@@ -144,7 +148,7 @@
         <div class="dock-pane pane-log" data-dock-pane="log" role="tabpanel" hidden>
           <section class="pane-section target-log-panel" aria-labelledby="target-log-heading">
             <div class="section-head">
-              <h2 id="target-log-heading">Mission log <span class="tip" data-tip="Kept in this browser only. Export the CSV before you close the page. A pump run does not prove a visible mark."></span></h2>
+              <h2 id="target-log-heading">Mission log <span class="tip" data-tip="Saved on the car and shared with all viewers. A pump run does not prove a visible mark."></span></h2>
               <span id="target-count" class="badge neutral">0 TARGETS</span>
               <div class="target-log-actions">
                 <button id="mark-target-btn" type="button" class="quiet" title="Save the car's position without running the pump">Log position</button>
@@ -154,7 +158,7 @@
             </div>
             <div class="table-wrap">
               <table class="target-table">
-                <thead><tr><th scope="col">ID</th><th scope="col">Position (X, Y)</th><th scope="col">Signal %</th><th scope="col">Contact depth</th><th scope="col">Result</th><th scope="col">Time</th></tr></thead>
+                <thead><tr><th scope="col">ID</th><th scope="col">Position</th><th scope="col">Signal %</th><th scope="col">Contact depth</th><th scope="col">Result</th><th scope="col">Time</th></tr></thead>
                 <tbody id="target-log-body"><tr class="empty-row"><td colspan="6">Nothing logged yet. Log a position, mark the ground or run a probe.</td></tr></tbody>
               </table>
             </div>
@@ -230,9 +234,9 @@
               <small id="mode-probe-help" class="step-note"></small>
             </div>
             <div class="operation-action">
-              <button id="mode-mark-btn" type="button" class="mode-btn" disabled title="Run the marking pump for 2 seconds">
+              <button id="mode-mark-btn" type="button" class="mode-btn" disabled title="Run a timed marking shot">
                 <span class="mode-num">4</span><span class="mode-copy"><span class="mode-text">Mark ground</span><span class="mode-desc">Pump a mark onto the spot</span></span>
-                <span id="mode-mark-pill" class="badge neutral">READY (2s)</span>
+                <span id="mode-mark-pill" class="badge neutral">WAITING</span>
               </button>
               <small id="mode-mark-help" class="step-note"></small>
             </div>
@@ -245,7 +249,7 @@
         <details id="search-task" class="task-controls" open><summary>Sweep and alert</summary>
           <div class="field-row"><label for="sweep-speed">Sweep speed</label><output id="sweep-speed-value">36&deg;/s</output></div>
           <input id="sweep-speed" type="range" value="36">
-          <div class="field-row"><label for="search-alert-level">Alert at <span class="tip" data-tip="Warn me when the detector reaches this share of the mine level. 100% is the mine level from Setup → Metal detector. Saved in this browser."></span></label><output id="search-alert-value">60%</output></div>
+          <div class="field-row"><label for="search-alert-level">Alert at <span class="tip" data-tip="Warn me when the detector reaches this share of the mine level. 100% is the mine level from Setup → Metal detector. Saved on the car."></span></label><output id="search-alert-value">60%</output></div>
           <input id="search-alert-level" type="range" min="20" max="100" step="5" value="60">
           <div class="check-row">
             <label class="check"><input id="search-alert-enabled" type="checkbox" checked> Show alert</label>
@@ -304,12 +308,14 @@
         <p class="setup-nav-group" aria-hidden="true">Driving</p>
         <button type="button" class="settings-tab active" role="tab" aria-selected="true" aria-controls="settings-input" data-settings-tab="input">Controls</button>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-cameras" data-settings-tab="cameras">Cameras</button>
-        <p class="setup-nav-group" aria-hidden="true">Arm &amp; probe</p>
+        <p class="setup-nav-group" aria-hidden="true">Payload</p>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-arm" data-settings-tab="arm">Arm</button>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-probe" data-settings-tab="probe">Probe</button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-marking" data-settings-tab="marking">Marking</button>
         <p class="setup-nav-group" aria-hidden="true">Sensors</p>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-detector" data-settings-tab="detector">Metal detector</button>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-adc" data-settings-tab="adc">Sensor board</button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-gnss" data-settings-tab="gnss">GNSS</button>
       </nav>
 
       <div class="setup-body">
@@ -317,7 +323,8 @@
       <!-- ============================================================ Controls -->
       <section id="settings-input" class="settings-panel active" role="tabpanel" data-settings-panel="input">
         <header class="panel-head">
-          <h3>Controls <span class="tip" data-tip="Settings for the input chosen under “Drive with” on the main screen. Saved in this browser only."></span></h3>
+          <h3>Controls <span class="tip" data-tip="Choose the drive input on the main screen. The car stores the selected input and keyboard throttle limits. The physical RC switch always controls drive authority."></span></h3>
+          <output id="driving-feedback" class="meta" aria-live="polite"></output>
         </header>
         <div class="panel-grid cols-3">
           <section id="device-settings" class="set-card">
@@ -341,9 +348,12 @@
           </section>
 
           <section class="set-card">
-            <header class="card-head"><h4>Keyboard <span class="tip" data-tip="On the main screen, click the front camera, then hold Shift and use W A S D. Esc lets go of the keys."></span></h4></header>
-            <label class="field"><span class="field-name">Top speed <span class="unit">%</span></span>
+            <header class="card-head"><h4>Keyboard <span class="tip" data-tip="On the main screen, click the front camera, then use W A S D. Esc lets go of the keys."></span></h4></header>
+            <label class="field"><span class="field-name">Forward throttle limit <span class="unit">%</span></span>
               <input id="keyboard-max-throttle" type="number" min="0" max="100" step="1" value="100" required>
+            </label>
+            <label class="field"><span class="field-name">Reverse throttle limit <span class="unit">%</span></span>
+              <input id="keyboard-reverse-throttle" type="number" min="0" max="100" step="1" value="100" required>
             </label>
             <div id="key-preview" class="key-preview" aria-label="Keyboard input preview"></div>
             <div class="card-actions"><button type="button" id="keyboard-test">Drive with WASD</button></div>
@@ -359,6 +369,10 @@
             </div>
           </section>
 
+          <section id="rc-drive-settings" class="set-card hidden">
+            <header class="card-head"><h4>RC through ROS <span class="tip" data-tip="Select the ROS position on the transmitter and take control. The car reads its RC channels while the dashboard is focused. The middle switch position gives the transmitter direct control."></span></h4></header>
+            <output id="rc-drive-input" class="meta">Waiting for transmitter</output>
+          </section>
           <section id="wheel-settings" class="set-card span-all hidden">
             <header class="card-head"><h4>Wheel mapping <span class="tip" data-tip="Move each control and read its axis number under “What the browser sees” (starts at 0). Pedals read 0 released and 1 pressed."></span></h4></header>
             <div id="wheel-mapping" class="mapping-grid"></div>
@@ -413,7 +427,7 @@
             <p id="auxiliary-source-detail" class="meta mono"></p>
           </article>
           <section class="set-card span-all card-inline">
-            <h4>Share with other operators <span class="tip" data-tip="Saves the car's camera choices and rotation for everyone. Laptop cameras stay in this browser."></span></h4>
+            <h4>Share with other operators <span class="tip" data-tip="Saves capture settings on the car. ROS view choices are shared automatically. Laptop cameras stay in this browser."></span></h4>
             <p id="camera-config-feedback" class="status-msg" role="status">Not saved yet.</p>
             <div class="btn-row"><button id="camera-revert-shared" type="button" class="quiet">Reload saved</button><button id="camera-save-shared" type="button" class="primary" disabled>Save for everyone</button></div>
           </section>
@@ -598,6 +612,34 @@
         </details>
       </section>
 
+      <section id="settings-marking" class="settings-panel" role="tabpanel" data-settings-panel="marking" hidden>
+        <header class="panel-head">
+          <h3>Marking <span class="tip" data-tip="The pump uses MAVLink AUX5, PMB3 misc1, PCA9685 CH6 (Actuator_Set2). Percent is the commanded output range. Actual duty depends on the PX4 channel configuration."></span></h3>
+          <div class="panel-tools"><button type="button" id="marking-take-control" class="quiet">Take control</button></div>
+        </header>
+        <div class="status-bar">
+          <p id="marking-status" class="status-msg" role="status">Waiting for car settings</p>
+          <dl class="readouts inline"><div><dt>Commanded output</dt><dd id="marking-output">—</dd></div></dl>
+        </div>
+        <div class="panel-grid cols-2">
+          <section class="set-card">
+            <header class="card-head"><h4>Timed shot</h4></header>
+            <label class="field"><span class="field-name">Duration <span class="unit">s</span></span><input id="marking-duration" type="number" min="0.1" max="10" step="any" required></label>
+            <label class="field"><span class="field-name">Idle output <span class="unit">%</span> <span class="tip" data-tip="Applied while ROS has control and PX4 is armed. Loss of permission or command heartbeat sends 0%."></span></span><input id="marking-idle" type="number" min="0" max="100" step="any" required></label>
+            <label class="field"><span class="field-name">Shot output <span class="unit">%</span></span><input id="marking-active" type="number" min="0" max="100" step="any" required></label>
+          </section>
+          <section class="set-card">
+            <header class="card-head"><h4>Manual test <span class="tip" data-tip="Hold to send the test output. Release to return to idle. Manual tests do not add a mission mark."></span></h4></header>
+            <label class="field"><span class="field-name">Test output <span class="unit">%</span></span><input id="marking-manual" type="number" min="0" max="100" step="any" required></label>
+            <div class="card-actions"><button id="marking-hold" type="button" disabled>Hold to test</button></div>
+          </section>
+          <section class="set-card span-all card-inline">
+            <h4>Car settings</h4><p id="marking-feedback" class="status-msg" role="status"></p>
+            <div class="btn-row"><button id="marking-save" type="button" class="primary" disabled>Save on car</button></div>
+          </section>
+        </div>
+      </section>
+
       <!-- ====================================================== Metal detector -->
       <section id="settings-detector" class="settings-panel" role="tabpanel" data-settings-panel="detector" hidden>
         <header class="panel-head">
@@ -640,7 +682,7 @@
             </div>
             <p id="metal-voltage-note" class="meta">Estimated ADC input voltage.</p>
             <div class="kv-row">
-              <span class="field-name">Search alert <span class="tip" data-tip="Warns the operator during the search. Change it on the main screen under Mission → Sweep and alert. Saved in this browser."></span></span>
+              <span class="field-name">Search alert <span class="tip" data-tip="Warns the operator during the search. Change it on the main screen under Mission → Sweep and alert. Saved on the car."></span></span>
               <output id="metal-alert-level">60% of mine level</output>
             </div>
           </section>
@@ -660,6 +702,31 @@
         <details class="set-more"><summary>Saved launch values</summary>
           <div class="set-more-body"><textarea id="metal-launch" class="code-box" rows="4" readonly spellcheck="false" aria-label="Detector calibration launch values"></textarea></div>
         </details>
+      </section>
+
+      <section id="settings-gnss" class="settings-panel" role="tabpanel" data-settings-panel="gnss" hidden>
+        <header class="panel-head">
+          <h3>GNSS <span class="tip" data-tip="The car records the receiver position and its estimated horizontal error. OpenStreetMap tiles need an internet connection."></span></h3>
+          <div class="panel-tools"><span id="gnss-fix-label" class="badge neutral">WAITING</span></div>
+        </header>
+        <div class="status-bar"><p id="gnss-feedback" class="status-msg" role="status"></p>
+          <button type="button" id="gnss-save" class="primary" disabled>Save changes</button>
+        </div>
+        <div class="panel-grid cols-2">
+          <section class="set-card">
+            <header class="card-head"><h4>Ground mark position <span class="tip" data-tip="The pump runs immediately. While the car is stationary it waits for a better fix, then keeps the best available position with its error."></span></h4></header>
+            <div class="fields-2">
+              <label class="field"><span class="field-name">Maximum wait <span class="unit">s</span></span><input type="number" id="gnss-wait" min="0" max="120" step="any" required></label>
+              <label class="field"><span class="field-name">Target accuracy <span class="unit">m</span></span><input type="number" id="gnss-target" min="0.01" max="100" step="any" required></label>
+            </div>
+          </section>
+          <section class="set-card">
+            <header class="card-head"><h4>Receiver</h4></header>
+            <dl class="readouts"><div class="span-all"><dt>Source</dt><dd id="gnss-device">—</dd></div><div><dt>Satellites</dt><dd id="gnss-sats">—</dd></div>
+              <div><dt>Latitude</dt><dd id="gnss-lat">—</dd></div><div><dt>Longitude</dt><dd id="gnss-lon">—</dd></div>
+              <div><dt>Horizontal error</dt><dd id="gnss-accuracy">—</dd></div></dl>
+          </section>
+        </div>
       </section>
 
       <!-- ======================================================== Sensor board -->
@@ -747,7 +814,10 @@
   <script src="assets/actuator-settings.js"></script>
   <script src="assets/app.js"></script>
   <script src="assets/adc.js"></script>
+  <script src="assets/marking.js"></script>
   <script src="assets/camera-config.js"></script>
+  <script src="assets/leaflet.js"></script>
+  <script src="assets/field-map.js"></script>
   <script src="assets/layout.js"></script>
 </body>
 </html>

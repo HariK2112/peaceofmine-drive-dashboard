@@ -76,9 +76,9 @@ assert($('probe-adc-contact').textContent.includes('Waiting for contact') && !$(
 assert(detectorDiagnosticsChart.data.datasets.at(-1).data[0].y===7, 'both destination');
 adcResponse={...adcResponse,now:100.02,sequence:4,samples:[{seq:4,time:100.02,mux:4,raw:400,volts:.4,scaled:9,clipped:false}]};
 await window.nextPoll();drawPressureHistory();drawDetectorDiagnostics(2100);
-const filteredExpected=7+(1-Math.exp(-.02/.1))*2;
+const filteredExpected=7+(1-Math.exp(-.02/.35))*2;
 assert(Math.abs(detectorDiagnosticsChart.data.datasets.at(-1).data.at(-1).y-filteredExpected)<1e-10,'detector overlay smooths new sample using timestamp');
-assert(probePressureChart.data.datasets.find(d=>d.label.includes('ADS A0')).data.at(-1).y===9,'both route leaves probe contact trace raw');
+assert(probePressureChart.data.datasets.find(d=>d.label.includes('ADS A0')).data.at(-1).y===detectorDiagnosticsChart.data.datasets.at(-1).data.at(-1).y,'probe plot also uses the display filter');
 assert($('adc-readings').textContent.includes('9.0000'),'ADC readings retain raw scaled value');
 adcResponse={...adcResponse,now:101,sequence:5,samples:[{seq:5,time:101,mux:4,raw:500,volts:.5,scaled:4,clipped:false}]};
 await window.nextPoll();drawDetectorDiagnostics(2200);

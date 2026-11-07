@@ -182,13 +182,13 @@
     });
   }
   window.operatorADCOverlay = (target, route, baseCount) => {
-    const extra = datasets(route, route === 'detector' ? 'detector_filtered' : 'scaled', 30);
+    const extra = datasets(route, 'detector_filtered', 30);
     const trigger = latest?.probe_trigger;
     if (route === 'probe' && trigger?.enabled) extra.push({label:`Contact trigger (${names[trigger.mux]})`,
       yAxisID:'ads1115', data:[{x:-30,y:trigger.level},{x:0,y:trigger.level}],
       borderColor:'#ff9b89',borderDash:[5,4],borderWidth:1,pointRadius:0});
     target.data.datasets = [...target.data.datasets.slice(0,baseCount), ...extra];
-    target.options.scales.ads1115 = {type:'linear', position:'right', display:extra.length > 0,
+    target.options.scales.ads1115 = {type:'linear', position:'right', display:extra.length > 0, beginAtZero:true, suggestedMax:1,
       title:{display:true,text:'ADS1115 scaled'}, grid:{drawOnChartArea:false}, ticks:{color:'#efcf70'}};
   };
   function render() {
@@ -221,7 +221,7 @@
     if (chart && scrollTimeChart(chart, performance.now())) return;
     const seconds = Number(el('window').value), quantity = el('quantity').value;
     if (!chart) chart = new Chart(el('history'), {type:'line', data:{datasets:[]}, options:{animation:false, responsive:true, maintainAspectRatio:false, parsing:false,
-      plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:'#b7c4d8'}}}, scales:{x:{type:'linear',min:-seconds,max:0},ads1115:{type:'linear',position:'left'}}}});
+      plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:'#b7c4d8'}}}, scales:{x:{type:'linear',min:-seconds,max:0},ads1115:{type:'linear',position:'left',beginAtZero:true,suggestedMax:1}}}});
     chart.data.datasets = datasets(null,quantity,seconds); chart.options.scales.x.min = -seconds; chart.$scrollPixels = 0; chart.$renderedAt = performance.now(); chart.update('none');
   };
   async function poll() {
@@ -233,10 +233,9 @@
       if (value.sequence < cursor) { cursor=0; history=[]; detectorFilters.clear(); revision=null; }
       if (revision !== value.revision) { history=[]; detectorFilters.clear(); if (revision === null) fill(value); revision=value.revision; }
       latest=value; clockOffset=(value.now-Date.now()/1000);
-      const tau = state.detector.sensor?.filter_tau_s ?? 0.1;
+      const tau = Math.max(0.35, state.detector.sensor?.filter_tau_s ?? 0.1);
       if (!Number.isFinite(tau) || tau <= 0) throw Error('Invalid detector filter time constant');
       for (const sample of value.samples) {
-        if (!['detector','both'].includes(value.routes[sample.mux])) continue;
         if (!Number.isFinite(sample.time) || !Number.isFinite(sample.scaled)) throw Error('Invalid detector ADC sample');
         const previous = detectorFilters.get(sample.mux);
         const dt = previous ? sample.time - previous.time : 0;

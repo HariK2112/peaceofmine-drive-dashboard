@@ -3,7 +3,7 @@ import time
 
 
 class RcSafety:
-    TIMEOUTS = {'rc': 0.4}
+    TIMEOUTS = {'rc': 0.4, 'state': 3.0}  # MAVROS state follows the ~1 Hz FCU heartbeat.
 
     def __init__(self, simulation=False, clock=time.monotonic):
         self.simulation = simulation
@@ -21,6 +21,7 @@ class RcSafety:
                 self.samples.clear()
             return
         self.samples[topic] = (self.clock(), message, stamp)
+        return True
 
     def update_state(self, message):
         # A disconnect must revoke permission even if it repeats the last stamp.
@@ -30,7 +31,16 @@ class RcSafety:
         self._update('state', message)
 
     def update_rc(self, message):
-        self._update('rc', message)
+        return self._update('rc', message)
+
+    def px4_state_status(self):
+        sample = self.samples.get('state')
+        if sample is None:
+            return 'unavailable'
+        return 'fresh' if self.clock() - sample[0] <= self.TIMEOUTS['state'] else 'stale'
+
+    def px4_armed(self):
+        return bool(self.samples['state'][1].armed) if self.px4_state_status() == 'fresh' else None
 
     def servo_snapshot(self):
         if self.simulation:
@@ -50,9 +60,10 @@ class RcSafety:
         if sample is None or self.clock() - sample[0] > self.TIMEOUTS['rc'] or sample[1].rssi == 0:
             return dict(fresh=False)
         channels = list(sample[1].channels)
+        if any(not 1 <= channel <= len(channels) or not 800 <= channels[channel - 1] <= 2200
+               for channel in (steering_channel, throttle_channel)):
+            return dict(fresh=False)
         def axis(channel):
-            if not 1 <= channel <= len(channels):
-                return 0.0
             value = max(-1.0, min(1.0, (channels[channel - 1] - 1500) / 500))
             return 0.0 if abs(value) < .05 else value
         return dict(fresh=True, channels=channels, steering=axis(steering_channel),

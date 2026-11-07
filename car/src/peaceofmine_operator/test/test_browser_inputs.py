@@ -46,6 +46,7 @@ else {
 assert($('search-task').open && $('probe-task').open,'sweep and probe controls (with Hold to home) start open on the main screen');
 document.querySelectorAll('[data-dock-pane]').forEach(pane => { pane.hidden = false; }); // layout.js is not loaded here; show every tab so its charts draw
 $('probe-diagnostics').open=$('arm-diagnostics').open=$('probe-servo-diagnostics').open=true;
+state.marking = {settings:{duration_s: 1.5, idle_percent: 0, active_percent: 70, manual_percent: 30}, mode:'idle', output_percent: 0};
 state.connected = true;
 state.robot.stationary = true;
 state.probe.ready = true;
@@ -203,15 +204,44 @@ assert($('forward-source-detail').textContent === '/front/camera_info', 'source 
 preferences.cameraRotation.forward = 0;
 $('forward-rotate').click();
 assert(preferences.cameraRotation.forward === 90 && $('forward-network-camera').style.transform.includes('90deg'), 'rotate applies to main view');
-assert(JSON.parse(localStorage.getItem('peaceofmine.operator.preferences')).cameraRotation.forward === 90, 'rotation persists');
+assert(localStorage.getItem('peaceofmine.operator.preferences') === null, 'camera previews do not save browser state');
 for (let i = 0; i < 3; i++) $('forward-rotate').click();
 assert(preferences.cameraRotation.forward === 0, 'rotation wraps at 360');
 preferences.cameras.auxiliary = 'off'; renderCameraSettings();
 assert($('auxiliary-preview-state').textContent === 'Off' && $('auxiliary-dimensions').textContent === '—', 'off camera has no invented stats');
 $('settings-dialog').close();
 await new Promise(resolve => setTimeout(resolve, 0));
+state.settings = {...state.settings, driving: {input:'controller', forward_percent:100, reverse_percent:100}};
+state.drive.you_control_owner = true;
+function acknowledgeDrivingChange() {
+  const command = sent.at(-1);
+  assert(command.type === 'settings' && command.section === 'driving', 'drive settings go to the car');
+  state.settings.driving = {...command.value};
+  state.drive.input = command.value.input;
+  updateDrivingSettings(state.settings.driving);
+  updateHud();
+}
+$('drive-control-source').value = 'rc';
+$('drive-control-source').dispatchEvent(new Event('change'));
+acknowledgeDrivingChange();
+state.drive.rc = {fresh:true, throttle:.3, steering:.5};
+state.drive.armed = true;
+state.safety = {allowed:true, servo_allowed:true, mode:'ros'};
+const beforeRcInput = sent.length;
+inputLoop();
+assert(sent.slice(beforeRcInput).some(m => m.type === 'rc_drive_enable' && m.enabled), 'RC mode renews owner presence');
+assert(!sent.slice(beforeRcInput).some(m => m.type === 'drive'), 'no browser drive competes with RC through ROS');
+stopInput();
+assert(sent.at(-1).type === 'rc_drive_enable' && !sent.at(-1).enabled,'focus loss releases ROS RC enable');
+for (const [armed, status, label] of [[true,'fresh','PX4 ARMED'], [false,'fresh','PX4 DISARMED'], [null,'stale','PX4 STALE'], [null,'unavailable','PX4 UNKNOWN']]) {
+  state.drive.px4_armed = armed;
+  state.drive.px4_state_status = status;
+  updateHud();
+  assert($('px4-arming').textContent === label, 'actual PX4 arming display '+label);
+}
 $('drive-control-source').value = 'keyboard';
 $('drive-control-source').dispatchEvent(new Event('change'));
+acknowledgeDrivingChange();
 assert(preferences.input === 'keyboard' && !$('control-source') && $('drive-control-source').value==='keyboard', 'main drive selector is the sole saved input selector');
 assert(!$('sweep-toggle') && document.querySelectorAll('#mode-sweep-btn').length===1,'search sweep has one canonical toggle');
 assert(!$('adc-trigger-level') && !$('adc-trigger-direction'),'contact voltage and direction have one editor on main Probe');
@@ -257,7 +287,14 @@ ramped = readKeyboard(); rampKeyboard(ramped, 516);
 assert(ramped.linear === 0 && ramped.angular === 0, 'releasing WASD stops without a separate deadman');
 $('keyboard-max-throttle').value = '50';
 $('keyboard-max-throttle').dispatchEvent(new Event('change'));
-assert(preferences.keyboardMaxThrottle === 50 && JSON.parse(localStorage.getItem('peaceofmine.operator.preferences')).keyboardMaxThrottle === 50, 'WASD throttle cap persists');
+acknowledgeDrivingChange();
+$('keyboard-reverse-throttle').value = '25';
+$('keyboard-reverse-throttle').dispatchEvent(new Event('change'));
+acknowledgeDrivingChange();
+assert(preferences.keyboardMaxThrottle === 50 && preferences.keyboardReverseThrottle === 25, 'directional limits acknowledged by car');
+keys.add('KeyS');
+assert(readKeyboard().linear === -.2, 'reverse uses the separate reverse throttle cap');
+keys.clear();
 forward.dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}));
 keyEvent('keydown','KeyW',87);
 assert(readKeyboard().linear === .4, 'WASD cap applies before smoothing');
@@ -747,7 +784,6 @@ state.robot.pose_fresh = false; updateHud();
 assert($('mark-target-btn').disabled && $('position').textContent.includes('Position unavailable'), 'missing localization is explicit and cannot log pose');
 const beforeUnknownPoseLog = targetLog.length;
 markCurrentPose();
-logTarget({x: 0, y: 0, heading_deg: 0, metal_signal_pct: 0, contact_depth_mm: '—', status: 'POSE LOGGED', statusType: 'marked'});
 assert(targetLog.length === beforeUnknownPoseLog, 'stale or missing pose rejects direct and automatic log entries');
 state.robot.pose_fresh = true; updateHud();
 assert(!$('mark-target-btn').disabled && $('position').textContent.includes('X 1.0'), 'fresh localization restores measured pose and logging');
@@ -787,12 +823,32 @@ $('probe-cycle-target').value = '66';
 const beforeInvalidCycle = sent.length; startProbeCycle();
 assert(sent.length === beforeInvalidCycle, 'invalid cycle depth is rejected rather than clamped');
 targetLog = []; renderTargetLog();
-state.pump_active = false; state.drive.pump_active = false; pumpWasActive = false;
+state.pump_active = false; state.drive.pump_active = false;
 triggerPumpMark();
 assert(targetLog.length === 0 && pendingPumpMark, 'pump request does not claim a physical mark');
-state.pump_active = true; updateHud();
-assert(targetLog.length === 1 && targetLog[0].status === 'PUMP ACTIVATED', 'acknowledged pump activation is logged accurately');
-logTarget({x: 8, y: 9, heading_deg: 0, metal_signal_pct: 10, contact_depth_mm: '<img src=x onerror=alert(1)>', status: '<b>untrusted</b>', statusType: 'contact'});
+assert(sent.at(-1).type === 'pump_mark' && !Object.hasOwn(sent.at(-1), 'duration_s'), 'mission shot uses car duration');
+state.pump_active = true; state.marking.last_shot_request = pendingPumpMark.id; updateHud();
+assert(!pendingPumpMark && !targetLog.length, 'shot acknowledgement leaves logging to the car');
+state.pump_active = false;
+$('settings').click();
+document.querySelector('[data-settings-tab="marking"]').click();
+state.drive.calibrating = true; state.settings = {...state.settings, marking:state.marking.settings};
+updateMarkingSettings();
+const pumpHold = $('marking-hold');
+$('marking-manual').value = '38';
+pumpHold.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter'}));
+assert(sent.at(-1).action === 'start' && sent.at(-1).percent === 38, 'manual hold sends selected pump percentage');
+pumpHold.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter'}));
+assert(sent.at(-1).action === 'stop', 'releasing manual test stops pump');
+$('marking-save').click();
+assert(sent.at(-1).section === 'marking' && sent.at(-1).value.manual_percent === 38, 'marking settings sent to car');
+markingSettingsResult({ok:true,message:'Saved.'});
+state.drive.you_control_owner = false; updateMarkingSettings();
+assert(pumpHold.disabled && $('marking-save').disabled, 'spectator cannot test or modify marking output');
+state.drive.you_control_owner = true;
+$('settings-dialog').querySelector('button[value="close"]').click();
+state.drive.calibrating = false;
+window.operatorFieldLog([{id:'test',timestamp:1,x: 8, y: 9, heading_deg: 0, metal_signal_pct: 10, contact_depth_mm: '<img src=x onerror=alert(1)>', status: '<b>untrusted</b>', statusType: 'contact'}]);
 assert(!$('target-log-body').querySelector('img, b') && $('target-log-body').textContent.includes('<b>untrusted</b>'), 'log values are text, never HTML');
 state.pump_active = false; updateHud();
 const savedContactSound = playContactAlertSound; playContactAlertSound = () => {};
@@ -891,6 +947,9 @@ cameraRefreshFlags.length=0;
 state.drive.you_control_owner = state.drive.armed = state.drive.deadman = true;
 keys.add('KeyW'); cameraFocused = true;
 const previousNotice = $('notice').textContent;
+lastTelemetryAt = performance.now() - 1100;
+receive({type:'latency_pong',probe_id:-1}); gatewayWatchdog();
+assert(!state.connected && $('px4-arming').textContent === 'PX4 UNKNOWN', 'a live socket cannot keep the vehicle arming badge fresh');
 receive({type:'control_status',available:false});
 assert(forcedCloses === 0 && !state.connected && !state.drive.you_control_owner && !state.drive.armed && keys.size === 0 && cameraFocused && keyboardCaptured(),'ROS outage clears stale input without dropping camera capture or closing gateway');
 assert($('connection-title').textContent === 'Control node unavailable' && $('notice').textContent === previousNotice,'ROS outage has accurate status without persistent error spam');
@@ -925,7 +984,7 @@ document.body.dataset.viewport = innerWidth;
 document.body.textContent = 'BROWSER TESTS PASSED';
 '''
         import json
-        source = (DASHBOARD / 'actuator-settings.js').read_text() + '\n' + (DASHBOARD / 'app.js').read_text()
+        source = (DASHBOARD / 'actuator-settings.js').read_text() + '\n' + (DASHBOARD / 'app.js').read_text() + '\n' + (DASHBOARD / 'marking.js').read_text()
         gamepad_checks = (DASHBOARD.parent / 'test/test_gamepad.cjs').read_text().split("if (typeof require")[0]
         script = setup + (DASHBOARD / 'chart-4.4.8.umd.js').read_text() + (DASHBOARD / 'keydrown-1.3.0.js').read_text() + source + gamepad_checks + '\nconst dashboardSource = ' + json.dumps(source) + ';\n'
         html += '<script>(async () => {try {' + script + checks + "} catch(e) {document.body.textContent = 'TEST FAILED: ' + e.stack;}})();</script>"

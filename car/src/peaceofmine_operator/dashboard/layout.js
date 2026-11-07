@@ -93,7 +93,7 @@
    */
   const stageEl = $('camera-stage');
   let stage = null;
-  let swapped = false;
+  let manualFocus = null;
   function missionStage() {
     const phase = state.inspection?.phase || 'IDLE';
     if (state.probe?.cycle_active || ['CONFIRMED', 'PROBING', 'COMPLETE'].includes(phase)) return 'probe';
@@ -101,17 +101,20 @@
     return 'drive';
   }
   function applyFocus() {
-    const probeLarge = (stage === 'probe') !== swapped;
+    const probeLarge = manualFocus === 'probe' || (manualFocus === null && stage === 'probe' && probeCameraShown());
+    document.body.dataset.stage = stage;
+    if (stageEl.dataset.focus === (probeLarge ? 'probe' : 'forward')) return;
     stageEl.dataset.focus = probeLarge ? 'probe' : 'forward';
     $('camera-swap-label').textContent = probeLarge ? 'Enlarge front camera' : 'Enlarge probe camera';
-    document.body.dataset.stage = stage;
     window.dispatchEvent(new Event('resize'));
   }
-  $('camera-swap').addEventListener('click', () => { swapped = !swapped; applyFocus(); });
+  $('camera-swap').addEventListener('click', () => { manualFocus = stageEl.dataset.focus === 'probe' ? 'forward' : 'probe'; applyFocus(); });
 
   /* ------------------------------------------------------- Probe camera --- */
   function probeCameraShown() {
-    return !$('aux-video').classList.contains('hidden') || !$('aux-network-camera').classList.contains('hidden');
+    const video = $('aux-video'), image = $('aux-network-camera');
+    return (!video.classList.contains('hidden') && video.readyState >= 2) ||
+      (!image.classList.contains('hidden') && image.naturalWidth > 0 && !cameraErrors.auxiliary);
   }
 
   /* ------------------------------------------------------ Battery chip --- */
@@ -132,10 +135,14 @@
     if (next !== stage) {
       const entering = stage !== null;
       stage = next;
-      swapped = false;
-      applyFocus();
+      manualFocus = null;
       if (entering) selectTab(stage === 'probe' ? 'probe' : stage === 'confirm' ? 'detector' : 'overview');
     }
+    const off = preferences.cameras.auxiliary === 'off';
+    stageEl.classList.toggle('single-camera', off);
+    $('camera-swap').hidden = off;
+    if (off) manualFocus = null;
+    applyFocus();
     $('probe-camera-empty').hidden = probeCameraShown();
     renderChip();
     // one-line status texts are cut with an ellipsis; keep the full text on hover

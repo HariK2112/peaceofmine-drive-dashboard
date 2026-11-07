@@ -1,11 +1,12 @@
 #! /usr/bin/env python3
 
 import math
+import time
 
 from svea_core import rosonic as rx
 from svea_core.interfaces import ActuationInterface
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Bool
+from std_msgs.msg import Float32
 
 
 class twist_consumer(rx.Node):
@@ -24,7 +25,7 @@ class twist_consumer(rx.Node):
 
     cmd_timeout  = rx.Parameter(0.6)     # [s]
     use_difflock = rx.Parameter(True)
-    pump_top     = rx.Parameter('actuation/pump')
+    pump_top     = rx.Parameter('actuation/pump_percent')
 
     actuation = ActuationInterface()
 
@@ -55,14 +56,15 @@ class twist_consumer(rx.Node):
         return max(-self.max_steering, min(self.max_steering, delta))
 
     def on_shutdown(self):
-        self.actuation.send_xtr(xtr1=0.0)
+        self.actuation.send_xtr(xtr2=0.0)
         self.actuation.send_control(0.0, 0.0)
         self.actuation.loop()  # Publish neutral before ROS publishers are destroyed.
 
-    @rx.Subscriber(Bool, pump_top)
-    def pump_cb(self, msg: Bool):
-        self._pump_until = self.get_clock().now().nanoseconds * 1e-9 + 0.25 if msg.data else None
-        self.actuation.send_xtr(xtr1=100.0 if msg.data else 0.0)
+    @rx.Subscriber(Float32, pump_top)
+    def pump_cb(self, msg: Float32):
+        percent = msg.data if math.isfinite(msg.data) and 0 <= msg.data <= 100 else 0.
+        self._pump_until = time.monotonic() + 0.25
+        self.actuation.send_xtr(xtr2=percent)
 
     @rx.Subscriber(twist_type, twist_top)
     def twist_cb(self, msg):
@@ -78,9 +80,9 @@ class twist_consumer(rx.Node):
 
     @rx.Timer(0.1)
     def loop(self):
-        if self._pump_until is not None and self.get_clock().now().nanoseconds * 1e-9 >= self._pump_until:
+        if self._pump_until is not None and time.monotonic() >= self._pump_until:
             self._pump_until = None
-            self.actuation.send_xtr(xtr1=0.0)
+            self.actuation.send_xtr(xtr2=0.0)
         age = (self.get_clock().now() - self._last_msg).nanoseconds * 1e-9
         if age > self.cmd_timeout:
             self._velocity = 0.0

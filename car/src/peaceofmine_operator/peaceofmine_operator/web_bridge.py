@@ -7,6 +7,7 @@ import time
 import uuid
 
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 from .adc_telemetry import ADCTelemetry
 
@@ -34,9 +35,15 @@ class OperatorWebBridge(Node):
         self._requests = {}
         self._replies = deque(maxlen=256)
         self._shutting_down = False
+        self._field_state = None
+        self._field_at = 0.
+        self._field_entries = {}
+        retained = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(String, 'field/entries', self._json_callback(self._field_log), retained)
         self.adc = ADCTelemetry()
         self.publisher = self.create_publisher(String, 'operator/command', 50)
         for topic, callback in (
+                ('field/state', self._field_live),
                 ('detector/telemetry', self._detector_state),
                 ('arm/web_state', lambda value: self._actuator_state('arm', value)),
                 ('probe/web_state', lambda value: self._actuator_state('probe', value)),
@@ -59,6 +66,23 @@ class OperatorWebBridge(Node):
             except (ValueError, TypeError, KeyError):
                 self.get_logger().warning('Invalid operator telemetry')
         return receive
+
+    def _field_live(self, value):
+        self._field_state, self._field_at = value, time.monotonic()
+
+    def _field_log(self, value):
+        self._field_entries = value
+
+    def field_snapshot(self, revision):
+        with self._lock:
+            if self._field_state is None:
+                return None
+            field = dict(self._field_state)
+            if time.monotonic() - self._field_at > 2:
+                field.update(fix=None, receiver='Field recorder offline')
+            if self._field_entries.get('revision') != revision:
+                field.update(self._field_entries)
+            return field
 
     def _detector_state(self, value):
         self._detector, self._detector_at = value, time.monotonic()
@@ -87,10 +111,10 @@ class OperatorWebBridge(Node):
     def _device_result(self, value):
         request = self._requests.pop(value.get('request_id'), None)
         if request:
-            ws, kind, _ = request
+            ws, kind, _, section = request
             if kind == 'actuator' and value.get('ok'):
                 return
-            self._replies.append((ws, {**value, 'type': 'error' if kind == 'actuator' else kind + '_result'}))
+            self._replies.append((ws, {**value, 'section': section, 'type': 'error' if kind == 'actuator' else kind + '_result'}))
 
     def _control_result(self, value):
         if value.get('request_id') in self._requests:
@@ -109,10 +133,10 @@ class OperatorWebBridge(Node):
             if not self._shutting_down:
                 for client in self._connected_sockets.values():
                     self._send(client, {}, 'heartbeat')
-            for key, (ws, kind, started) in list(self._requests.items()):
+            for key, (ws, kind, started, section) in list(self._requests.items()):
                 if time.monotonic() - started > 3:
                     self._requests.pop(key)
-                    self._replies.append((ws, dict(type='error' if kind == 'actuator' else kind+'_result', ok=False,
+                    self._replies.append((ws, dict(type='error' if kind == 'actuator' else kind+'_result', section=section, ok=False,
                         message='ROS node did not acknowledge the request. Check device status.')))
 
     def connect_client(self, ws):
@@ -151,10 +175,10 @@ class OperatorWebBridge(Node):
                 kind = 'actuator'
             if kind in ('adc', 'settings', 'actuator'):
                 if len(self._requests) >= 8:
-                    return dict(type='error' if kind == 'actuator' else kind+'_result', ok=False, message='Configuration requests are pending.')
+                    return dict(type='error' if kind == 'actuator' else kind+'_result', section=payload.get('section'), ok=False, message='Configuration requests are pending.')
                 request_id = uuid.uuid4().hex
                 payload['request_id'] = request_id
-                self._requests[request_id] = (ws, kind, time.monotonic())
+                self._requests[request_id] = (ws, kind, time.monotonic(), payload.get('section'))
             self._send(self._connected_sockets[ws], payload)
 
     def replies(self):

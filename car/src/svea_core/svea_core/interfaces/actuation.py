@@ -97,7 +97,8 @@ class ActuationInterface(rx.Field):
             msg.aux3 = 1000.
 
         msg.aux4 = 1000.0 - self.xtr1_percent * 20.0
-        msg.aux5 = 1000 + float(self.xtr2_percent * 10)  # aux5
+        # PMB3 misc1 (Actuator_Set2 / PCA9685 CH6), MANUAL_CONTROL range.
+        msg.aux5 = -1000.0 + 20.0 * self.xtr2_percent
 
         self.control_pub.publish(msg)
 
@@ -143,7 +144,7 @@ class ActuationInterface(rx.Field):
         if xtr1 is not None:
             self.xtr1_percent = xtr1
         if xtr2 is not None:
-            self.xtr2_percent = xtr2
+            self.xtr2_percent = xtr2 if 0 <= xtr2 <= 100 else 0.0
 
     def toggle_highgear(self):
         """Toggle the high gear state."""

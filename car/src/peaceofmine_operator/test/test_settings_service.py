@@ -4,12 +4,36 @@ from pathlib import Path
 import unittest
 import rclpy
 from rclpy.parameter import Parameter
+from std_msgs.msg import String
 from peaceofmine_interfaces.srv import SaveSettings
 from peaceofmine_operator import configuration
 from test_arm_node import module
 
 
 class SettingsServiceTest(unittest.TestCase):
+    def test_dashboard_drive_settings_survive_node_restart(self):
+        rclpy.init()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / 'operator_config.json')
+            options = [Parameter('config_file', value=path)]
+            node_type = module('operator_settings_node').OperatorSettings
+            node = node_type(parameter_overrides=options)
+            try:
+                valid = dict(input='rc', forward_percent=45, reverse_percent=0)
+                request = dict(request_id='drive', section='driving', value=valid)
+                node.command(String(data=json.dumps(request)))
+                self.assertEqual(configuration.load(path)['driving'], valid)
+                for invalid in [dict(valid, input='unknown'), dict(valid, reverse_percent=-1),
+                                dict(valid, forward_percent=True), dict(valid, forward_percent=101)]:
+                    node.command(String(data=json.dumps(dict(request, value=invalid))))
+                    self.assertEqual(configuration.load(path)['driving'], valid)
+                node.destroy_node()
+                node = node_type(parameter_overrides=options)
+                self.assertEqual(node.shared['driving'], valid)
+            finally:
+                node.destroy_node()
+                rclpy.shutdown()
+
     def test_detector_accepts_fractional_calibration_span(self):
         rclpy.init()
         with tempfile.TemporaryDirectory() as tmp:

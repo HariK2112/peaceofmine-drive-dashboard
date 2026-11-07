@@ -141,13 +141,15 @@ const $ = id => document.getElementById(id);
 const forward = $('forward-view');
 const cameraPanel = $('camera-panel');
 const map = $('map-view');
-let preferences;
-try { preferences = JSON.parse(localStorage.getItem('peaceofmine.operator.preferences')); } catch {}
-preferences = preferences && typeof preferences === 'object' ? preferences : {};
-if (!['controller', 'keyboard', 'wheel'].includes(preferences.input)) preferences.input = 'controller';
+const preferences = {};
+if (!['controller', 'keyboard', 'wheel', 'rc'].includes(preferences.input)) preferences.input = 'controller';
 if (!Number.isFinite(preferences.sensitivity)) preferences.sensitivity = 100;
 preferences.sensitivity = Math.max(50, Math.min(150, preferences.sensitivity));
 if (!Number.isInteger(preferences.keyboardMaxThrottle) || preferences.keyboardMaxThrottle < 0 || preferences.keyboardMaxThrottle > 100) preferences.keyboardMaxThrottle = 100;
+preferences.keyboardReverseThrottle = 100;
+let drivingPending = null;
+let drivingSaveTimer;
+let lastRcEnable = -Infinity;
 preferences.wheel = Object.assign({steering: 0, throttle: 1, brake: 2, deadman: 0,
   invertSteering: false, invertThrottle: true, invertBrake: true, deadzone: 0.05}, preferences.wheel);
 preferences.cameras = Object.assign({forward: 'virtual', auxiliary: 'off'}, preferences.cameras);
@@ -218,7 +220,6 @@ let lastDriveSent = 0;
 let lastPadUi = 0;
 let noticeExpiry = 0;
 let pendingPumpMark = null;
-let pumpWasActive = false;
 let latencyProbeId = 0;
 let latencyProbeStarted = 0;
 let linkLatencyMs = null;
@@ -255,15 +256,20 @@ function send(message) {
 }
 
 function sendDrive(linear, angular, deadman) {
-  if (socket?.readyState !== WebSocket.OPEN) return;
+  if (socket?.readyState !== WebSocket.OPEN || preferences.input === 'rc' || state.drive.input === 'rc') return;
   socket.send(
-    `{"type":"drive","linear_x":${linear},"angular_z":${angular},"deadman":${deadman}}`,
+    `{"type":"drive","input":"${preferences.input}","linear_x":${linear},"angular_z":${angular},"deadman":${deadman}}`,
   );
 }
 
 function setConnection(connected, label, detail = '') {
   state.connected = connected;
-  if (!connected) motionFrames.length = 0;
+  if (!connected) {
+    motionFrames.length = 0;
+    drivingPending = null;
+    clearTimeout(drivingSaveTimer);
+    lastRcEnable = -Infinity;
+  }
   $('connection').textContent = label;
   $('connection-dot').style.background = connected ? '#37b98e' : '#d36458';
   $('connection-overlay').classList.toggle('hidden', connected);
@@ -313,6 +319,15 @@ function recordLatency(probeId) {
   drawLatencyGraph();
 }
 
+function controlUnavailable() {
+  state.drive.armed = state.drive.deadman = state.drive.you_control_owner = state.drive.control_owner_present = false;
+  state.drive.publishing = false;
+  state.drive.cmd_linear_x = state.drive.cmd_angular_z = 0;
+  pendingPumpMark = null;
+  clearHeldInput();
+  setConnection(false, 'Control node unavailable', 'Raspberry Pi gateway linked. ROS control telemetry is missing; controls will recover automatically when telemetry returns.');
+}
+
 function connect() {
   clearTimeout(reconnectTimer);
   stopInput();
@@ -343,7 +358,6 @@ function connect() {
     state.drive.deadman = false;
     state.drive.you_control_owner = false;
     pendingPumpMark = null;
-    pumpWasActive = false;
     stopLocalInput();
     setConnection(false, 'Gateway connection lost', 'The Raspberry Pi gateway is unreachable. Retrying automatically…');
     reconnectTimer = setTimeout(connect, 1200);
@@ -358,20 +372,36 @@ function connect() {
     if (!message || typeof message !== 'object' || typeof message.type !== 'string') return;
     lastServerMessageAt = performance.now();
     if (message.type === 'control_status' && message.available === false) {
-      state.drive.armed = state.drive.deadman = state.drive.you_control_owner = state.drive.control_owner_present = false;
-      state.drive.publishing = false;
-      state.drive.cmd_linear_x = state.drive.cmd_angular_z = 0;
-      pendingPumpMark = null;
-      pumpWasActive = false;
-      clearHeldInput();
-      setConnection(false, 'Control node unavailable', 'Raspberry Pi gateway linked. ROS control telemetry is missing; controls will recover automatically when telemetry returns.');
+      controlUnavailable();
       return;
     }
     if (message.type === 'latency_pong') {
       recordLatency(message.probe_id);
       return;
     }
-    if (message.type === 'settings_result') { window.operatorSettingsResult?.(message); return; }
+    if (message.type === 'settings_result' && message.section === 'gnss') {
+      window.operatorGnssResult?.(message);
+      return;
+    }
+    if (message.type === 'settings_result' && message.section === 'marking') {
+      window.markingSettingsResult?.(message);
+      return;
+    }
+    if (message.type === 'settings_result' && message.section === 'driving') {
+      if (!message.ok) {
+        failDriveSave(message.message || 'Drive settings rejected.');
+      }
+      return;
+    }
+    if (message.type === 'settings_result') {
+      if (message.section === 'display' && !message.ok) {
+        displaySignature = '';
+        applyDisplaySettings(state.settings?.display);
+        showNotice(message.message, true);
+      }
+      window.operatorSettingsResult?.(message);
+      return;
+    }
     if (message.type === 'adc_result') { window.operatorADCResult?.(message); return; }
     if (message.type === 'error') {
       pendingPumpMark = null;
@@ -398,6 +428,8 @@ function connect() {
     }
     Object.assign(state, message);
     state.connected = true;
+    updateDrivingSettings(message.settings?.driving);
+    applyDisplaySettings(message.settings?.display);
     window.operatorSettingsState?.(message.settings);
     recordDetectorAngle(lastTelemetryAt);
     recordMotionFrame(lastTelemetryAt);
@@ -414,6 +446,8 @@ setInterval(() => {
       performance.now() - lastServerMessageAt > GATEWAY_TIMEOUT_MS) {
     setConnection(false, 'Gateway connection lost', 'No messages received from the Raspberry Pi gateway. Retrying automatically…');
     socket.close();
+  } else if (state.connected && performance.now() - lastTelemetryAt > 1000) {
+    controlUnavailable();
   }
 }, 500);
 
@@ -473,7 +507,7 @@ function updatePower() {
 /* -------------------------------------------------- Target Log & Probe Cycle --- */
 
 let targetLog = [];
-let nextTargetId = 1;
+
 let lastSeenProbeResultTime = 0;
 let contactAlertPlayed = false;
 let probeAlertTimeout = null;
@@ -508,7 +542,6 @@ const SEARCH_ALERT_LINGER_MS = 8000;
 let searchAlert = {phase: 'idle'};
 let searchAlertDismissedAt = -Infinity;
 let searchAlertLevelKey = '';
-const searchAlertSpots = []; // where the car stood when an alert fired (this page only)
 
 function ensureAudio() {
   try {
@@ -569,23 +602,25 @@ function updateSearchAlert(now) {
   const live = state.connected && detector.fresh !== false && detector.sensor?.fresh !== false;
   const suppressed = Boolean(state.inspection?.active || state.probe?.cycle_active);
   const signal = detector.signal_ratio * 100;
-  const step = stepSearchAlert(searchAlert, {enabled: settings.enabled, level: settings.level, signal, live, suppressed, now});
-  searchAlert = step.alert;
-  if (step.fired) {
-    searchAlertDismissedAt = -Infinity;
-    if (settings.sound) playSearchAlertSound();
-    const robot = state.robot;
-    if (robot.pose_fresh === true && Number.isFinite(robot.x) && Number.isFinite(robot.y)) {
-      searchAlertSpots.push({x: robot.x, y: robot.y});
-      if (searchAlertSpots.length > 50) searchAlertSpots.shift();
-    }
+  const shared = state.search_alert;
+  if (shared) {
+    const fired = shared.fired_at && shared.fired_at !== searchAlert.eventId;
+    const first = searchAlert.eventId === undefined;
+    searchAlert = {phase:shared.phase, peak:shared.peak, eventId:shared.fired_at || 0,
+      firedAt:shared.fired_at ? lastTelemetryAt - (shared.server_time-shared.fired_at)*1000 : -Infinity,
+      clearedAt:shared.cleared_at ? lastTelemetryAt - (shared.server_time-shared.cleared_at)*1000 : -Infinity};
+    if (fired && !first && settings.sound) playSearchAlertSound();
+  } else {
+    const step = stepSearchAlert(searchAlert, {enabled:settings.enabled, level:settings.level, signal, live, suppressed, now});
+    searchAlert = step.alert;
+    if (step.fired && settings.sound) playSearchAlertSound();
   }
   renderSearchAlertLevel();
 
   const active = searchAlert.phase === 'active' || searchAlert.phase === 'cooling';
   const recent = !active && Number.isFinite(searchAlert.firedAt) && Number.isFinite(searchAlert.clearedAt)
     && searchAlert.clearedAt >= searchAlert.firedAt && now - searchAlert.clearedAt < SEARCH_ALERT_LINGER_MS;
-  const shown = (active || recent) && searchAlertDismissedAt < searchAlert.firedAt;
+  const shown = state.connected && (active || recent) && searchAlertDismissedAt < searchAlert.firedAt;
   const banner = $('search-alert');
   if (banner.hidden === shown) banner.hidden = !shown;
   document.body.dataset.searchAlert = active ? 'active' : recent ? 'recent' : '';
@@ -600,36 +635,22 @@ function updateSearchAlert(now) {
   if ($('search-alert-detail').textContent !== detail) $('search-alert-detail').textContent = detail;
 }
 
-function logTarget({x, y, heading_deg, metal_signal_pct, contact_depth_mm, status, statusType}) {
-  if (!state.connected || state.robot.pose_fresh !== true || ![x, y, heading_deg, metal_signal_pct].every(Number.isFinite)) { showNotice('Position unavailable. No log entry was saved.'); return; }
-  const existing = targetLog.find(t => Math.hypot(t.x - x, t.y - y) < 0.35);
-  if (existing) {
-    existing.metal_signal_pct = Math.max(existing.metal_signal_pct, metal_signal_pct);
-    existing.contact_depth_mm = contact_depth_mm;
-    existing.status = status;
-    existing.statusType = statusType;
-    existing.timestamp = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
-  } else {
-    targetLog.unshift({
-      id: `T${nextTargetId++}`,
-      x: Number(x.toFixed(2)),
-      y: Number(y.toFixed(2)),
-      heading_deg: Number(heading_deg.toFixed(0)),
-      metal_signal_pct,
-      contact_depth_mm,
-      status,
-      statusType,
-      timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})
-    });
-    if (targetLog.length > 50) targetLog.pop();
-  }
+window.operatorFieldLog = entries => {
+  if (!Array.isArray(entries)) return;
+  targetLog = entries;
   renderTargetLog();
+};
+
+function logTime(stamp) {
+  return typeof stamp === 'number' ? new Date(stamp * 1000).toLocaleString() : stamp;
 }
 
 function renderTargetLog() {
   const tbody = $('target-log-body');
   $('target-count').textContent = `${targetLog.length} ${targetLog.length === 1 ? 'ENTRY' : 'ENTRIES'}`;
   $('mission-record-count').textContent = `${targetLog.length} ${targetLog.length === 1 ? 'entry' : 'entries'}`;
+  $('clear-target-log').disabled = !state.connected || !state.drive.you_control_owner || !targetLog.length;
+  $('export-target-log').disabled = !targetLog.length;
   tbody.replaceChildren();
   if (!targetLog.length) {
     const row = tbody.insertRow();
@@ -641,17 +662,23 @@ function renderTargetLog() {
   for (const entry of targetLog) {
     const row = tbody.insertRow();
     row.className = ['contact', 'clear', 'marked'].includes(entry.statusType) ? entry.statusType : '';
-    for (const value of [entry.id, `(${entry.x}, ${entry.y})`, `${entry.metal_signal_pct}%`, entry.contact_depth_mm, entry.status, entry.timestamp]) {
+    const quality = entry.gps_status?.replaceAll('_', ' ') || 'GNSS';
+    const accuracy = Number.isFinite(entry.horizontal_accuracy_m) ? `±${entry.horizontal_accuracy_m.toFixed(2)} m` : 'accuracy unknown';
+    const position = Number.isFinite(entry.latitude) && Number.isFinite(entry.longitude)
+      ? `${entry.latitude.toFixed(6)}, ${entry.longitude.toFixed(6)} · ${quality} · ${accuracy}`
+      : Number.isFinite(entry.x) && Number.isFinite(entry.y) ? `(${entry.x.toFixed(2)}, ${entry.y.toFixed(2)})` : '—';
+    for (const value of [String(entry.id).slice(0, 8), position, entry.metal_signal_pct == null ? '—' : `${entry.metal_signal_pct}%`,
+                         entry.contact_depth_mm ?? '—', [entry.status, entry.latitude == null && entry.gps_status && quality].filter(Boolean).join(' · '), logTime(entry.timestamp)]) {
       row.insertCell().textContent = value;
     }
   }
-  $('export-target-log').disabled = $('clear-target-log').disabled = false;
+
 }
 
 function exportTargetLogCsv() {
   if (!targetLog.length) return;
-  const header = ['ID', 'X (m)', 'Y (m)', 'Heading (deg)', 'Metal Signal (%)', 'Contact Depth', 'Status', 'Timestamp'];
-  const rows = targetLog.map(t => [t.id, t.x, t.y, t.heading_deg, t.metal_signal_pct, t.contact_depth_mm, t.status, t.timestamp]);
+  const header = ['ID', 'X (m)', 'Y (m)', 'Heading (deg)', 'Metal Signal (%)', 'Contact Depth', 'Status', 'Timestamp', 'Latitude', 'Longitude', 'Horizontal error (m)', 'GNSS status'];
+  const rows = targetLog.map(t => [t.id, t.x, t.y, t.heading_deg, t.metal_signal_pct, t.contact_depth_mm, t.status, t.timestamp, t.latitude ?? '', t.longitude ?? '', t.horizontal_accuracy_m ?? '', t.gps_status ?? '']);
   const csv = [header.join(','), ...rows.map(row => row.map(value => '"' + String(value).replaceAll('"', '""') + '"').join(','))].join('\n');
   const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
@@ -664,23 +691,7 @@ function exportTargetLogCsv() {
 
 function markCurrentPose() {
   if (!state.connected || state.robot.pose_fresh !== true || ![state.robot?.x, state.robot?.y, state.robot?.yaw].every(Number.isFinite)) { showNotice('Fresh vehicle position is required to log a pose.'); return; }
-  const robot = state.robot || {x: 0, y: 0, yaw: 0};
-  const detector = state.detector || {};
-  const probe = state.probe || {};
-  const heading = ((robot.yaw * 180 / Math.PI % 360) + 360) % 360;
-  const signalPct = Math.round((detector.signal_ratio || 0) * 100);
-  const depthStr = Number.isFinite(probe.depth_mm) && probe.depth_mm > 2 ? `${probe.depth_mm.toFixed(1)} mm` : '—';
-  
-  logTarget({
-    x: robot.x,
-    y: robot.y,
-    heading_deg: heading,
-    metal_signal_pct: signalPct,
-    contact_depth_mm: depthStr,
-    status: detector.fresh === true && detector.detected ? 'METAL DETECTED' : 'POSE LOGGED',
-    statusType: 'marked'
-  });
-  showNotice(`Pose logged at (${robot.x.toFixed(2)}, ${robot.y.toFixed(2)}).`);
+  if (state.drive.you_control_owner) send({type:'log_pose'});
 }
 
 function operationBlock(allowManualTarget = false) {
@@ -703,12 +714,19 @@ function probeActionBlock(allowManualTarget = false) {
   return '';
 }
 
+function pumpAuthorityBlock() {
+  if (!state.marking?.settings) return 'Waiting for marking settings from the car.';
+  if (!state.safety?.allowed) return 'Set the physical RC to ROS mode.';
+  if (state.safety.mode !== 'simulation' && state.drive.px4_armed !== true) return 'Arm PX4 to operate the pump.';
+  return '';
+}
+
 function triggerPumpMark() {
-  const blocked = operationBlock();
+  const blocked = operationBlock() || pumpAuthorityBlock();
   if (blocked) { showNotice(blocked); return; }
   if (pendingPumpMark) return;
-  pendingPumpMark = {at: performance.now(), robot: {...state.robot}, signal: state.detector.signal_ratio};
-  send({type: 'pump_mark', duration_s: 2});
+  pendingPumpMark = {at: performance.now(), id: `mark-${Date.now()}-${Math.random().toString(36).slice(2)}`};
+  send({type: 'pump_mark', request_id: pendingPumpMark.id});
   showNotice('Marking pump requested. Waiting for the operator stack.');
 }
 
@@ -764,15 +782,6 @@ function checkProbeCycleState() {
       }
       playContactAlertSound();
       showNotice(`Probe contact trigger at ${lastRes.contact_depth_mm} mm`);
-      logTarget({
-        x: state.robot.x,
-        y: state.robot.y,
-        heading_deg: ((state.robot.yaw * 180 / Math.PI % 360) + 360) % 360,
-        metal_signal_pct: Math.round((state.detector?.signal_ratio || 0) * 100),
-        contact_depth_mm: `${lastRes.contact_depth_mm} mm`,
-        status: 'CONTACT TRIGGER',
-        statusType: 'contact'
-      });
     } else if (lastRes.status === 'CLEAR') {
       if (alertEl) alertEl.classList.remove('hidden');
       if (alertBadge) {
@@ -783,15 +792,6 @@ function checkProbeCycleState() {
         alertText.textContent = `No contact trigger to ${Math.round(lastRes.target_depth_mm)} mm. Probe retracted.`;
       }
       showNotice(`No contact trigger to ${Math.round(lastRes.target_depth_mm)} mm.`);
-      logTarget({
-        x: state.robot.x,
-        y: state.robot.y,
-        heading_deg: ((state.robot.yaw * 180 / Math.PI % 360) + 360) % 360,
-        metal_signal_pct: Math.round((state.detector?.signal_ratio || 0) * 100),
-        contact_depth_mm: `None (to ${Math.round(lastRes.target_depth_mm)} mm)`,
-        status: 'NO CONTACT TRIGGER',
-        statusType: 'clear'
-      });
     } else if (['ABORTED', 'TIMEOUT'].includes(lastRes.status)) {
       if (alertEl) alertEl.classList.remove('hidden');
       if (alertBadge) { alertBadge.textContent = lastRes.status === 'TIMEOUT' ? 'TIMED OUT' : 'STOPPED'; alertBadge.className = 'badge blocked'; }
@@ -978,6 +978,17 @@ function updateHud() {
   $('take-control').disabled = !state.connected || owner;
   const safe = state.safety?.allowed === true;
   const servoSafe = state.safety?.servo_allowed === true && drive.armed;
+  const px4Armed = state.connected ? drive.px4_armed : null;
+  const px4Badge = $('px4-arming');
+  const known = typeof px4Armed === 'boolean';
+  const simulated = state.connected && state.safety?.simulated && !known;
+  const unknown = state.connected && drive.px4_state_status === 'stale' ? 'PX4 STALE' : 'PX4 UNKNOWN';
+  setText(px4Badge, known ? (px4Armed ? 'PX4 ARMED' : 'PX4 DISARMED') : simulated ? 'PX4 N/A' : unknown);
+  px4Badge.className = `badge ${known ? (px4Armed ? 'active' : 'neutral') : simulated ? 'neutral' : 'warn'}`;
+  px4Badge.title = known ? 'Vehicle arming reported by MAVROS' : simulated ? 'Simulation has no PX4 arming telemetry' : 'Vehicle arming telemetry is missing or stale';
+  const canConfigureDrive = owner && !!state.settings?.driving && !drivingPending;
+  for (const id of ['drive-control-source', 'keyboard-max-throttle', 'keyboard-reverse-throttle'])
+    $(id).disabled = !canConfigureDrive;
   $('rc-safety').textContent = ({ros: 'RC ROS MODE', override: 'RC OVERRIDE', kill: 'RC KILL', rc_lost: 'RC LOST', ros_disarmed: 'RC DISARMED', simulation: 'SIMULATION'})[state.safety?.mode] || 'RC UNKNOWN · LOCKED';
   if (servoSafe && !safe) $('rc-safety').textContent += ' · SERVOS READY';
   $('rc-safety').title = state.safety?.reason || 'Waiting for PX4 safety status';
@@ -993,7 +1004,7 @@ function updateHud() {
     : contact.detected ? 'Contact is already active. Check the sensor.' : '';
   const cycleBlock = blocked || window.operatorContactBlock?.() || (detector.sweep_enabled ? 'Stop sweeping before probing.' : '') || contactBlock;
   const alignBlock = otherActionBlock || armSetupBlock() || (!align.hasPeak || !align.reachable ? align.reason : '');
-  const markBlock = otherActionBlock;
+  const markBlock = otherActionBlock || pumpAuthorityBlock();
   const sweepBlock = otherActionBlock || armSetupBlock();
   const confirmBlock = inspectionBlock('confirm');
   const scanBlock = inspectionBlock('probe_scan');
@@ -1037,22 +1048,19 @@ function updateHud() {
   $('mode-sweep-pill').textContent = detector.sweep_enabled ? 'SWEEPING' : sweepBlock ? 'BLOCKED' : 'READY';
   $('mode-sweep-btn').querySelector('.mode-text').textContent = detector.sweep_enabled ? 'Stop search sweep' : 'Search sweep';
   const pumpActive = Boolean(state.pump_active || drive.pump_active);
-  if (pendingPumpMark && pumpActive && !pumpWasActive) {
-    const {robot: pose, signal} = pendingPumpMark;
-    const positionKnown = pose.pose_fresh === true && robot.pose_fresh === true;
-    if (positionKnown) logTarget({x: pose.x, y: pose.y, heading_deg: pose.yaw * 180 / Math.PI,
-      metal_signal_pct: Math.round(signal * 100), contact_depth_mm: '—', status: 'PUMP ACTIVATED', statusType: 'marked'});
-    showNotice(positionKnown ? 'Marking pump activated. Check the ground mark visually.'
-      : 'Marking pump activated. Position unavailable; no log entry was saved. Check the ground mark visually.');
+  if (pendingPumpMark && state.marking?.last_shot_request === pendingPumpMark.id) {
     pendingPumpMark = null;
+    showNotice('Shot commanded. Check the ground mark visually.');
   } else if (pendingPumpMark && performance.now() - pendingPumpMark.at > 3000) {
-    pendingPumpMark = null; showNotice('Pump activation was not confirmed. Check status before retrying.');
+    pendingPumpMark = null;
+    showNotice('No shot acknowledgement. Check the mission log before retrying.');
   }
-  pumpWasActive = pumpActive;
   $('mode-mark-btn').disabled = Boolean(markBlock) || Boolean(pendingPumpMark);
-  $('mode-mark-btn').title = markBlock;
-  $('mode-mark-pill').textContent = pumpActive ? 'PUMP ON' : pendingPumpMark ? 'WAITING' : markBlock ? 'BLOCKED' : 'READY (2s)';
-  $('mark-target-btn').disabled = !state.connected || robot.pose_fresh !== true || ![robot.x, robot.y, robot.yaw].every(Number.isFinite);
+  $('mode-mark-btn').title = markBlock || 'Run the saved marking shot.';
+  $('mode-mark-pill').textContent = pumpActive ? 'COMMAND ACTIVE' : pendingPumpMark ? 'WAITING' : markBlock ? 'BLOCKED' : `${state.marking.settings.duration_s} s`;
+  window.updateMarkingSettings?.();
+  $('clear-target-log').disabled = !state.connected || !owner || !targetLog.length;
+  $('mark-target-btn').disabled = !owner || !state.connected || robot.pose_fresh !== true || ![robot.x, robot.y, robot.yaw].every(Number.isFinite);
   $('mark-target-btn').title = $('mark-target-btn').disabled ? 'Fresh localization is required to log a pose.' : 'Record the current vehicle position.';
   $('probe-slider').disabled = Boolean(probeActionBlock(true)) || detector.sweep_enabled;
   $('probe-stop').disabled = !owner;
@@ -1150,8 +1158,9 @@ function rosJoyLive() {
 }
 
 function driveBlockMessage() {
-  if (state.safety?.mode === 'override') return {text: state.drive.rc?.fresh ? 'Remote control active' : 'RC input stale', kind: 'ready'};
-  const owner = state.connected && state.drive.you_control_owner;
+  if (state.connected && state.safety?.mode === 'override') return {text: state.drive.rc?.fresh ? 'Remote control active' : 'RC input stale', kind: state.drive.rc?.fresh ? 'ready' : 'blocked'};
+  if (!state.connected) return {text: 'Waiting for vehicle telemetry.', kind: 'blocked'};
+  if (!state.drive.you_control_owner) return {text: 'You are watching. Take control to drive.', kind: 'blocked'};
   const padReady = Boolean(gamepad) || rosJoyLive();
   if (preferences.input === 'controller' && gamepadApiBlocked() && !rosJoyLive()) {
     return {
@@ -1166,10 +1175,10 @@ function driveBlockMessage() {
     return {text: 'No gamepad found. Plug it into this laptop or the car, then press a button.', kind: 'blocked'};
   }
   if (!state.safety?.allowed) return {text: state.safety?.reason || 'Waiting for PX4 safety status', kind: 'blocked'};
-  if (!owner) return {text: 'You are watching. Take control to drive.', kind: 'blocked'};
   if (state.inspection?.active) return {text: 'A scan is running. Stop it before driving.', kind: 'blocked'};
   if (state.probe.cycle_active || state.probe.depth_mm > 2) return {text: 'Retract the probe before driving.', kind: 'blocked'};
   if (state.pump_active || state.drive.pump_active) return {text: 'Wait for the marking pump to stop.', kind: 'blocked'};
+  if (preferences.input === 'rc' && !state.drive.rc?.fresh) return {text: 'Waiting for fresh RC steering and throttle.', kind: 'blocked'};
   if (!state.drive.publishing) return {text: 'Ready to drive.', kind: 'ready'};
   return {
     text: `ROS cmd_vel ${state.drive.cmd_linear_x.toFixed(2)} m/s · ${state.drive.cmd_angular_z.toFixed(2)} rad/s`,
@@ -1182,9 +1191,11 @@ function setText(el, text) {
 }
 
 function updateInputHint() {
-  $('drive-help').textContent = preferences.input === 'keyboard'
+  const override = state.connected && state.safety?.mode === 'override';
+  $('drive-help').textContent = override ? 'Transmitter has direct drive authority.' : preferences.input === 'rc'
+    ? 'Keep this dashboard focused with the transmitter switch in ROS mode.' : preferences.input === 'keyboard'
     ? 'Click camera to drive · Esc releases keys · hold Space to sweep' : deadmanHint();
-  const keyboard = preferences.input === 'keyboard';
+  const keyboard = preferences.input === 'keyboard' && state.safety?.mode !== 'override';
   $('pad-visual').classList.toggle('hidden', keyboard);
   padEls.raw.classList.toggle('hidden', keyboard);
   const lock = padEls.inputLock;
@@ -1194,10 +1205,11 @@ function updateInputHint() {
     setText(lock, cameraFocused ? 'KEYBOARD CAPTURED · ESC TO RELEASE' : 'CLICK CAMERA FOR WASD');
   }
 
-  const rcOverride = state.safety?.mode === 'override';
-  const rc = state.drive.rc || {};
-  if (rcOverride) {
-    setText(padEls.controller, 'Physical RC transmitter');
+  const rcOverride = override;
+  const rc = state.connected && state.drive.rc || {};
+  const showRc = rcOverride || preferences.input === 'rc';
+  if (showRc) {
+    setText(padEls.controller, rcOverride ? 'Physical RC transmitter' : 'RC through ROS');
     setText(padEls.mapping, `Steering CH${rc.steering_channel ?? 1} · throttle CH${rc.throttle_channel ?? 2}`);
   } else if (rosJoyLive() && !keyboard && !gamepad) {
     setText(padEls.controller, 'Xbox via ROS /joy (SVEA USB)');
@@ -1210,7 +1222,7 @@ function updateInputHint() {
     setText(padEls.controller, cameraFocused
       ? 'WASD active'
       : 'Click the forward camera to use WASD');
-    setText(padEls.mapping, `WASD steer/throttle · max ${preferences.keyboardMaxThrottle}% · Space sweeps`);
+    setText(padEls.mapping, `WASD steer/throttle · forward ${preferences.keyboardMaxThrottle}% · reverse ${preferences.keyboardReverseThrottle}% · Space sweeps`);
   } else if (gamepad) {
     setText(padEls.controller, padDisplayName(gamepad));
     setText(padEls.mapping,
@@ -1222,7 +1234,7 @@ function updateInputHint() {
   }
 
   if (padEls.raw) {
-    if (rcOverride) {
+    if (showRc) {
       setText(padEls.raw, rc.fresh ? `RC PWM: ${(rc.channels || []).join(' ')}` : 'RC input stale');
     } else if (gamepad) {
       let axes = '';
@@ -1249,7 +1261,7 @@ function updateInputHint() {
     }
   }
 
-  const visual = rcOverride ? {
+  const visual = showRc ? {
     stickX: rc.fresh ? rc.steering : 0, stickY: 0,
     lt: rc.fresh ? Math.max(0, -rc.throttle) : 0, rt: rc.fresh ? Math.max(0, rc.throttle) : 0,
   } : (!gamepad && rosJoyLive()) ? {
@@ -1389,11 +1401,16 @@ function readGamepad(target) {
   target.y = Boolean(pad.buttons[3]?.pressed);
 }
 
+function keyboardVelocity(throttle) {
+  const limit = throttle < 0 ? preferences.keyboardReverseThrottle : preferences.keyboardMaxThrottle;
+  return throttle * (state.drive.max_velocity_mps ?? MAX_LINEAR_MPS) * limit / 100;
+}
+
 function readKeyboard(target = {}) {
   const throttle = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
   const steer = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
   const deadman = throttle !== 0 || steer !== 0;
-  target.linear = throttle * MAX_LINEAR_MPS * preferences.keyboardMaxThrottle / 100;
+  target.linear = keyboardVelocity(throttle);
   target.angular = -steer * MAX_ANGULAR_RAD_S * preferences.sensitivity / 100;
   target.deadman = deadman;
   target.steer = steer;
@@ -1502,8 +1519,15 @@ function inputLoop() {
   const canDrive = state.connected && state.drive.armed && state.safety?.allowed && state.drive.you_control_owner
     && !$('settings-dialog').open && !state.inspection?.active && !document.hidden && document.hasFocus();
   if (!canDrive) resetKeyboardRamp(now);
+  if (preferences.input === 'rc') {
+    const enabled = canDrive && !drivingPending && state.drive.input === 'rc' && state.drive.rc?.fresh;
+    if (enabled && now - lastRcEnable >= DRIVE_KEEPALIVE_MS) {
+      send({type: 'rc_drive_enable', enabled: true});
+      lastRcEnable = now;
+    } else if (!enabled) stopRcInput();
+  }
   // Opening Settings already sends a stop. Do not flood calibration with rejected drive commands.
-  if (!$('settings-dialog').open) sendDriveIfNeeded(canDrive && lastInput.deadman ? lastInput : {linear: 0, angular: 0, deadman: false}, now);
+  if (preferences.input !== 'rc' && !drivingPending && !$('settings-dialog').open) sendDriveIfNeeded(canDrive && lastInput.deadman ? lastInput : {linear: 0, angular: 0, deadman: false}, now);
 
   if (now - lastPadUi >= PAD_UI_PERIOD_MS) {
     lastPadUi = now;
@@ -1556,16 +1580,43 @@ $('inspection-stop').onclick = () => send({type: 'inspection', action: 'stop'});
 if ($('mode-mark-btn')) $('mode-mark-btn').onclick = triggerPumpMark;
 if ($('mark-target-btn')) $('mark-target-btn').onclick = markCurrentPose;
 if ($('export-target-log')) $('export-target-log').onclick = exportTargetLogCsv;
-if ($('clear-target-log')) $('clear-target-log').onclick = () => { if (targetLog.length && !confirm('Clear this session’s log? Export CSV first if you need it.')) return; targetLog = []; renderTargetLog(); };
+if ($('clear-target-log')) $('clear-target-log').onclick = () => { if (state.drive.you_control_owner && targetLog.length && confirm('Clear the mission log on the car for every viewer?')) send({type:'clear_log'}); };
+
+let displaySignature = '';
+function applyDisplaySettings(value) {
+  const owner = state.connected && state.drive.you_control_owner && Boolean(value);
+  const key = JSON.stringify([value, owner]);
+  if (key === displaySignature) return;
+  displaySignature = key;
+  if (value) Object.assign(preferences, structuredClone(value));
+  savePreferences();
+  for (const input of document.querySelectorAll('#wheel-mapping input')) {
+    const v = preferences.wheel[input.dataset.field];
+    if (input.type === 'checkbox') input.checked = v;
+    else input.value = v;
+    input.disabled = !owner;
+  }
+  for (const id of ['search-alert-enabled','search-alert-level','search-alert-sound','steering-sensitivity','pad-mapping']) {
+    $(id).disabled = !owner || (id === 'pad-mapping' && preferences.input !== 'controller') ||
+      (['search-alert-level','search-alert-sound'].includes(id) && !preferences.searchAlert.enabled);
+  }
+}
+
+function storeDisplaySettings() {
+  if (!state.connected || !state.drive.you_control_owner) return;
+  const {mapping, sensitivity, wheel, searchAlert} = preferences;
+  send({type:'settings', section:'display', value:{mapping, sensitivity, wheel, searchAlert}});
+}
 
 function savePreferences() {
-  try { localStorage.setItem('peaceofmine.operator.preferences', JSON.stringify(preferences)); } catch {}
+
   $('drive-control-source').value = preferences.input;
   $('keyboard-max-throttle').value = preferences.keyboardMaxThrottle;
+  $('keyboard-reverse-throttle').value = preferences.keyboardReverseThrottle;
   $('pad-mapping').value = preferences.mapping;
   $('steering-sensitivity').value = preferences.sensitivity;
   $('sensitivity-value').textContent = `${preferences.sensitivity}%`;
-  $('pad-mapping').disabled = preferences.input !== 'controller';
+  $('pad-mapping').disabled = !state.drive.you_control_owner || preferences.input !== 'controller';
   const alertSettings = preferences.searchAlert;
   if (!activeSliders.has('search-alert-level')) $('search-alert-level').value = alertSettings.level;
   $('search-alert-value').textContent = alertSettings.enabled ? `${alertSettings.level}%` : 'Off';
@@ -1581,12 +1632,15 @@ $('search-alert-level').oninput = event => {
   preferences.searchAlert.level = clampSearchAlertLevel(event.target.value);
   savePreferences();
 };
+$('search-alert-level').onchange = storeDisplaySettings;
 $('search-alert-enabled').onchange = event => {
   preferences.searchAlert.enabled = event.target.checked;
+  storeDisplaySettings();
   savePreferences();
 };
 $('search-alert-sound').onchange = event => {
   preferences.searchAlert.sound = event.target.checked;
+  storeDisplaySettings();
   savePreferences();
   if (event.target.checked) playSearchAlertSound(); // let the operator hear it
 };
@@ -1601,25 +1655,65 @@ $('settings').onclick = () => {
   $('settings-dialog').showModal();
 };
 $('offline-settings').onclick = $('settings').onclick;
-$('drive-control-source').onchange = event => {
+function updateDrivingSettings(value) {
+  if (!value) return;
+  const changed = preferences.input !== value.input || preferences.keyboardMaxThrottle !== value.forward_percent
+    || preferences.keyboardReverseThrottle !== value.reverse_percent;
+  if (changed) {
+    stopLocalInput();
+    lastPadTimestamp = -1;
+    preferences.input = value.input;
+    preferences.keyboardMaxThrottle = value.forward_percent;
+    preferences.keyboardReverseThrottle = value.reverse_percent;
+    $('pad-mapping').disabled = !state.drive.you_control_owner || preferences.input !== 'controller';
+  }
+  if (drivingPending && Object.keys(drivingPending).every(key => value[key] === drivingPending[key])) {
+    clearTimeout(drivingSaveTimer);
+    drivingPending = null;
+    $('driving-feedback').textContent = 'Saved on car';
+  }
+  if (changed || !drivingPending) {
+    $('drive-control-source').value = value.input;
+    if (document.activeElement !== $('keyboard-max-throttle')) $('keyboard-max-throttle').value = value.forward_percent;
+    if (document.activeElement !== $('keyboard-reverse-throttle')) $('keyboard-reverse-throttle').value = value.reverse_percent;
+  }
+}
+
+function failDriveSave(message) {
+  clearTimeout(drivingSaveTimer);
+  drivingPending = null;
+  $('driving-feedback').textContent = message;
+  showNotice(message, true);
+  updateDrivingSettings(state.settings?.driving);
+  updateHud();
+}
+
+function changeDriveSetting(key, value) {
+  if (!state.connected || !state.drive.you_control_owner || !state.settings?.driving || drivingPending) return;
   stopInput();
-  preferences.input = event.target.value;
-  savePreferences();
-};
-$('keyboard-max-throttle').onchange = event => {
-  if (!event.target.reportValidity()) return;
-  stopInput();
-  preferences.keyboardMaxThrottle = event.target.valueAsNumber;
-  savePreferences();
-};
+  drivingPending = {...state.settings.driving, [key]: value};
+  drivingSaveTimer = setTimeout(() => failDriveSave('Drive settings were not confirmed by the car.'), 4500);
+  send({type: 'settings', section: 'driving', value: drivingPending});
+  $('driving-feedback').textContent = 'Saving on car…';
+  updateHud();
+}
+
+$('drive-control-source').onchange = event => changeDriveSetting('input', event.target.value);
+for (const [id, key] of [['keyboard-max-throttle', 'forward_percent'], ['keyboard-reverse-throttle', 'reverse_percent']]) {
+  $(id).onchange = event => {
+    if (event.target.reportValidity()) changeDriveSetting(key, event.target.valueAsNumber);
+  };
+}
 $('steering-sensitivity').oninput = event => {
   preferences.sensitivity = Number(event.target.value);
   lastPadTimestamp = -1;
   savePreferences();
 };
+$('steering-sensitivity').onchange = storeDisplaySettings;
 $('pad-mapping').onchange = event => {
   stopInput();
   preferences.mapping = event.target.value;
+  storeDisplaySettings();
   triggerSeen.lt = false;
   triggerSeen.rt = false;
   savePreferences();
@@ -1715,7 +1809,7 @@ function rampKeyboard(target, now) {
   };
   keyboardRamp.throttle = approach(keyboardRamp.throttle, target.throttle, 1.6, 2.8);
   keyboardRamp.steer = approach(keyboardRamp.steer, target.steer, 3.2, 4.8);
-  target.linear = keyboardRamp.throttle * MAX_LINEAR_MPS * preferences.keyboardMaxThrottle / 100;
+  target.linear = keyboardVelocity(keyboardRamp.throttle);
   target.angular = -keyboardRamp.steer * MAX_ANGULAR_RAD_S * preferences.sensitivity / 100;
 }
 
@@ -1814,6 +1908,7 @@ function drawForwardView(pose = state.robot) {
   }
 
   for (const t of targetLog) {
+    if (!Number.isFinite(t.x) || !Number.isFinite(t.y)) continue;
     const point = project(worldToCamera(t.x, t.y, pose), width, height);
     if (!point) continue;
     context.fillStyle = t.statusType === 'contact' ? '#df6251' : t.statusType === 'clear' ? '#22885a' : '#e5c07b';
@@ -1878,16 +1973,7 @@ function drawMap(pose = state.robot) {
   // Search alerts: hollow amber diamonds where the operator was warned.
   context.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--warn').trim() || '#f0b44c';
   context.lineWidth = 1.5;
-  for (const spot of searchAlertSpots) {
-    const point = toScreen(spot.x, spot.y);
-    context.beginPath();
-    context.moveTo(point.x, point.y - 5);
-    context.lineTo(point.x + 5, point.y);
-    context.lineTo(point.x, point.y + 5);
-    context.lineTo(point.x - 5, point.y);
-    context.closePath();
-    context.stroke();
-  }
+
 
   // Detections mark where the rover stood when the signal crossed threshold.
   for (const detection of state.detections) {
@@ -1901,6 +1987,7 @@ function drawMap(pose = state.robot) {
 
   // Verified & marked targets from targetLog
   for (const t of targetLog) {
+    if (!Number.isFinite(t.x) || !Number.isFinite(t.y)) continue;
     const point = toScreen(t.x, t.y);
     context.fillStyle = t.statusType === 'contact' ? '#df6251' : t.statusType === 'clear' ? '#22885a' : '#e5c07b';
     context.beginPath();
@@ -2164,7 +2251,13 @@ function readWheel(pad, mapping) {
     deadman: true};
 }
 
+function stopRcInput() {
+  if (lastRcEnable !== -Infinity) send({type: 'rc_drive_enable', enabled: false});
+  lastRcEnable = -Infinity;
+}
+
 function stopInput(forCalibration = false) {
+  stopRcInput();
   releaseKeyboardCapture();
   if (state.drive.you_control_owner) {
     sendDrive(0, 0, false);
@@ -2475,6 +2568,7 @@ function initializeCameraSettings() {
   for (const slot of ['forward', 'auxiliary']) {
     $(slot + '-rotate').onclick = () => {
       preferences.cameraRotation[slot] = (preferences.cameraRotation[slot] + 90) % 360;
+      window.saveCameraView?.(slot);
       savePreferences();
       applyCameraRotations();
       renderCameraSettings();
@@ -2823,9 +2917,12 @@ function initializeInputs() {
     }
     input.onchange = () => {
       stopInput();
+      if (!input.reportValidity() || (input.type === 'number' && !input.value)) return;
       preferences.wheel[key] = checkbox ? input.checked : input.value === '' ? null : Number(input.value);
+      storeDisplaySettings();
       savePreferences();
     };
+    input.dataset.field = key;
     wrapper.append(input); $('wheel-mapping').append(wrapper);
   }
   for (const code of ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space']) {
@@ -2838,8 +2935,6 @@ function initializeInputs() {
     selectedPadIndex = pad?.index ?? null; selectedPadId = pad?.id ?? null;
   };
   $('keyboard-test').onclick = () => {
-    $('drive-control-source').value = 'keyboard';
-    $('drive-control-source').onchange({target: $('drive-control-source')});
     $('settings-dialog').addEventListener('close', () => {
       cameraPanel.focus({preventScroll: true});
       if (!cameraFocused) activateKeyboardInput();
@@ -2854,11 +2949,13 @@ function initializeInputs() {
     stopInput();
     preferences.cameras.forward = event.target.value;
     savePreferences();
+    window.saveCameraView?.('forward');
     await startCamera('forward', event.target.value);
   };
   $('aux-camera-source').onchange = async event => {
     preferences.cameras.auxiliary = event.target.value;
     savePreferences();
+    window.saveCameraView?.('auxiliary');
     await startCamera('auxiliary', event.target.value);
   };
   navigator.mediaDevices?.addEventListener?.('devicechange', () => refreshCameraDevices(false));
@@ -2874,7 +2971,13 @@ function renderInputs(pads, target) {
   }
   if (!$('settings-dialog').open || $('settings-input').hidden) return;
   const keyboard = preferences.input === 'keyboard';
-  $('device-settings').classList.toggle('hidden', keyboard);
+  const rcInput = preferences.input === 'rc';
+  $('device-settings').classList.toggle('hidden', keyboard || rcInput);
+  $('rc-drive-settings').classList.toggle('hidden', !rcInput);
+  if (rcInput) {
+    const rc = state.drive.rc;
+    $('rc-drive-input').textContent = rc?.fresh ? `Steering CH${rc.steering_channel}: ${Math.round(rc.steering * 100)}% · throttle CH${rc.throttle_channel}: ${Math.round(rc.throttle * 100)}%` : 'RC channels missing or stale';
+  }
   $('wheel-settings').classList.toggle('hidden', preferences.input !== 'wheel');
   $('keyboard-test').classList.toggle('hidden', !keyboard);
   $('key-preview').classList.toggle('hidden', !keyboard);
@@ -2890,7 +2993,12 @@ function renderInputs(pads, target) {
     ? `${gamepad.id} · ${gamepad.mapping || 'non-standard'} · ${gamepad.axes.length} axes · ${gamepad.buttons.length} buttons${preferences.input === 'controller' ? ` · ${mappingLabel(resolveMapping(gamepad))}` : ''}`
     : 'No device selected. Press a device button, then select it above.';
   document.querySelectorAll('[data-code]').forEach(el => el.classList.toggle('pressed', keys.has(el.dataset.code)));
-  const preview = target;
+  const rc = state.drive.rc;
+  const preview = rcInput ? {
+    linear: rc?.fresh ? rc.throttle * (state.drive.max_velocity_mps ?? MAX_LINEAR_MPS) : 0,
+    angular: rc?.fresh ? -rc.steering * (state.drive.max_yaw_rate_rad_s ?? MAX_ANGULAR_RAD_S) : 0,
+    deadman: false,
+  } : target;
   $('steering-preview').setAttribute('transform', `rotate(${-preview.angular / MAX_ANGULAR_RAD_S * 100} 80 80)`);
   $('mapped-input').textContent = `Forward / reverse: ${preview.linear.toFixed(3)} m/s\nSteering: ${preview.angular.toFixed(3)} rad/s\nDeadman: ${preview.deadman ? 'HELD' : 'released'}\nDrive output: paused while Setup is open`;
   const axes = keyboard ? [] : gamepad?.axes ?? [];
@@ -2931,7 +3039,7 @@ function drawDashboard(now) {
     updateSearchAlert(now);
     drawForwardView(motion.robot);
     drawRadar(now);
-    drawMap(motion.robot);
+    if (!map.hidden && map.clientWidth && map.clientHeight) drawMap(motion.robot);
     drawProbeMotion(motion.depth);
     drawPressureHistory(now, true);
     drawDetectorHistory(now, true);

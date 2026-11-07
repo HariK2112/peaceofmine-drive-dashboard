@@ -13,6 +13,12 @@ from peaceofmine_operator import configuration, camera_settings
 from peaceofmine_operator.node_runner import run_node
 
 
+from peaceofmine_operator import display_settings, driving_settings, field_gnss, marking_settings
+
+SHARED = dict(cameras=camera_settings, display=display_settings, driving=driving_settings,
+              gnss=field_gnss, marking=marking_settings)
+
+
 class OperatorSettings(Node):
     def __init__(self, **kwargs):
         super().__init__('operator_settings', **kwargs)
@@ -24,6 +30,7 @@ class OperatorSettings(Node):
         self.error = None
         self.saved = False
         self.document = {}
+        self.shared = {k: copy.deepcopy(v.DEFAULTS) for k, v in SHARED.items()}
         self.cameras = copy.deepcopy(camera_settings.DEFAULTS)
         self.create_service(SaveSettings, 'operator/settings/save', self.save)
         self.reload()
@@ -36,8 +43,8 @@ class OperatorSettings(Node):
             storage_section=request.section
             simulation=storage_section in ('arm_simulation','probe_simulation','arm_motion_simulation','probe_motion_simulation','probe_direction_simulation')
             section=storage_section.removesuffix('_simulation') if simulation else storage_section
-            if section == 'cameras':
-                value = camera_settings.validate(value)
+            if section in SHARED:
+                value = SHARED[section].validate(value)
             elif section in ('adc', 'adc_simulation'):
                 config, routes, trigger = OperatorADC.validate(value)
                 value = dict(config=config, routes=routes, probe_trigger=trigger)
@@ -80,13 +87,14 @@ class OperatorSettings(Node):
             saved = configuration.load(self.path)
             self.document = saved
             self.saved = 'cameras' in saved
-            self.cameras = camera_settings.validate(saved.get('cameras', camera_settings.DEFAULTS))
+            self.shared = {k: module.validate(saved.get(k, module.DEFAULTS)) for k, module in SHARED.items()}
+            self.cameras = self.shared['cameras']
             self.error = None
         except (OSError, ValueError, TypeError) as exc:
             self.error = str(exc)
 
     def command(self, message):
-        request_id = None
+        request_id = section = None
         try:
             command = json.loads(message.data)
             if not isinstance(command, dict):
@@ -94,21 +102,21 @@ class OperatorSettings(Node):
             request_id = command.get('request_id')
             if not isinstance(request_id, str) or not 1 <= len(request_id) <= 100:
                 raise ValueError('Invalid request ID')
-            if command.get('section') != 'cameras':
-                raise ValueError('Only shared camera settings are managed here')
-            value = camera_settings.validate(command.get('value'))
-            configuration.save_section(self.path, 'cameras', value)
-            self.cameras = value
-            self.error = None
-            result = dict(ok=True, message='Camera defaults saved. Restart the camera nodes to apply capture changes.')
+            section = command.get('section')
+            if not isinstance(section, str) or section not in SHARED:
+                raise ValueError('Unknown shared settings section')
+            value = SHARED[section].validate(command.get('value'))
+            configuration.save_section(self.path, section, value)
+            result = dict(ok=True, message=('Camera defaults saved. Restart camera nodes for capture changes.'
+                                            if section == 'cameras' else 'Saved on car.'))
         except (OSError, ValueError, TypeError) as exc:
             result = dict(ok=False, message=str(exc))
-        self.result_pub.publish(String(data=json.dumps(dict(request_id=request_id, **result))))
+        self.result_pub.publish(String(data=json.dumps(dict(request_id=request_id, section=section, **result))))
         self.publish_state()
 
     def publish_state(self):
         self.reload()
-        self.state_pub.publish(String(data=json.dumps(dict(cameras=self.cameras, saved=self.saved, error=self.error,
+        self.state_pub.publish(String(data=json.dumps(dict(**self.shared, saved=self.saved, error=self.error,
                                                           config_file=self.path, revision=self.document.get('revision',0),
                                                           schema_version=self.document.get('schema_version',1),
                                                           camera_capture_apply_mode='restart'))))

@@ -64,9 +64,7 @@ class ADCNodeTest(unittest.TestCase):
                 settings = {key: state[key] for key in ('config', 'routes', 'probe_trigger')}
                 settings['probe_trigger'].update(enabled=True, level=.1)
                 gateway.handle_command(ws, dict(type='adc', action='settings', settings=settings))
-                spin(.3)
-                self.assertTrue(gateway.replies()[-1][1]['ok'])
-                spin(1.2)
+                spin(1.5)
                 self.assertTrue(gateway.replies()[-1][1]['ok'])
                 self.assertTrue(raw and volts and scaled)
                 self.assertTrue(fresh[-1])

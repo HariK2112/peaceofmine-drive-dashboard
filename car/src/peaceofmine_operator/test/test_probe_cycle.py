@@ -1,4 +1,5 @@
 import unittest
+import json
 from unittest.mock import MagicMock, patch
 import time
 
@@ -289,7 +290,13 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.ctrl._permission_pub = MagicMock()
         self.ctrl._pump_pub = MagicMock()
         self.ctrl._pump_active = False
-        self.ctrl._pump_timer = None
+        self.ctrl._marking = dict(duration_s=1.5, idle_percent=7., active_percent=65., manual_percent=22.)
+        self.ctrl._pump_mode = 'idle'
+        self.ctrl._pump_output = self.ctrl._pump_until = 0.
+        self.ctrl._pose_at = self.ctrl._inspection_detector_at = 0.
+        self.ctrl._inspection_detector = {}
+        self.ctrl._mark_pub = MagicMock()
+        self.ctrl._drive_input = 'controller'
         self.ctrl.create_timer = MagicMock()
         self.ctrl.destroy_timer = MagicMock()
         self.ctrl._rc_safety = MagicMock()
@@ -339,8 +346,11 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.assertTrue(self.ctrl._pump_active)
         self.ctrl._pump_pub.publish.assert_called_once()
         published_msg = self.ctrl._pump_pub.publish.call_args[0][0]
-        self.assertTrue(published_msg.data)
-        self.ctrl.create_timer.assert_called_once_with(2.0, self.ctrl._pump_timeout_cb)
+        self.assertEqual(published_msg.data, 65.)
+        self.assertAlmostEqual(self.ctrl._pump_until - time.monotonic(), 1.5, delta=.1)
+        mark = json.loads(self.ctrl._mark_pub.publish.call_args.args[0].data)
+        self.assertEqual(mark['duration_s'], 1.5)
+        self.assertIsNone(mark['x'])
 
     def test_mark_does_not_require_odometry_or_probe_telemetry(self):
         self.ctrl._probe_state={}
@@ -368,29 +378,54 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.assertIsNotNone(res)
         self.assertIn('ground marking is active', res['message'])
 
-    def test_pump_timeout_deactivates_pump(self):
-        self.ctrl._pump_active = True
-        mock_timer = MagicMock()
-        self.ctrl._pump_timer = mock_timer
-        self.ctrl._pump_timeout_cb()
+    def test_pump_timeout_returns_to_saved_idle(self):
+        self.ctrl.handle_command('client1', dict(type='pump_mark'))
+        self.ctrl._pump_tick(self.ctrl._pump_until + .1, {'allowed': True})
         self.assertFalse(self.ctrl._pump_active)
-        self.assertIsNone(self.ctrl._pump_timer)
-        mock_timer.cancel.assert_called_once()
-        self.ctrl._pump_pub.publish.assert_called_once()
-        published_msg = self.ctrl._pump_pub.publish.call_args[0][0]
-        self.assertFalse(published_msg.data)
+        self.assertEqual(self.ctrl._pump_pub.publish.call_args.args[0].data, 7.)
 
     def test_stop_motion_aborts_pump(self):
-        self.ctrl._pump_active = True
-        mock_timer = MagicMock()
-        self.ctrl._pump_timer = mock_timer
+        self.ctrl.handle_command('client1', dict(type='pump_mark'))
         self.ctrl._stop_motion_locked()
         self.assertFalse(self.ctrl._pump_active)
-        self.assertIsNone(self.ctrl._pump_timer)
-        mock_timer.cancel.assert_called_once()
-        self.ctrl._pump_pub.publish.assert_called_once()
-        published_msg = self.ctrl._pump_pub.publish.call_args[0][0]
-        self.assertFalse(published_msg.data)
+        self.assertEqual(self.ctrl._pump_pub.publish.call_args.args[0].data, 0.)
+
+    def test_manual_requires_lease_setup_and_finite_percent(self):
+        start = dict(type='pump_manual', action='start', percent=32.)
+        self.assertIn('Spectator', self.ctrl.handle_command('other', start)['message'])
+        self.assertIn('Setup', self.ctrl.handle_command('client1', start)['message'])
+        self.ctrl._calibrating = True
+        for invalid in (None, '30', float('nan'), -1., 101.):
+            self.assertIn('percent', self.ctrl.handle_command('client1', {**start, 'percent': invalid})['message'])
+        self.ctrl._pump_pub.publish.assert_not_called()
+
+    def test_manual_release_and_timeout_never_log_or_restart(self):
+        start = dict(type='pump_manual', action='start', percent=32.)
+        self.ctrl._calibrating = True
+        for action in ('stop', 'timeout'):
+            self.assertIsNone(self.ctrl.handle_command('client1', start))
+            self.assertEqual(self.ctrl._pump_output, 32.)
+            if action == 'timeout':
+                self.ctrl._pump_tick(self.ctrl._pump_until, {'allowed': True})
+            else:
+                self.ctrl.handle_command('client1', dict(type='pump_manual', action='stop'))
+            self.ctrl.handle_command('client1', dict(type='pump_manual', action='renew'))
+            self.assertEqual(self.ctrl._pump_output, 7.)
+            self.assertFalse(self.ctrl._pump_active)
+        self.ctrl._mark_pub.publish.assert_not_called()
+
+    def test_rc_or_px4_loss_neutralizes_even_a_nonzero_idle(self):
+        self.ctrl._rc_safety.simulation = False
+        self.ctrl._rc_safety.px4_armed.return_value = True
+        self.ctrl.handle_command('client1', dict(type='pump_mark'))
+        self.ctrl._pump_tick(time.monotonic(), {'allowed': False})
+        self.assertFalse(self.ctrl._pump_active)
+        self.assertEqual(self.ctrl._pump_output, 0.)
+        for armed in (None, False):
+            self.ctrl._rc_safety.px4_armed.return_value = armed
+            self.assertIn('armed PX4', self.ctrl.handle_command('client1', dict(type='pump_mark'))['message'])
+            self.ctrl._pump_tick(time.monotonic(), {'allowed': True})
+            self.assertEqual(self.ctrl._pump_output, 0.)
 
 
 spec_arm = importlib.util.spec_from_file_location(

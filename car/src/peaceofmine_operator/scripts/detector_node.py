@@ -398,7 +398,7 @@ class DetectorNode(Node):
         valid = all(type(v) in (int, float) and math.isfinite(v) for v in (raw, filtered, stamp))
         fresh = bool(fresh and valid)
         peak = {**self.latest_peak, 'fresh': fresh and now-self.latest_peak['timestamp'] <= 30} if self.latest_peak else None
-        self.control_pub.publish(String(data=json.dumps(dict(fresh=fresh, latest_peak=peak,
+        self.control_pub.publish(String(data=json.dumps(dict(fresh=fresh, signal_ratio=self.signal, latest_peak=peak,
             angle_fresh=now-self.angle_at < .5, angle_deg=self.angle, sample_time=stamp,
             sweep_speed_deg_s=self.sweep_speed,
             volts=raw*self.reference_voltage/255 if valid else None,

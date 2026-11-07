@@ -83,6 +83,17 @@ class CameraStreamTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    async def test_viewer_survives_upstream_restart(self):
+        response = await self.client.get('/camera')
+        reader = aiohttp.MultipartReader.from_response(response)
+        self.release.set()
+        async with asyncio.timeout(5):
+            while self.requests < 2:
+                part = await reader.next()
+                self.assertIsNotNone(part)
+                await part.read()
+        response.close()
+
     async def test_unavailable_upstream_returns_502(self):
         await self.upstream.close()
         response = await self.client.get('/camera')
