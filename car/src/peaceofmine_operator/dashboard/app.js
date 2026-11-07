@@ -451,6 +451,14 @@ function connect() {
       recordLatency(message.probe_id);
       return;
     }
+    if (message.type === 'settings_result' && message.section === 'probe_alignment') {
+      if (alignmentPending && !message.ok) {
+        alignmentPending = null;
+        alignmentMessage = message.message || 'Offset save rejected.';
+      }
+      updateAlignmentSettings();
+      return;
+    }
     if (message.type === 'settings_result' && message.section === 'inspection') {
       if (!message.ok) {
         pendingPasses = null;
@@ -906,6 +914,11 @@ function checkProbeCycleState() {
   }
 }
 
+function probeOffsetDeg() {
+  // Older car processes used a fixed 45° mount and do not publish the setting.
+  return state.inspection?.probe_offset_deg ?? state.settings?.probe_alignment?.offset_deg ?? 45;
+}
+
 function getProbeAlignment() {
   const detector = state.detector || {};
   const half = detector.beam_half_angle_deg ?? 45;
@@ -928,11 +941,7 @@ function getProbeAlignment() {
     };
   }
 
-  // Detector sits 45° to the right of the probe on the same servo.
-  // Probe bearing = servo_angle + 45°
-  // To place probe over peak: pivotAngle = peakAngle - 45°
-  const FIXED_OFFSET_DEG = 45.0;
-  const pivotAngle = Math.round((peakAngle - FIXED_OFFSET_DEG) * 10) / 10;
+  const pivotAngle = peakAngle - probeOffsetDeg();
 
   const isReachable = pivotAngle >= minAngle && pivotAngle <= maxAngle;
   const deficitDeg = pivotAngle < minAngle ? Math.round((minAngle - pivotAngle) * 10) / 10 : 0;
@@ -942,10 +951,10 @@ function getProbeAlignment() {
     if (pivotAngle < minAngle) {
       reason = `Target is outside the arm range. Reposition the rover and scan again.`;
     } else {
-      reason = `Target angle outside arm limits (${pivotAngle}° vs max ${maxAngle.toFixed(0)}°).`;
+      reason = `Target angle outside arm limits (${pivotAngle.toFixed(1)}° vs max ${maxAngle.toFixed(1)}°).`;
     }
   } else {
-    reason = `Pivot arm to ${pivotAngle.toFixed(0)}° to align probe with target peak at ${peakAngle.toFixed(0)}°.`;
+    reason = `Pivot arm to ${pivotAngle.toFixed(1)}° to align probe with target peak at ${peakAngle.toFixed(1)}°.`;
   }
 
   return {
@@ -971,8 +980,8 @@ function alignProbeToPeak() {
   if (blocked) { showNotice(blocked); return; }
   const align = getProbeAlignment();
   if (!align.hasPeak || !align.reachable) { showNotice(align.reason); return; }
-  send({type: 'align_probe', angle_deg: align.pivotAngle});
-  showNotice(`Arm alignment requested to ${align.pivotAngle}°.`);
+  send({type: 'align_probe', target_bearing_deg: align.peakAngle, angle_deg: align.pivotAngle});
+  showNotice(`Arm alignment requested to ${Number(align.pivotAngle.toFixed(1))}°.`);
 }
 
 function inspectionBlock(action) {
@@ -1130,6 +1139,7 @@ function renderInspection() {
 }
 
 function updateHud() {
+  updateAlignmentSettings();
   updatePower();
   updateArmSettings();
   updateMetalSettings();
@@ -2339,11 +2349,13 @@ function drawRadar(now = performance.now()) {
     drawSegment(context, {x: cx, y: cy}, {x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius});
   }
 
-  // Draw probe unreachable dead zone (right sector where pivot < minimum)
-  const deadZoneEdge = minimum + 45;
-  if (deadZoneEdge > minimum && deadZoneEdge < maximum) {
-    const from = beamScreenAngle(deadZoneEdge);
-    const to = beamScreenAngle(minimum);
+  const offset = probeOffsetDeg();
+  const unreachableLow = offset >= 0 ? minimum : Math.max(minimum, maximum + offset);
+  const unreachableHigh = offset >= 0 ? Math.min(maximum, minimum + offset) : maximum;
+  if (unreachableHigh > unreachableLow) {
+    const from = beamScreenAngle(unreachableHigh);
+    const to = beamScreenAngle(unreachableLow);
+    const boundary = offset >= 0 ? from : to;
     context.save();
     context.fillStyle = 'rgba(230, 80, 50, 0.12)';
     context.beginPath();
@@ -2354,7 +2366,7 @@ function drawRadar(now = performance.now()) {
     context.setLineDash([3, 3]);
     context.strokeStyle = 'rgba(230, 80, 50, 0.5)';
     context.lineWidth = 1.5;
-    drawSegment(context, {x: cx, y: cy}, {x: cx + Math.cos(from) * radius, y: cy + Math.sin(from) * radius});
+    drawSegment(context, {x: cx, y: cy}, {x: cx + Math.cos(boundary) * radius, y: cy + Math.sin(boundary) * radius});
     context.restore();
   }
 
@@ -2378,8 +2390,7 @@ function drawRadar(now = performance.now()) {
   context.lineWidth = 2;
   drawSegment(context, {x: cx, y: cy}, {x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius});
 
-  // Rigid probe position on arm (+45° counter-clockwise of detector)
-  const probeArmAngle = currentAngle + 45;
+  const probeArmAngle = currentAngle + offset;
   if (probeArmAngle >= minimum && probeArmAngle <= maximum + 5) {
     const probeScreen = beamScreenAngle(probeArmAngle);
     context.save();
@@ -2776,6 +2787,39 @@ function initializeCameraSettings() {
   requestAnimationFrame(previewLoop);
 }
 
+let alignmentDirty = false;
+let alignmentPending = null;
+let alignmentMessage = '';
+
+function updateAlignmentSettings() {
+  const input = $('arm-probe-offset');
+  const saved = state.settings?.probe_alignment?.offset_deg;
+  const available = state.connected && Number.isFinite(saved);
+  const owner = state.connected && state.drive.you_control_owner;
+  if (!owner) {
+    alignmentPending = null;
+    alignmentDirty = false;
+    alignmentMessage = '';
+  } else if (alignmentPending) {
+    if (alignmentPending.value === saved) {
+      alignmentPending = null;
+      alignmentDirty = false;
+      alignmentMessage = 'Saved on car. Applies to the next aim or probe scan.';
+    } else if (performance.now() - alignmentPending.at > 4000) {
+      alignmentPending = null;
+      alignmentMessage = 'No save confirmation. Check the car settings and retry.';
+    }
+  }
+  if (!alignmentDirty && input.value !== String(available ? saved : '')) input.value = available ? saved : '';
+  input.readOnly = !owner || !available || Boolean(alignmentPending);
+  const changed = input.valueAsNumber !== saved;
+  $('arm-probe-offset-save').disabled = input.readOnly || !input.validity.valid || !changed;
+  $('arm-probe-offset-status').textContent = !available ? 'Waiting for car settings.'
+    : !owner ? 'Take control to edit the offset.'
+    : alignmentPending ? 'Saving offset…' : alignmentMessage
+    || (!input.validity.valid ? 'Enter an offset from −180° to 180°.'
+      : changed ? `Unsaved change. The car uses ${saved}°.` : 'Applies to the next aim or probe scan.');
+}
 let metalPending = null;
 let pendingPasses = null;
 let metalFeedback = '';
@@ -3208,6 +3252,18 @@ function initializeMetalSettings() {
 }
 
 function initializeInputs() {
+  $('arm-probe-offset').oninput = () => {
+    alignmentDirty = true;
+    alignmentMessage = '';
+    updateAlignmentSettings();
+  };
+  $('arm-probe-offset-save').onclick = () => {
+    if ($('arm-probe-offset-save').disabled || !$('arm-probe-offset').reportValidity()) return;
+    const offset = $('arm-probe-offset').valueAsNumber;
+    alignmentPending = {value:offset, at:performance.now()};
+    send({type:'settings', section:'probe_alignment', value:{offset_deg:offset}});
+    updateAlignmentSettings();
+  };
   initializeArmSettings();
   initializeMetalSettings();
   const tabs = [...document.querySelectorAll('[data-settings-tab]')];

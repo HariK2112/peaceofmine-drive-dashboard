@@ -488,6 +488,15 @@
             </div>
             <div class="card-actions"><button type="button" id="arm-apply-limits" class="primary">Save limits</button></div>
           </section>
+          <section class="set-card span-all">
+            <header class="card-head"><h4>Probe alignment</h4></header>
+            <div class="inline-fields">
+              <label class="field"><span class="field-name">Detector-to-probe offset <span class="unit">°</span> <span class="tip" data-tip="Arm command = detector bearing minus this signed offset. A saved change applies to the next aim or probe scan."></span></span>
+                <input id="arm-probe-offset" type="number" min="-180" max="180" step="any" required readonly></label>
+              <button id="arm-probe-offset-save" type="button" class="primary" disabled>Save on car</button>
+            </div>
+            <p id="arm-probe-offset-status" class="status-msg" role="status">Waiting for car settings.</p>
+          </section>
         </div>
         <details class="set-more"><summary>Speed and acceleration</summary>
           <div class="set-more-body">

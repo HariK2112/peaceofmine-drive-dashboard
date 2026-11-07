@@ -9,12 +9,12 @@
   const pressureHistory = Array(150).fill(0.05);
   const mock = {owner: false, armed: false, sweep: false, linear: 0, angular: 0, pose: {x: 0, y: 0, yaw: 0},
     inspection: {phase: 'IDLE', active: false, message: '', completed: 0, total: 0, confirmed_angle_deg: null, points: []},
-    phaseAt: 0, depth: 0, cycle: false, calibrating: false, homing: 0, homed: true};
+    phaseAt: 0, armAngle: 0, depth: 0, cycle: false, calibrating: false, homing: 0, homed: true};
   window.__mockCar = mock; // preview-only handle for scripted checks
   const capture = {device:'auto', width:640, height:480, framerate:30, pixel_format:'mjpeg2rgb'};
   mock.settings = {
     gnss: {max_wait_s: 5, target_accuracy_m: 1},
-    inspection:{passes:2},
+    inspection:{passes:2}, probe_alignment:{offset_deg:30},
     marking:{duration_s:2, idle_percent:0, active_percent:100, manual_percent:0},
     saved:true, driving:{input:'controller',forward_percent:100,reverse_percent:100},
     display:{mapping:'auto',sensitivity:100,wheel:{steering:0,throttle:1,brake:2,deadman:0,invertSteering:false,
@@ -40,10 +40,12 @@
   // Simulate two seconds per confirmation pass and per probe point.
   function stepInspection(t) {
     const i = mock.inspection, dt = t - mock.phaseAt;
+    i.probe_offset_deg = mock.settings.probe_alignment.offset_deg;
+    i.probe_reachable = Number.isFinite(i.confirmed_angle_deg) && Math.abs(i.confirmed_angle_deg - i.probe_offset_deg) <= 45;
     if (i.phase === 'CONFIRMING') {
       i.progress = Math.min(i.total, dt / 2);
       i.completed = Math.floor(i.progress);
-      if (i.completed >= i.total) Object.assign(i, {phase: 'CONFIRMED', active: false, message: '', confirmed_angle_deg: 6, probe_reachable: true, progress:i.total});
+      if (i.completed >= i.total) Object.assign(i, {phase: 'CONFIRMED', active: false, message: '', confirmed_angle_deg: 6, probe_reachable: Math.abs(6-i.probe_offset_deg) <= 45, progress:i.total});
     } else if (i.phase === 'PROBING') {
       const point = Math.floor(dt / 2), within = (dt % 2) / 2;
       const contact = mockContact();
@@ -77,13 +79,13 @@
   }
 
   function detectorVoltage(t) {
-    const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : 0;
+    const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : mock.armAngle;
     const nearTarget = Math.exp(-((mock.pose.x - 8) ** 2) / 2);
     return (40 + 120 * nearTarget * Math.cos(angle * Math.PI / 180) ** 2 + 4 * Math.sin(t * 7)) * 3.3 / 255;
   }
   function telemetry() {
     const t = (performance.now() - started) / 1000;
-    const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : 0;
+    const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : mock.armAngle;
     const assigned = adcConfig.channels.find(channel => channel.enabled && ['detector','both'].includes(routes[channel.mux]));
     const rawVolts = assigned?.mux === 6 ? detectorVoltage(t) : .2;
     const raw = rawVolts * 255 / 3.3;
@@ -109,7 +111,9 @@
         cmd_vel_topic: 'cmd_vel', timeout_ms: 300, client_count: 1, you_control_owner: mock.owner,
         control_owner_present: mock.owner, calibrating: mock.calibrating, max_velocity_mps: 0.8, max_yaw_rate_rad_s: 1.4, pump_active: pump.mode !== 'idle'},
       robot: {...mock.pose, speed_mps: Math.abs(mock.linear), stationary: mock.linear === 0, odometry_fresh: true, pose_fresh: true},
-      detector: {signal_ratio: ratio, threshold_ratio: 1, detected: ratio >= 1, fresh: true, fixture_angle_deg: angle,
+      detector: {latest_peak: Number.isFinite(mock.inspection.confirmed_angle_deg)
+          ? {angle_deg:mock.inspection.confirmed_angle_deg, signal:1, fresh:true} : null,
+        signal_ratio: ratio, threshold_ratio: 1, detected: ratio >= 1, fresh: true, fixture_angle_deg: angle,
         sweep_enabled: mock.sweep, sweep_speed_deg_s: 36, sweep_speed_min: 5, sweep_speed_max: 180, beam_half_angle_deg: 45,
         beam_min_angle_deg: -45, beam_max_angle_deg: 45, beam: [],
         sensor: {available: true, fresh: true, age_ms: 20, rate_hz: 50, received: Math.round(t * 50), invalid_lines: 0,
@@ -178,7 +182,7 @@
         this.emit({type:'adc_result',ok:true,message:'Applied in preview.'});
         return;
       }
-      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection'].includes(m.section)) {
+      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection','probe_alignment'].includes(m.section)) {
         mock.settings[m.section] = m.value;
         this.emit({type:'settings_result',section:m.section,ok:true,message:'Saved in preview.'});
         return;
@@ -194,6 +198,14 @@
         }
         return;
       }
+      if (m.type === 'align_probe' && !mock.inspection.active) {
+        const angle = m.target_bearing_deg - mock.settings.probe_alignment.offset_deg;
+        if (Number.isFinite(angle) && Math.abs(angle) <= 45) {
+          mock.armAngle = angle;
+          mock.sweep = false;
+        }
+        return;
+      }
       if (m.type === 'sweep_enabled') { mock.sweep = !!m.enabled; return; }
       if (m.type === 'calibration_begin' || m.type === 'calibration_end') { stopPump(); mock.calibrating = m.type === 'calibration_begin'; mock.homing = 0; return; }
       if (m.type === 'arm_servo' && m.role === 'probe' && m.action === 'home' && m.held) { mock.calibrating = true; if (++mock.homing > 15) mock.homed = true; return; }
@@ -202,9 +214,17 @@
       if (m.type === 'inspection') {
         const t = (performance.now() - started) / 1000;
         if (m.action === 'stop') Object.assign(mock.inspection, {phase: 'STOPPED', active: false, message: 'Inspection stopped.'}), mock.cycle = false, mock.depth = 0;
-        if (m.action === 'confirm') Object.assign(mock.inspection, {phase: 'CONFIRMING', active: true, total: mock.settings.inspection.passes, completed: 0, progress: 0, points: [], probe_angles_deg: [], probe_target_depth_mm: null, probe_target_bearing_deg:null, probe_arm_center_deg:null, message: ''});
-        if (m.action === 'probe_scan') mock.pointResult = null;
-        if (m.action === 'probe_scan') Object.assign(mock.inspection, {phase: 'PROBING', active: true, total: 7, completed: 0, progress: 0, points: [], probe_angles_deg: [-15,-10,-5,0,5,10,15].map(offset => mock.inspection.confirmed_angle_deg + offset), probe_target_bearing_deg: mock.inspection.confirmed_angle_deg, probe_arm_center_deg:mock.inspection.confirmed_angle_deg-45, probe_target_depth_mm: m.depth_mm, message: ''});
+        if (m.action === 'confirm') Object.assign(mock.inspection, {phase: 'CONFIRMING', active: true, total: mock.settings.inspection.passes, completed: 0, progress: 0, points: [], probe_angles_deg: [], probe_target_depth_mm: null, probe_target_bearing_deg:null, probe_arm_center_deg:null, scan_offset_deg:null, message: ''});
+        if (m.action === 'probe_scan') {
+          const bearing = mock.inspection.confirmed_angle_deg, offset = mock.settings.probe_alignment.offset_deg;
+          const center = bearing - offset;
+          if (!Number.isFinite(bearing) || Math.abs(center) > 45) return;
+          const angles = [...new Set([-15,-10,-5,0,5,10,15].map(delta => Math.max(-45, Math.min(45, center+delta))))];
+          mock.pointResult = null;
+          Object.assign(mock.inspection, {phase:'PROBING', active:true, total:angles.length, completed:0, progress:0,
+            points:[], probe_angles_deg:angles.map(angle => angle+offset), probe_target_bearing_deg:bearing,
+            probe_arm_center_deg:center, scan_offset_deg:offset, probe_target_depth_mm:m.depth_mm, message:''});
+        }
         mock.phaseAt = t;
       }
     }

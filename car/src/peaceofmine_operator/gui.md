@@ -356,7 +356,7 @@ uses the even pass count saved under Setup → Metal detector (2 by default) at 
 local noise and compares their measured half-height footprints. A majority must share at least 50% overlap and include both sweep directions.
 The result averages their forward and return median centers. The probe scan covers the confirmed target in 5° steps
 over ±15°, clipped to the saved arm limits and corrected for the detector/probe
-mounting offset. The scan map labels the confirmed bearing and the commanded arm center. Each completed marker shows measured contact depth or the configured target depth reached. A dash indicates an unavailable depth. Contact or maximum depth ends each descent; the probe retracts
+mounting offset saved under Setup → Arm (default 30°). To calibrate from an existing scan, subtract the arm angle that physically centered the probe from the confirmed detector bearing. Each new scan uses the saved offset for all its points. The scan map labels the confirmed bearing and the commanded arm center. Each completed marker shows measured contact depth or the configured target depth reached. A dash indicates an unavailable depth. Contact or maximum depth ends each descent; the probe retracts
 before the next angle. Stop inspection cancels the sequence while retaining the
 dashboard control lease. Global STOP and RC/session loss cancel outstanding goals.
 

@@ -70,6 +70,31 @@ assert($('arm-servo-id').value === '2', 'telemetry preserves pending selection')
 state.arm_servo = {discovered_servos: [], scanning: true};
 updateArmSettings();
 assert($('arm-servo-id').value === '' && $('arm-select-id').disabled, 'lost adapter clears selection');
+const offsetInput = $('arm-probe-offset'), offsetSave = $('arm-probe-offset-save');
+const previousSettings = state.settings, beforeOffset = sent.length;
+state.connected=true; state.drive.you_control_owner=true; state.settings={}; updateAlignmentSettings();
+assert(!offsetInput.value && offsetSave.disabled, 'missing car alignment settings cannot be saved');
+state.settings.probe_alignment={offset_deg:30}; updateHud();
+assert(offsetInput.value==='30' && !offsetInput.readOnly && offsetSave.disabled && sent.length===beforeOffset, 'car default loads without writing or enabling a redundant save');
+state.drive.you_control_owner=false; updateAlignmentSettings();
+assert(offsetInput.readOnly && offsetSave.disabled, 'spectator sees stored detector-to-probe offset read-only');
+state.drive.you_control_owner=true; updateAlignmentSettings();
+const editOffset = value => { offsetInput.value=value; offsetInput.dispatchEvent(new Event('input')); };
+for (const invalid of ['', '181', '-181']) { editOffset(invalid); offsetSave.click(); assert(offsetSave.disabled && sent.length===beforeOffset,'invalid offset cannot send'); }
+editOffset('-17.25'); updateHud();
+assert(offsetInput.value==='-17.25' && !offsetSave.disabled, 'periodic telemetry preserves signed fractional draft');
+state.settings.probe_alignment=null; updateAlignmentSettings();
+assert(offsetInput.value==='-17.25' && offsetSave.disabled, 'temporary loss of settings freezes the draft');
+state.settings.probe_alignment={offset_deg:25}; updateAlignmentSettings();
+assert(offsetInput.value==='-17.25' && !offsetSave.disabled && $('arm-probe-offset-status').textContent.includes('25°'), 'a shared settings update preserves local edits and identifies the saved value');
+offsetSave.click();
+assert(sent.at(-1).type==='settings' && sent.at(-1).section==='probe_alignment' && sent.at(-1).value.offset_deg===-17.25 && offsetSave.disabled,'save sends the signed offset in degrees');
+socket.onmessage({data:JSON.stringify({type:'settings_result',section:'probe_alignment',ok:false,message:'Save rejected'})});
+assert(offsetInput.value==='-17.25' && !offsetSave.disabled && $('arm-probe-offset-status').textContent==='Save rejected','rejected offset remains editable for retry');
+offsetSave.click(); state.settings.probe_alignment.offset_deg=-17.25; updateHud();
+assert(offsetInput.value==='-17.25' && offsetSave.disabled && $('arm-probe-offset-status').textContent.includes('Saved on car'),'telemetry confirms applied offset');
+for(const limit of ['-180','0','180']) { editOffset(limit); assert(!offsetSave.disabled, 'signed endpoints and zero are valid'); }
+state.drive.you_control_owner=false;state.settings=previousSettings;updateAlignmentSettings();
 const pad = {index: 0, id: 'Test wheel', mapping: '', axes: [0, 1, 1], buttons: [{pressed: true, value: 1}]};
 const mapping = {steering: 0, throttle: 1, brake: 2, deadman: 0, deadzone: .05, invertThrottle: true, invertBrake: true};
 assert(readWheel(pad, mapping).linear === 0, 'released pedals');

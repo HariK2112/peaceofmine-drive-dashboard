@@ -170,10 +170,10 @@ class InspectionTest(unittest.TestCase):
         self.confirm()
         self.flow.probe(-90.,90.,80.)
         self.assertEqual(self.flow.snapshot()['probe_target_bearing_deg'], 3.)
-        self.assertEqual(self.flow.snapshot()['probe_arm_center_deg'], -42.)
+        self.assertEqual(self.flow.snapshot()['probe_arm_center_deg'], -27.)
         for index,angle in enumerate((-12.,-7.,-2.,3.,8.,13.,18.)):
             self.tick()
-            self.assertEqual(self.execute.call_args.args[:4],('arm','angle',angle-45.,5.))
+            self.assertEqual(self.execute.call_args.args[:4],('arm','angle',angle-30.,5.))
             count=self.execute.call_count;self.tick()
             self.assertEqual(self.execute.call_count,count)
             self.complete();self.tick()
@@ -186,19 +186,39 @@ class InspectionTest(unittest.TestCase):
         self.assertIsNone(self.flow.points[1]['contact_depth_mm'])
 
     def test_probe_positions_are_clipped_and_deduplicated(self):
-        self.flow.confirmed_angle=88.
+        self.flow.confirmed_angle=73.
         self.flow.probe(-45.,45.,50.)
         self.assertEqual([target for kind,target in self.flow.queue if kind=='position'],[28.,33.,38.,43.,45.])
         self.assertEqual(self.flow.total,5)
-        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [73., 78., 83., 88., 90.])
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [58., 63., 68., 73., 75.])
         self.assertEqual(self.flow.snapshot()['probe_target_depth_mm'], 50.)
         self.flow.stop('Interrupted')
-        self.assertEqual(self.flow.snapshot()['probe_target_bearing_deg'], 88.)
+        self.assertEqual(self.flow.snapshot()['probe_target_bearing_deg'], 73.)
         self.assertEqual(self.flow.snapshot()['probe_arm_center_deg'], 43.)
-        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [73., 78., 83., 88., 90.])
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [58., 63., 68., 73., 75.])
         self.flow.confirm(-45., 45., 25.)
         self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [])
         self.assertIsNone(self.flow.snapshot()['probe_target_depth_mm'])
+
+    def test_operator_observed_center_and_offset_changes_between_scans(self):
+        self.flow.confirmed_angle = -27.4
+        self.flow.probe(-90., 90., 80.)
+        self.assertAlmostEqual(self.flow.probe_arm_center, -57.4)
+        planned = self.flow.snapshot()['probe_angles_deg']
+        self.flow.probe_offset = -12.5
+        for bearing in planned:
+            self.tick()
+            self.assertAlmostEqual(self.execute.call_args.args[2], bearing - 30.)
+            self.complete()
+            self.tick()
+            self.complete(contact=False)
+        snapshot = self.flow.snapshot()
+        self.assertEqual([p['angle_deg'] for p in snapshot['points']], planned)
+        self.assertAlmostEqual(snapshot['probe_target_bearing_deg'], -27.4)
+        self.assertEqual(snapshot['scan_offset_deg'], 30.)
+        self.flow.probe(-90., 90., 80.)
+        self.assertAlmostEqual(self.flow.probe_arm_center, -14.9)
+        self.assertEqual(self.flow.snapshot()['scan_offset_deg'], -12.5)
 
     def test_target_outside_probe_reach_requires_repositioning(self):
         self.flow.confirmed_angle=-20.
@@ -238,19 +258,19 @@ class InspectionTest(unittest.TestCase):
         self.cancel.assert_called_once()
 
     def test_failed_operation_is_not_reported_as_clear(self):
-        self.flow.confirmed_angle=45.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick()
+        self.flow.confirmed_angle=30.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick()
         self.execute.call_args.args[-1](dict(success=False,message='Contact input lost'))
         self.assertEqual(self.flow.phase,'ERROR')
         self.assertEqual(self.flow.points,[])
         self.assertEqual(self.flow.message,'Contact input lost')
-        self.assertEqual(self.flow.confirmed_angle,45.)
+        self.assertEqual(self.flow.confirmed_angle,30.)
         self.flow.probe(-10.,10.,80.)  # Explicit retry uses the confirmed bearing.
         self.assertEqual(self.flow.completed,0)
         self.flow.stop('Vehicle moved')
         self.assertIsNone(self.flow.confirmed_angle)
 
     def test_invalid_contact_depth_fails(self):
-        self.flow.confirmed_angle=45.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick()
+        self.flow.confirmed_angle=30.;self.flow.probe(-10.,10.,80.);self.tick();self.complete();self.tick()
         self.complete(contact=True,contact_depth_mm=math.nan)
         self.assertEqual(self.flow.phase,'ERROR')
         self.assertEqual(self.flow.points,[])
@@ -258,7 +278,7 @@ class InspectionTest(unittest.TestCase):
     def test_probe_requires_confirmation_and_valid_depth(self):
         with self.assertRaisesRegex(ValueError,'Confirm'):
             self.flow.probe(-10.,10.,80.)
-        self.flow.confirmed_angle=45.
+        self.flow.confirmed_angle=30.
         for depth in (math.nan,0.,-1.):
             with self.assertRaises(ValueError):
                 self.flow.probe(-10.,10.,depth)

@@ -539,30 +539,20 @@ class ArmControllerAngleTest(unittest.TestCase):
 
 class KinematicAlignmentTest(unittest.TestCase):
     def test_probe_alignment_math_and_reachability(self):
-        # Detector is 45° to the right of the probe.
-        # Pivot formula: theta_pivot = theta_peak - 45°
-        # With arm travel limits [-45°, +45°]:
-        # Minimum reachable peak = -45° + 45° = 0°
-        # 1. Target detected at +30° (left):
-        peak_angle = 30.0
-        pivot_angle = peak_angle - 45.0 # -15.0°
-        self.assertEqual(pivot_angle, -15.0)
-        self.assertTrue(-45.0 <= pivot_angle <= 45.0)
-
-        # 2. Target detected at 0° (ahead):
-        peak_angle = 0.0
-        pivot_angle = peak_angle - 45.0 # -45.0°
-        self.assertEqual(pivot_angle, -45.0)
-        self.assertTrue(-45.0 <= pivot_angle <= 45.0)
-
-        # 3. Target detected at -20° (right, dead zone):
-        peak_angle = -20.0
-        pivot_angle = peak_angle - 45.0 # -65.0°
-        self.assertEqual(pivot_angle, -65.0)
-        self.assertFalse(-45.0 <= pivot_angle <= 45.0)
-        # Deficit to reach:
-        deficit = -45.0 - pivot_angle
-        self.assertEqual(deficit, 20.0) # Rover must steer 20° right to reach target
+        from peaceofmine_operator.inspection import InspectionWorkflow
+        for bearing, expected_arm in ((30., 0.), (0., -30.)):
+            flow = InspectionWorkflow(None, None, None)
+            flow.lower, flow.upper = -45., 45.
+            flow.confirmed_angle = bearing
+            self.assertTrue(flow.snapshot()['probe_reachable'])
+            flow.probe(flow.lower, flow.upper, 80.)
+            self.assertEqual(flow.probe_arm_center, expected_arm)
+        flow = InspectionWorkflow(None, None, None)
+        flow.lower, flow.upper = -45., 45.
+        flow.confirmed_angle = -20.
+        self.assertFalse(flow.snapshot()['probe_reachable'])
+        flow.probe_offset = 20.
+        self.assertTrue(flow.snapshot()['probe_reachable'])
 
 
 if __name__ == '__main__':

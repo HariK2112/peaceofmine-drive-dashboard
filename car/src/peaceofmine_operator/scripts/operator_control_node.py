@@ -19,7 +19,7 @@ from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool, Float32, String
 from peaceofmine_operator import marking_settings
 from peaceofmine_operator.rc_safety import RcSafety
-from peaceofmine_operator import driving_settings, inspection
+from peaceofmine_operator import driving_settings, inspection, probe_alignment
 from peaceofmine_operator.detector import DetectorTelemetry
 from peaceofmine_operator.inspection import InspectionWorkflow
 from peaceofmine_interfaces.action import ActuatorOperation
@@ -168,6 +168,8 @@ class OperatorControl(Node):
         try:
             settings = json.loads(msg.data)
             self._confirmation_passes = inspection.validate(settings.get('inspection', inspection.DEFAULTS))['passes']
+            alignment = settings.get('probe_alignment', probe_alignment.DEFAULTS)
+            self._inspection.probe_offset = probe_alignment.validate(alignment)['offset_deg']
             self._alert_options = settings['display']['searchAlert']
         except (ValueError, KeyError, TypeError):
             pass
@@ -853,7 +855,7 @@ class OperatorControl(Node):
                 self._calibrating = message_type == 'calibration_begin'
                 flush_drive = True
             elif message_type in ('adc', 'settings'):
-                next_scan_setting = message_type == 'settings' and payload.get('section') == 'inspection'
+                next_scan_setting = message_type == 'settings' and payload.get('section') in ('inspection', 'probe_alignment')
                 if self._inspection.active and not next_scan_setting:
                     self._stop_motion_locked()
                 publisher = self._adc_command_pub if message_type == 'adc' else self._settings_command_pub
@@ -991,9 +993,15 @@ class OperatorControl(Node):
                         return {'type': 'error', 'message': 'Select a connected arm servo in Setup first.'}
                     if not self._arm_state.get('calibration'):
                         return {'type': 'error', 'message': 'Record and apply arm limits in Setup before positioning arm.'}
-                angle = float(payload.get('angle_deg', 0.0))
-                if not math.isfinite(angle):
-                    return {'type': 'error', 'message': 'Target angle must be finite'}
+                if 'target_bearing_deg' in payload:
+                    bearing = payload['target_bearing_deg']
+                    if type(bearing) not in (float, int) or not math.isfinite(bearing):
+                        return {'type': 'error', 'message': 'Target bearing must be finite'}
+                    angle = bearing - self._inspection.probe_offset
+                else:  # Older clients send the already-converted arm command.
+                    angle = payload.get('angle_deg')
+                    if type(angle) not in (float, int) or not math.isfinite(angle):
+                        return {'type': 'error', 'message': 'Target angle must be finite'}
                 self._permission_pub.publish(Bool(data=True))
                 self._arm_command_pub.publish(command_message(dict(action='angle', angle_deg=angle, request_id=payload.get('request_id'))))
             elif message_type == 'pump_mark':

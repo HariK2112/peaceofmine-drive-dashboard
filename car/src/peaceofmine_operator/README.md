@@ -100,7 +100,7 @@ wheel above the camera. The header STOP stops outputs and releases control.
 
 1. **Search:** drive and sweep at 36°/s by default. In WASD mode, click the camera and hold Space to sweep.
 2. **Confirm arc:** stop the vehicle and request 2, 4, 6 or 8 alternating passes (Setup → Metal detector) across the saved arm range at the selected search speed. Each pass finds a broad arc above its local noise, independent of the absolute ADC baseline. A majority of passes from both directions must overlap at half height by at least 50% of their combined span. The center averages the forward and return median angles to balance filter lag.
-3. **Probe scan:** probe seven bearings from −15° to +15° around the confirmed location at 5° spacing, clipped to the saved arm limits. The established 45° detector/probe mounting offset is applied. Each point descends slowly until contact or maximum depth, records the result, retracts fully, then moves to the next point.
+3. **Probe scan:** probe seven bearings from −15° to +15° around the confirmed location at 5° spacing, clipped to the saved arm limits. The car subtracts the detector-to-probe offset saved in Setup → Arm (default 30°) from the target bearing to obtain the arm command. Each point descends slowly until contact or maximum depth, records the result, retracts fully, then moves to the next point.
 
 Set **Max depth** and **Contact limit (V)** under **Probe controls**. Choose Above
 or Below for the contact condition and save it. Saved voltage thresholds,

@@ -4,11 +4,9 @@ from itertools import combinations
 from statistics import median
 import math
 import time
+from . import probe_alignment
 from .sweep_arc import sweep_arc
 
-
-# Fixed mounting geometry already used by manual detector-to-probe alignment.
-PROBE_OFFSET_DEG = 45.
 
 
 DEFAULTS = {'passes': 2}
@@ -45,6 +43,7 @@ def matching_arcs(passes):
 class InspectionWorkflow:
     def __init__(self, execute, cancel, clear_peak, clock=time.monotonic):
         self.execute, self.cancel_io, self.clear_peak, self.clock = execute, cancel, clear_peak, clock
+        self.probe_offset = probe_alignment.DEFAULTS['offset_deg']
         self.generation = 0
         self.phase, self.message = 'IDLE', 'Search while driving, then confirm a detection.'
         self.confirmed_angle = None
@@ -57,6 +56,7 @@ class InspectionWorkflow:
         self.probe_angles = []
         self.probe_depth = None
         self.probe_arm_center = None
+        self.scan_offset = None
         self.arc_overlap = None
         self.queue = deque()
         self.pending = None
@@ -75,10 +75,11 @@ class InspectionWorkflow:
                     completed=self.completed, total=self.total, progress=self.progress,
                     confirmed_angle_deg=self.confirmed_angle, arc_overlap_ratio=self.arc_overlap,
                     probe_angles_deg=list(self.probe_angles), probe_target_depth_mm=self.probe_depth,
+                    probe_offset_deg=self.probe_offset, scan_offset_deg=self.scan_offset,
                     probe_arm_center_deg=self.probe_arm_center,
-                    probe_target_bearing_deg=(self.probe_arm_center + PROBE_OFFSET_DEG
+                    probe_target_bearing_deg=(self.probe_arm_center + self.scan_offset
                                               if self.probe_arm_center is not None else None),
-                    probe_reachable=self.confirmed_angle is not None and self.lower <= self.confirmed_angle-PROBE_OFFSET_DEG <= self.upper, points=list(self.points), passes=list(self.passes))
+                    probe_reachable=self.confirmed_angle is not None and self.lower <= self.confirmed_angle - self.probe_offset <= self.upper, points=list(self.points), passes=list(self.passes))
 
     def confirm(self, lower, upper, speed, passes=2):
         validate({'passes': passes})
@@ -96,6 +97,7 @@ class InspectionWorkflow:
         self.probe_angles = []
         self.probe_depth = None
         self.probe_arm_center = None
+        self.scan_offset = None
         self.total = passes
         self.queue.append(('start', lower))
         self.queue.extend(('pass', upper if index % 2 == 0 else lower) for index in range(passes))
@@ -106,7 +108,7 @@ class InspectionWorkflow:
             raise ValueError('Confirm a detection before starting the probe scan')
         if not all(math.isfinite(v) for v in (lower, upper, depth)) or lower >= upper or depth <= 0:
             raise ValueError('Valid arm limits and maximum probe depth are required')
-        center = self.confirmed_angle-PROBE_OFFSET_DEG
+        center = self.confirmed_angle - self.probe_offset
         if not lower <= center <= upper:
             raise ValueError('Confirmed target is outside probe reach. Reposition the rover and confirm again.')
         angles = sorted({round(max(lower, min(upper, center+offset)), 4)
@@ -114,7 +116,8 @@ class InspectionWorkflow:
         self._begin('PROBING')
         self.lower, self.upper = lower, upper
         self.points = []
-        self.probe_angles = [angle + PROBE_OFFSET_DEG for angle in angles]
+        self.scan_offset = self.probe_offset
+        self.probe_angles = [angle + self.scan_offset for angle in angles]
         self.probe_depth = depth
         self.probe_arm_center = center
         self.total = len(angles)
@@ -191,9 +194,9 @@ class InspectionWorkflow:
             self.message = f'Confirmation pass {self.completed+1} of {self.total} at {self.confirm_speed:g}°/s.'
         elif kind == 'position':
             self.angle = target
-            self.message = f'Position {self.completed+1} of {self.total}: moving to {target+PROBE_OFFSET_DEG:.1f}°.'
+            self.message = f'Position {self.completed+1} of {self.total}: moving to {target+self.scan_offset:.1f}°.'
         elif kind == 'probe':
-            self.message = f'Position {self.completed+1} of {self.total}: probing at {self.angle+PROBE_OFFSET_DEG:.1f}°.'
+            self.message = f'Position {self.completed+1} of {self.total}: probing at {self.angle+self.scan_offset:.1f}°.'
         generation = self.generation
 
         def complete(result):
@@ -235,7 +238,7 @@ class InspectionWorkflow:
                 if contact and (type(depth) not in (int,float) or not math.isfinite(depth) or depth < 0):
                     self.stop('Probe returned an invalid contact depth', error=True)
                     return
-                self.points.append(dict(angle_deg=self.angle+PROBE_OFFSET_DEG, status='CONTACT' if contact else 'CLEAR',
+                self.points.append(dict(angle_deg=self.angle+self.scan_offset, status='CONTACT' if contact else 'CLEAR',
                                         contact_depth_mm=depth))
                 self.completed += 1
                 self.progress = float(self.completed)
