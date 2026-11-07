@@ -129,16 +129,18 @@
             </div>
           </section>
           <section class="pane-section probe-load" aria-labelledby="probe-map-heading">
-            <div class="section-head"><h2 id="probe-map-heading">Probe scan map <span class="tip" data-tip="Each marker represents one planned probe position. The upper label is the bearing. The lower label shows measured contact depth or the depth target reached. A dash means depth is unknown. Positive bearings are on the left."></span></h2><span id="probe-map-depth" class="head-note"></span></div>
+            <div class="section-head"><h2 id="probe-map-heading">Probe scan map <span class="tip" data-tip="Each marker represents a planned probe position. Read its bearing and depth on the fan or in the grid below. A dash means depth is unknown. Positive bearings are on the left."></span></h2><span id="probe-map-depth" class="head-note"></span></div>
             <dl id="probe-map-centers" class="probe-map-centers" hidden>
               <div><dt>Target bearing</dt><dd id="probe-map-bearing">—</dd></div>
               <div><dt>Commanded arm center</dt><dd id="probe-map-arm-center">—</dd></div>
+              <div><dt>Scan plan</dt><dd id="probe-map-plan">—</dd></div>
             </dl>
             <div class="probe-scan-plot">
               <svg id="probe-scan-map" role="img" viewBox="0 0 460 134" aria-label="Probe scan positions" hidden></svg>
               <span id="probe-map-empty" class="note">Waiting for a probe scan.</span>
             </div>
             <div class="probe-map-legend" aria-label="Scan result legend"><span class="map-contact">◆ Early contact</span><span class="map-clear">● Target reached</span><span class="map-unknown">○ Pending / unknown</span></div>
+            <ul id="probe-map-readings" class="probe-map-readings" aria-label="Depth by probe bearing" hidden></ul>
             <p class="section-foot probe-sensor-readout"><span>Live contact sensor <span class="tip" data-tip="The selected, filtered ADC channel detects contact during descent. The motor readings below show servo load and current."></span></span><strong id="probe-map-sensor">Waiting for ADC input</strong></p>
             <details id="probe-diagnostics" class="more"><summary>More readings · probe motor</summary>
               <div class="section-head pressure-heading"><h3 id="load-heading">Motor load</h3><span class="head-note">Last 30 s</span><strong id="probe-pressure" class="head-value">—</strong></div>
@@ -238,8 +240,8 @@
               <small id="mode-align-help" class="step-note"></small>
             </div>
             <div class="operation-action">
-              <button id="mode-probe-btn" type="button" class="mode-btn" disabled title="Probe up to seven spots at 5° intervals across ±15° of the confirmed bearing">
-                <span class="mode-num">3</span><span class="mode-copy"><span class="mode-text">Probe scan</span><span class="mode-desc">Probe up to 7 spots around the hit</span></span>
+              <button id="mode-probe-btn" type="button" class="mode-btn" disabled title="Probe the planned positions around the confirmed bearing">
+                <span class="mode-num">3</span><span class="mode-copy"><span class="mode-text">Probe scan</span><span class="mode-desc">Probe the planned positions around the hit</span></span>
                 <span id="mode-probe-pill" class="badge neutral">SETUP REQUIRED</span>
               </button>
               <small id="mode-probe-help" class="step-note"></small>
@@ -488,7 +490,7 @@
             </div>
             <div class="card-actions"><button type="button" id="arm-apply-limits" class="primary">Save limits</button></div>
           </section>
-          <section class="set-card span-all">
+          <section class="set-card">
             <header class="card-head"><h4>Probe alignment</h4></header>
             <div class="inline-fields">
               <label class="field"><span class="field-name">Detector-to-probe offset <span class="unit">°</span> <span class="tip" data-tip="Arm command = detector bearing minus this signed offset. A saved change applies to the next aim or probe scan."></span></span>
@@ -496,6 +498,16 @@
               <button id="arm-probe-offset-save" type="button" class="primary" disabled>Save on car</button>
             </div>
             <p id="arm-probe-offset-status" class="status-msg" role="status">Waiting for car settings.</p>
+          </section>
+          <section class="set-card">
+            <header class="card-head"><h4>Probe scan</h4></header>
+            <div class="fields-2">
+              <label class="field"><span class="field-name">Point count</span><input id="arm-scan-count" type="number" min="1" max="31" step="1" required readonly></label>
+              <label class="field"><span class="field-name">Point spacing <span class="unit">°</span></span><input id="arm-scan-spacing" type="number" min="0.1" max="180" step="any" required readonly></label>
+            </div>
+            <output id="arm-scan-coverage" class="meta" for="arm-scan-count arm-scan-spacing"></output>
+            <div class="card-actions"><button id="arm-scan-save" type="button" class="primary" disabled>Save on car</button></div>
+            <p id="arm-scan-status" class="status-msg" role="status">Waiting for car settings.</p>
           </section>
         </div>
         <details class="set-more"><summary>Speed and acceleration</summary>

@@ -451,12 +451,8 @@ function connect() {
       recordLatency(message.probe_id);
       return;
     }
-    if (message.type === 'settings_result' && message.section === 'probe_alignment') {
-      if (alignmentPending && !message.ok) {
-        alignmentPending = null;
-        alignmentMessage = message.message || 'Offset save rejected.';
-      }
-      updateAlignmentSettings();
+    if (message.type === 'settings_result' && armSetupForms.has(message.section)) {
+      armSetupForms.get(message.section).result(message);
       return;
     }
     if (message.type === 'settings_result' && message.section === 'inspection') {
@@ -1022,13 +1018,37 @@ function returningProbePoint(inspection, probe) {
   return null;
 }
 
+function probePlanLabel(count, spacing, requested = count) {
+  if (!Number.isInteger(count) || count < 1) return '';
+  let label = count + (count === 1 ? ' position' : ' positions');
+  if (Number.isInteger(requested) && requested > count) label += ` in range of ${requested} requested`;
+  if (count > 1 && Number.isFinite(spacing) && spacing > 0) label += ` · ${spacing}° spacing`;
+  return label;
+}
+
+function recordedProbeSpacing(inspection) {
+  if (Number.isFinite(inspection.scan_spacing_deg)) return inspection.scan_spacing_deg;
+  // Older snapshots may only have the ordered bearings. Clipped intervals
+  // cannot establish the original setting when their spacing varies.
+  const angles = inspection.probe_angles_deg;
+  if (!Array.isArray(angles) || angles.length < 2 || !angles.every(Number.isFinite)) return null;
+  const spacing = angles[1] - angles[0];
+  return spacing > 0 && angles.slice(1).every((angle, i) => Math.abs(angle - angles[i] - spacing) < .001)
+    ? Number(spacing.toFixed(4)) : null;
+}
+
 function renderProbeScanMap(inspection, points) {
   const map = $('probe-scan-map');
+  const olderScan = points.length > 0 || inspection.phase === 'PROBING' || inspection.phase === 'COMPLETE';
+  const oldCount = olderScan && Number.isInteger(inspection.total) && inspection.total <= 31
+    ? Math.max(points.length, inspection.total) : points.length;
   const plan = Array.isArray(inspection.probe_angles_deg) && inspection.probe_angles_deg.length
-    ? inspection.probe_angles_deg : points.map(point => point?.angle_deg);
+    ? inspection.probe_angles_deg : Array.from({length:oldCount}, (_, i) => points[i]?.angle_deg);
+  $('probe-map-plan').textContent = probePlanLabel(plan.length, recordedProbeSpacing(inspection), inspection.scan_point_count);
+  const results = $('probe-map-readings');
   const target = inspection.probe_target_depth_mm;
   const bearing = inspection.probe_target_bearing_deg ?? inspection.confirmed_angle_deg;
-  const angleLabel = value => Number.isFinite(value) ? `${Number(value.toFixed(1))}°` : '—';
+  const angleLabel = value => Number.isFinite(value) ? `${Number(value.toFixed(3))}°` : '—';
   $('probe-map-centers').hidden = !plan.length;
   $('probe-map-bearing').textContent = angleLabel(bearing);
   $('probe-map-arm-center').textContent = angleLabel(inspection.probe_arm_center_deg);
@@ -1036,7 +1056,7 @@ function renderProbeScanMap(inspection, points) {
   map.toggleAttribute('hidden', !plan.length);
   $('probe-map-empty').hidden = !!plan.length;
   map.replaceChildren();
-  if (!plan.length) return;
+  if (!plan.length) { results.hidden = true; results.replaceChildren(); return; }
 
   const make = (tag, attributes, content) => {
     const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -1044,17 +1064,42 @@ function renderProbeScanMap(inspection, points) {
     if (content !== undefined) node.textContent = content;
     return node;
   };
-  // Discrete samples are spread across the fan in angle order, as in the legend.
-  const at = (index, radius) => {
-    const horizontal = plan.length === 1 ? 0 : (1 - 2 * index / (plan.length - 1)) * 186;
-    const angle = Math.asin(horizontal / 310);
-    return [230 + radius * Math.sin(angle), 345 - radius * Math.cos(angle)];
+  // Use one scale around the target bearing. A clipped scan stays on the
+  // correct side of the centerline and wide arcs can extend behind the arm.
+  const knownAngles = plan.filter(Number.isFinite);
+  const first = knownAngles.length ? Math.min(...knownAngles) : 0;
+  const last = knownAngles.length ? Math.max(...knownAngles) : 0;
+  const center = Number.isFinite(bearing) ? bearing : (first + last) / 2;
+  const radius = 700;
+  const at = (angle, r) => {
+    const radians = (angle - center) * Math.PI / 180;
+    return [-r * Math.sin(radians), radius - r * Math.cos(radians)];
   };
-  for (const radius of [275, 292, 310]) {
-    const from = at(0, radius), to = at(plan.length - 1, radius);
-    map.append(make('path', {class:'scan-ring', d:`M${from} A${radius} ${radius} 0 0 0 ${to}`}));
+  const steps = Math.min(180, Math.max(1, Math.ceil((last-first)/4)));
+  const arc = Array.from({length:steps+1}, (_, i) => first + (last-first)*i/steps);
+  const outline = arc.flatMap(angle => [at(angle, radius), at(angle, radius-65)]);
+  const side = Math.max(...outline.map(([x]) => Math.abs(x)));
+  const bottom = Math.max(90, ...outline.map(([, y]) => y));
+  const missing = plan.length-knownAngles.length;
+  const scale = Math.max(1, (2*side+76)/460, (bottom+52)/145);
+  const width = Math.max(460, 2*side+76*scale);
+  const height = bottom+(52+(missing ? 28 : 0))*scale;
+  map.setAttribute('viewBox', `${-width/2} ${-26*scale} ${width} ${height}`);
+  map.style.setProperty('--scan-label-size', `${12*scale}px`);
+  const positions = knownAngles.map(angle => at(angle, radius));
+  const overlap = positions.some(([x,y], i) => positions.slice(0,i).some(([x2,y2]) =>
+    Math.abs(x-x2) < 55*scale && Math.abs(y-y2) < 46*scale));
+  const dense = plan.length > 7 || missing > 0 || overlap;
+  results.hidden = !dense;
+  if (knownAngles.length) {
+    for (const r of [radius-40, radius-20, radius]) {
+      map.append(make('polyline', {class:'scan-ring', points:arc.map(angle => at(angle, r).join(',')).join(' ')}));
+    }
+    if (Number.isFinite(bearing)) map.append(make('path', {class:'scan-center', d:'M0,-14 V65'}));
   }
+  let unlocated = 0;
   const legend = [];
+  const rows = [];
   plan.forEach((angle, index) => {
     const point = points[index];
     const validAngle = Number.isFinite(angle);
@@ -1068,16 +1113,36 @@ function renderProbeScanMap(inspection, points) {
     const label = angleLabel(angle);
     const description = `${validAngle ? label : 'Angle unavailable'}: ${status}${point?.returning ? ' · retracting' : ''}`;
     legend.push(description);
-    const [x, y] = at(index, 310);
+    const [x, y] = validAngle ? at(angle, radius) : [(missing === 1 ? 0 : .5 - unlocated++/(missing-1))*width*.85, bottom+16*scale];
+    const size = 5*scale;
     const mark = make('g', {'data-result': hit ? 'contact' : clear ? 'clear' : 'unknown'});
     mark.append(make('title', {}, description));
-    mark.append(make('path', {class:'scan-ray', d:`M${at(index, 264)} L${x},${y}`}));
-    mark.append(hit ? make('path', {class:'map-contact', d:`M${x},${y-6} l6,6 -6,6 -6,-6 z`})
-      : make('circle', {class:clear ? 'map-clear' : 'map-unknown', cx:x, cy:y, r:5}));
-    mark.append(make('text', {x, y:y-12}, label));
-    mark.append(make('text', {class:'scan-depth', x, y:y+20}, depthLabel));
+    if (validAngle) mark.append(make('path', {class:'scan-ray', d:`M${at(angle, radius-65)} L${x},${y}`}));
+    mark.append(hit ? make('path', {class:'map-contact', d:`M${x},${y-size} l${size},${size} -${size},${size} -${size},-${size} z`})
+      : make('circle', {class:clear ? 'map-clear' : 'map-unknown', cx:x, cy:y, r:size}));
+    // Keep a single overview of the entire scan as the point count grows.
+    // The grid follows the fan from left to right and labels every marker.
+    if (!dense) mark.append(make('text', {x, y:y-12*scale}, label));
+    if (!dense) mark.append(make('text', {class:'scan-depth', x, y:y+20*scale}, depthLabel));
+    else {
+      const row = document.createElement('li');
+      row.dataset.result = mark.dataset.result;
+      row.setAttribute('aria-label', description);
+      row.title = description;
+      const symbol = document.createElement('span');
+      symbol.className = 'probe-map-symbol';
+      symbol.setAttribute('aria-hidden', 'true');
+      symbol.textContent = hit ? '◆' : clear ? '●' : '○';
+      const angleText = document.createElement('span');
+      angleText.textContent = label;
+      const depthText = document.createElement('strong');
+      depthText.textContent = depthLabel;
+      row.append(symbol, angleText, depthText);
+      rows.push(row);
+    }
     map.append(mark);
   });
+  results.replaceChildren(...rows.reverse());
   map.setAttribute('aria-label', 'Probe scan map. ' + legend.join('. '));
 }
 
@@ -1124,7 +1189,7 @@ function renderInspection() {
   $('inspection-points').parentElement.hidden = !points.length;
   const returning = returningProbePoint(inspection, probe);
   const mapPoints = returning ? [...points, returning] : points;
-  const key = JSON.stringify([mapPoints, inspection.probe_angles_deg, inspection.probe_target_depth_mm, inspection.probe_target_bearing_deg, inspection.probe_arm_center_deg, inspection.confirmed_angle_deg, phase]);
+  const key = JSON.stringify([mapPoints, inspection.probe_angles_deg, inspection.probe_target_depth_mm, inspection.probe_target_bearing_deg, inspection.probe_arm_center_deg, inspection.confirmed_angle_deg, inspection.total, inspection.scan_spacing_deg, inspection.scan_point_count, phase]);
   if (key === inspectionPointsKey) return;
   inspectionPointsKey = key;
   renderProbeScanMap(inspection, mapPoints);
@@ -1214,9 +1279,16 @@ function updateHud() {
   $('start-probing').title = cycleBlock;
   $('start-probing').textContent = probe.cycle_active ? (probe.cycle_phase === 'DESCENDING' ? 'Probing…' : 'Retracting…') : 'Probe once';
   $('mode-probe-btn').disabled = Boolean(scanBlock);
-  $('mode-probe-btn').title = scanBlock;
+  const scan = state.inspection;
+  const scanSettings = state.settings?.probe_scan;
+  const scanLabel = scan.phase === 'PROBING'
+    ? probePlanLabel(scan.probe_angles_deg?.length || scan.total, recordedProbeSpacing(scan), scan.scan_point_count)
+    : probePlanLabel(scanSettings?.point_count, scanSettings?.spacing_deg);
+  const scanDescription = scanLabel || 'Probe the planned positions around the hit';
+  setText($('mode-probe-btn').querySelector('.mode-desc'), scanDescription);
+  $('mode-probe-btn').title = scanBlock || scanDescription;
   $('mode-probe-btn').querySelector('.mode-text').textContent = state.inspection.phase === 'PROBING' ? (probe.cycle_active && probe.cycle_phase === 'RETRACTING' ? 'Retracting…' : 'Probe scan running') : 'Probe scan';
-  $('mode-probe-pill').textContent = state.inspection.phase === 'PROBING' ? 'RUNNING' : scanBlock ? 'BLOCKED' : '5° STEPS';
+  $('mode-probe-pill').textContent = state.inspection.phase === 'PROBING' ? 'RUNNING' : scanBlock ? 'BLOCKED' : 'READY';
   renderInspection();
   const inspectionStatus = state.inspection.phase !== 'IDLE';
   const scanStatus = $('inspection-status');
@@ -2787,38 +2859,92 @@ function initializeCameraSettings() {
   requestAnimationFrame(previewLoop);
 }
 
-let alignmentDirty = false;
-let alignmentPending = null;
-let alignmentMessage = '';
+function armSetupForm({section, fields, save, status, describe, invalid, applies, preview}) {
+  const inputs = Object.entries(fields).map(([key, id]) => [key, $(id)]);
+  const button = $(save), feedback = $(status);
+  let dirty = false, pending = null, message = '';
 
-function updateAlignmentSettings() {
-  const input = $('arm-probe-offset');
-  const saved = state.settings?.probe_alignment?.offset_deg;
-  const available = state.connected && Number.isFinite(saved);
-  const owner = state.connected && state.drive.you_control_owner;
-  if (!owner) {
-    alignmentPending = null;
-    alignmentDirty = false;
-    alignmentMessage = '';
-  } else if (alignmentPending) {
-    if (alignmentPending.value === saved) {
-      alignmentPending = null;
-      alignmentDirty = false;
-      alignmentMessage = 'Saved on car. Applies to the next aim or probe scan.';
-    } else if (performance.now() - alignmentPending.at > 4000) {
-      alignmentPending = null;
-      alignmentMessage = 'No save confirmation. Check the car settings and retry.';
+  function render() {
+    const saved = state.settings?.[section];
+    const available = state.connected && inputs.every(([key]) => Number.isFinite(saved?.[key]));
+    const owner = state.connected && state.drive.you_control_owner;
+    if (!owner) {
+      pending = null;
+      dirty = false;
+      message = '';
+    } else if (pending) {
+      if (available && inputs.every(([key]) => pending.value[key] === saved[key])) {
+        pending = null;
+        dirty = false;
+        message = 'Saved on car. ' + applies;
+      } else if (performance.now() - pending.at > 4000) {
+        pending = null;
+        message = 'No save confirmation. Check the car settings and retry.';
+      }
+    }
+    for (const [key, input] of inputs) {
+      const value = available ? String(saved[key]) : '';
+      if (!dirty && input.value !== value) input.value = value;
+      input.readOnly = !owner || !available || Boolean(pending);
+    }
+    const valid = inputs.every(([, input]) => Number.isFinite(input.valueAsNumber) && input.validity.valid);
+    const changed = available && inputs.some(([key, input]) => input.valueAsNumber !== saved[key]);
+    button.disabled = !owner || !available || Boolean(pending) || !valid || !changed;
+    feedback.textContent = !available ? 'Waiting for car settings.'
+      : !owner ? 'Take control to edit.'
+      : pending ? 'Saving…' : message
+      || (!valid ? invalid : changed ? `Unsaved change. The car uses ${describe(saved)}.` : applies);
+    preview?.();
+  }
+
+  for (const [, input] of inputs) input.oninput = () => {
+    dirty = true;
+    message = '';
+    render();
+  };
+  button.onclick = () => {
+    if (button.disabled || !inputs.every(([, input]) => input.reportValidity())) return;
+    const value = Object.fromEntries(inputs.map(([key, input]) => [key, input.valueAsNumber]));
+    pending = {value, at:performance.now()};
+    send({type:'settings', section, value});
+    render();
+  };
+  return {render, result(reply) {
+    if (pending && !reply.ok) {
+      pending = null;
+      message = reply.message || 'Save rejected.';
+    }
+    render();
+  }};
+}
+
+function showScanCoverage() {
+  const count = $('arm-scan-count').valueAsNumber, spacing = $('arm-scan-spacing').valueAsNumber;
+  let description = '';
+  if (Number.isInteger(count) && count >= 1 && count <= 31 && spacing >= .1 && spacing <= 180) {
+    const edge = Number(((count - 1) * spacing / 2).toFixed(6));
+    if (count === 1) description = 'One point at the target bearing.';
+    else {
+      const centre = count % 2 ? 'Includes the target bearing.'
+        : `Nearest points are ±${Number((spacing / 2).toFixed(6))}° from the target.`;
+      description = `Requested span −${edge}° to +${edge}° from the target. ${centre}`;
     }
   }
-  if (!alignmentDirty && input.value !== String(available ? saved : '')) input.value = available ? saved : '';
-  input.readOnly = !owner || !available || Boolean(alignmentPending);
-  const changed = input.valueAsNumber !== saved;
-  $('arm-probe-offset-save').disabled = input.readOnly || !input.validity.valid || !changed;
-  $('arm-probe-offset-status').textContent = !available ? 'Waiting for car settings.'
-    : !owner ? 'Take control to edit the offset.'
-    : alignmentPending ? 'Saving offset…' : alignmentMessage
-    || (!input.validity.valid ? 'Enter an offset from −180° to 180°.'
-      : changed ? `Unsaved change. The car uses ${saved}°.` : 'Applies to the next aim or probe scan.');
+  const output = $('arm-scan-coverage');
+  if (output.value !== description) output.value = description;
+}
+
+const armSetupForms = new Map([
+  ['probe_alignment', armSetupForm({section:'probe_alignment', fields:{offset_deg:'arm-probe-offset'},
+    save:'arm-probe-offset-save', status:'arm-probe-offset-status', describe:saved => `${saved.offset_deg}°`,
+    invalid:'Enter an offset from −180° to 180°.', applies:'Applies to the next aim or probe scan.'})],
+  ['probe_scan', armSetupForm({section:'probe_scan', fields:{point_count:'arm-scan-count', spacing_deg:'arm-scan-spacing'},
+    save:'arm-scan-save', status:'arm-scan-status', describe:saved => `${saved.point_count} points at ${saved.spacing_deg}° spacing`,
+    invalid:'Enter 1–31 whole points and spacing from 0.1° to 180°.', applies:'Applies to the next probe scan.', preview:showScanCoverage})],
+]);
+
+function updateAlignmentSettings() {
+  armSetupForms.forEach(form => form.render());
 }
 let metalPending = null;
 let pendingPasses = null;
@@ -3252,18 +3378,6 @@ function initializeMetalSettings() {
 }
 
 function initializeInputs() {
-  $('arm-probe-offset').oninput = () => {
-    alignmentDirty = true;
-    alignmentMessage = '';
-    updateAlignmentSettings();
-  };
-  $('arm-probe-offset-save').onclick = () => {
-    if ($('arm-probe-offset-save').disabled || !$('arm-probe-offset').reportValidity()) return;
-    const offset = $('arm-probe-offset').valueAsNumber;
-    alignmentPending = {value:offset, at:performance.now()};
-    send({type:'settings', section:'probe_alignment', value:{offset_deg:offset}});
-    updateAlignmentSettings();
-  };
   initializeArmSettings();
   initializeMetalSettings();
   const tabs = [...document.querySelectorAll('[data-settings-tab]')];

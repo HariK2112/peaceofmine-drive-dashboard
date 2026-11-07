@@ -19,7 +19,7 @@ from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool, Float32, String
 from peaceofmine_operator import marking_settings
 from peaceofmine_operator.rc_safety import RcSafety
-from peaceofmine_operator import driving_settings, inspection, probe_alignment
+from peaceofmine_operator import driving_settings, inspection, probe_alignment, probe_scan
 from peaceofmine_operator.detector import DetectorTelemetry
 from peaceofmine_operator.inspection import InspectionWorkflow
 from peaceofmine_interfaces.action import ActuatorOperation
@@ -68,6 +68,7 @@ class OperatorControl(Node):
         self._field_log = self.create_publisher(String, 'field/log', 10)
         self._field_clear = self.create_publisher(Bool, 'field/clear', 10)
         self._confirmation_passes = inspection.DEFAULTS['passes']
+        self._probe_pattern = probe_scan.DEFAULTS
         self._alert_options = {'enabled': True, 'level': 60}
         self._search_alert = {'phase':'idle'}
         self.create_subscription(String, 'operator/settings', self._mission_settings_cb, 10)
@@ -170,6 +171,7 @@ class OperatorControl(Node):
             self._confirmation_passes = inspection.validate(settings.get('inspection', inspection.DEFAULTS))['passes']
             alignment = settings.get('probe_alignment', probe_alignment.DEFAULTS)
             self._inspection.probe_offset = probe_alignment.validate(alignment)['offset_deg']
+            self._probe_pattern = probe_scan.validate(settings.get('probe_scan', probe_scan.DEFAULTS))
             self._alert_options = settings['display']['searchAlert']
         except (ValueError, KeyError, TypeError):
             pass
@@ -343,7 +345,7 @@ class OperatorControl(Node):
             if not self._inspection_clients['probe'].server_is_ready():
                 raise ValueError('Probe action server unavailable')
             self._stop_motion_locked(stop_inspection=False)
-            self._inspection.probe(lower, upper, depth)
+            self._inspection.probe(lower, upper, depth, self._probe_pattern)
         self._stop_until = time.monotonic()+STOP_TAIL_S
         self._publish_twist(0., 0.)
 
@@ -855,7 +857,7 @@ class OperatorControl(Node):
                 self._calibrating = message_type == 'calibration_begin'
                 flush_drive = True
             elif message_type in ('adc', 'settings'):
-                next_scan_setting = message_type == 'settings' and payload.get('section') in ('inspection', 'probe_alignment')
+                next_scan_setting = message_type == 'settings' and payload.get('section') in ('inspection', 'probe_alignment', 'probe_scan')
                 if self._inspection.active and not next_scan_setting:
                     self._stop_motion_locked()
                 publisher = self._adc_command_pub if message_type == 'adc' else self._settings_command_pub

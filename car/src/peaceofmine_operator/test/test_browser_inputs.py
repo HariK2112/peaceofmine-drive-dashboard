@@ -94,6 +94,28 @@ assert(offsetInput.value==='-17.25' && !offsetSave.disabled && $('arm-probe-offs
 offsetSave.click(); state.settings.probe_alignment.offset_deg=-17.25; updateHud();
 assert(offsetInput.value==='-17.25' && offsetSave.disabled && $('arm-probe-offset-status').textContent.includes('Saved on car'),'telemetry confirms applied offset');
 for(const limit of ['-180','0','180']) { editOffset(limit); assert(!offsetSave.disabled, 'signed endpoints and zero are valid'); }
+const scanCount=$('arm-scan-count'), scanSpacing=$('arm-scan-spacing'), scanSave=$('arm-scan-save'), scanCoverage=$('arm-scan-coverage');
+const beforeScan=sent.length;
+assert(scanCount.readOnly && !scanCount.value && scanSave.disabled, 'missing probe scan defaults do not enable writes');
+state.settings.probe_scan={point_count:7,spacing_deg:10};updateHud();
+assert(scanCount.value==='7' && scanSpacing.value==='10' && scanSave.disabled && sent.length===beforeScan, 'probe scan defaults loaded from car without saving');
+assert(scanCoverage.value.includes('−30° to +30°') && scanCoverage.value.includes('Includes the target'), 'seven points at ten degrees cover both edges and the target');
+const editScan=(count, spacing)=>{scanCount.value=count;scanSpacing.value=spacing;scanSpacing.dispatchEvent(new Event('input'));};
+for(const [count,spacing] of [[0,10],[32,10],[3.5,10],[7,.09],[7,180.1],['',10],[7,'']]) {
+  editScan(count,spacing);scanSave.click();assert(scanSave.disabled && !scanCoverage.value && sent.length===beforeScan,'invalid probe scan geometry is not saved');
+}
+editScan(1,.1);assert(!scanSave.disabled && scanCoverage.value.includes('One point at the target'), 'one-point scan at minimum spacing');
+editScan(31,180);assert(!scanSave.disabled && scanCoverage.value.includes('+2700°'), 'maximum supported settings report intended coverage');
+editScan(4,7.5);state.settings.probe_scan={point_count:9,spacing_deg:10};updateHud();
+assert(scanCount.value==='4' && scanSpacing.value==='7.5' && scanCoverage.value.includes('−11.25° to +11.25°') && scanCoverage.value.includes('±3.75°'), 'even draft straddles the target and survives telemetry');
+scanSave.click();
+assert(sent.at(-1).type==='settings' && sent.at(-1).section==='probe_scan' && sent.at(-1).value.point_count===4 && sent.at(-1).value.spacing_deg===7.5 && scanSave.disabled, 'scan shape saved independently of mounting offset');
+socket.onmessage({data:JSON.stringify({type:'settings_result',section:'probe_scan',ok:false,message:'Scan save rejected'})});
+assert(!scanSave.disabled && scanCount.value==='4' && $('arm-scan-status').textContent.includes('rejected'), 'failed probe scan save preserves the draft');
+scanSave.click();state.settings.probe_scan={point_count:4,spacing_deg:7.5};updateHud();
+assert(scanSave.disabled && $('arm-scan-status').textContent.includes('Saved on car'), 'applied probe scan settings confirm the save');
+state.drive.you_control_owner=false;updateAlignmentSettings();
+assert(scanCount.readOnly && scanSpacing.readOnly && scanSave.disabled && scanCoverage.value.includes('±3.75°'), 'spectators can inspect the saved coverage');
 state.drive.you_control_owner=false;state.settings=previousSettings;updateAlignmentSettings();
 const pad = {index: 0, id: 'Test wheel', mapping: '', axes: [0, 1, 1], buttons: [{pressed: true, value: 1}]};
 const mapping = {steering: 0, throttle: 1, brake: 2, deadman: 0, deadzone: .05, invertThrottle: true, invertBrake: true};
@@ -1018,6 +1040,37 @@ assert([...scanMap.querySelectorAll('.scan-depth')].map(node=>node.textContent).
 assert($('probe-map-bearing').textContent === '0°' && $('probe-map-arm-center').textContent === '-45°', 'confirmed bearing and commanded arm center have separate labels');
 renderProbeScanMap({phase:'STOPPED',probe_angles_deg:[35,40,45,50,55],confirmed_angle_deg:45},[]);
 assert(scanMap.querySelectorAll('[data-result]').length === 5 && $('probe-map-arm-center').textContent === '—', 'legacy five-bearing scan stays intact without an invented arm command');
+function measuredPlan(angles) {
+  renderProbeScanMap({phase:'PROBING',probe_angles_deg:angles,probe_target_bearing_deg:0},[]);
+  const xs=[...scanMap.querySelectorAll('circle')].map(n=>Number(n.getAttribute('cx')));
+  return {left:Math.min(...xs), right:Math.max(...xs), width:scanMap.viewBox.baseVal.width};
+}
+const narrowPlan=measuredPlan([-15,-10,-5,0,5,10,15]);
+const widePlan=measuredPlan([-30,-20,-10,0,10,20,30]);
+assert((widePlan.right-widePlan.left)/widePlan.width > (narrowPlan.right-narrowPlan.left)/narrowPlan.width && $('probe-map-readings').hidden,'wider physical pattern opens the fan and retains visible point depths at standard spacing');
+const clippedPlan=measuredPlan([-30,-20,-10,0,3]);
+assert(clippedPlan.right > Math.abs(clippedPlan.left)*5 && $('probe-map-readings').hidden===false,'clipped fan remains asymmetric about the target and nearby labels move to grid');
+const closePlan=measuredPlan([-.05,.05]);
+assert(!$('probe-map-readings').hidden && $('probe-map-readings').textContent.includes('-0.05°'),'half-step bearings at minimum spacing remain distinguishable');
+const manyAngles = Array.from({length:31}, (_,i) => (i-15)*.25);
+renderProbeScanMap({phase:'STOPPED',probe_angles_deg:manyAngles,scan_point_count:31,scan_spacing_deg:.25,probe_target_depth_mm:42},
+  [{angle_deg:-3.75,status:'CONTACT',contact_depth_mm:.8},{angle_deg:-3.5,status:'CLEAR'}]);
+const pointRows = $('probe-map-readings');
+assert(!pointRows.hidden && pointRows.children.length===31 && scanMap.querySelectorAll('g').length===31,'dense scan retains all bearings in the fan and all depth labels below');
+assert(pointRows.firstElementChild.textContent.includes('3.75°') && pointRows.lastElementChild.textContent.includes('0.8 mm') && pointRows.children[29].textContent.includes('42 mm'),'grid follows bearing order, marks contact depth and shows reached target');
+assert($('probe-map-plan').textContent==='31 positions · 0.25° spacing' && !scanMap.getAttribute('aria-label').includes('Pending'),'stopped scan preserves its captured spacing and unknown positions');
+renderProbeScanMap({phase:'PROBING',probe_angles_deg:[0],scan_point_count:1,scan_spacing_deg:4},[]);
+assert(pointRows.hidden && scanMap.querySelectorAll('g').length===1 && $('probe-map-plan').textContent==='1 position','single-point scans show their exact center');
+renderProbeScanMap({phase:'PROBING',total:5,confirmed_angle_deg:40},[{angle_deg:30,status:'CLEAR'}]);
+assert(scanMap.querySelectorAll('[data-result="unknown"]').length===4 && $('probe-map-plan').textContent==='5 positions','older partial scans show pending points without inventing their bearings');
+const previousPattern=state.settings?.probe_scan;
+state.settings={...state.settings,probe_scan:{point_count:11,spacing_deg:3}};
+state.inspection.scan_point_count=7;state.inspection.scan_spacing_deg=1.5;updateHud();
+assert($('mode-probe-btn').querySelector('.mode-desc').textContent==='5 positions in range of 7 requested · 1.5° spacing','mission uses captured active scan pattern even as new settings change');
+const previousPhase=state.inspection.phase;state.inspection.phase='COMPLETE';updateHud();
+assert($('mode-probe-btn').querySelector('.mode-desc').textContent==='11 positions · 3° spacing' && $('probe-map-plan').textContent.includes('1.5° spacing'),'next mission action uses saved settings while previous map shows recorded pattern');
+state.inspection.phase=previousPhase;delete state.inspection.scan_point_count;delete state.inspection.scan_spacing_deg;
+state.settings.probe_scan=previousPattern;updateHud();
 renderProbeScanMap(state.inspection,state.inspection.points);
 assert($('probe-diagnostics').contains($('pressure-history')) && $('probe-diagnostics').contains($('probe-zero-contact')), 'motor readings and tare are grouped under optional diagnostics');
 assert($('inspection-points').textContent.includes('12.3 mm') && $('inspection-progress').value===1,'actual per-point contact depth and progress are visible');

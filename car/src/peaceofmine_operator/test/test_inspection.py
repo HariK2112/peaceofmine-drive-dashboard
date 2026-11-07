@@ -171,7 +171,7 @@ class InspectionTest(unittest.TestCase):
         self.flow.probe(-90.,90.,80.)
         self.assertEqual(self.flow.snapshot()['probe_target_bearing_deg'], 3.)
         self.assertEqual(self.flow.snapshot()['probe_arm_center_deg'], -27.)
-        for index,angle in enumerate((-12.,-7.,-2.,3.,8.,13.,18.)):
+        for index,angle in enumerate((-27.,-17.,-7.,3.,13.,23.,33.)):
             self.tick()
             self.assertEqual(self.execute.call_args.args[:4],('arm','angle',angle-30.,5.))
             count=self.execute.call_count;self.tick()
@@ -182,20 +182,32 @@ class InspectionTest(unittest.TestCase):
             self.complete(contact=index%2==0,contact_depth_mm=12.+index)
         self.assertEqual(self.flow.phase,'COMPLETE')
         self.assertEqual(self.flow.completed,7)
-        self.assertEqual(self.flow.points[0],dict(angle_deg=-12.,status='CONTACT',contact_depth_mm=12.))
+        self.assertEqual(self.flow.points[0],dict(angle_deg=-27.,status='CONTACT',contact_depth_mm=12.))
         self.assertIsNone(self.flow.points[1]['contact_depth_mm'])
+
+    def test_selected_spacing_and_count_are_frozen_at_start(self):
+        self.flow.confirmed_angle = 30.
+        pattern = dict(point_count=4, spacing_deg=7.5)
+        self.flow.probe(-90., 90., 80., pattern)
+        pattern.update(point_count=1, spacing_deg=20.)
+        scan = self.flow.snapshot()
+        self.assertEqual(scan['probe_angles_deg'], [18.75, 26.25, 33.75, 41.25])
+        self.assertEqual((scan['scan_point_count'], scan['scan_spacing_deg']), (4, 7.5))
+        self.flow.stop('retry', error=True)
+        self.flow.probe(-90., 90., 80., pattern)
+        self.assertEqual(self.flow.probe_angles, [30.])
 
     def test_probe_positions_are_clipped_and_deduplicated(self):
         self.flow.confirmed_angle=73.
         self.flow.probe(-45.,45.,50.)
-        self.assertEqual([target for kind,target in self.flow.queue if kind=='position'],[28.,33.,38.,43.,45.])
+        self.assertEqual([target for kind,target in self.flow.queue if kind=='position'],[13.,23.,33.,43.,45.])
         self.assertEqual(self.flow.total,5)
-        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [58., 63., 68., 73., 75.])
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [43., 53., 63., 73., 75.])
         self.assertEqual(self.flow.snapshot()['probe_target_depth_mm'], 50.)
         self.flow.stop('Interrupted')
         self.assertEqual(self.flow.snapshot()['probe_target_bearing_deg'], 73.)
         self.assertEqual(self.flow.snapshot()['probe_arm_center_deg'], 43.)
-        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [58., 63., 68., 73., 75.])
+        self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [43., 53., 63., 73., 75.])
         self.flow.confirm(-45., 45., 25.)
         self.assertEqual(self.flow.snapshot()['probe_angles_deg'], [])
         self.assertIsNone(self.flow.snapshot()['probe_target_depth_mm'])

@@ -116,7 +116,7 @@ control the search meter and manual peak detection, not confirmation. Search
 sweeps default to 36°/s; confirmation uses the selected search sweep speed.
 
 The control node owns `InspectionWorkflow`: 2, 4, 6 or 8 alternating confirmation passes,
-then a sequential seven-position probe scan. It uses the existing ROS action
+then a sequential probe scan using the point count and spacing saved on the car. It uses the existing ROS action
 servers, waits for stopped/torque-off telemetry between operations, and cancels
 on permission/session loss or actuator failure. Detector/probe mounting geometry
 is applied before commanding arm angles. Browser state exposes phase, progress

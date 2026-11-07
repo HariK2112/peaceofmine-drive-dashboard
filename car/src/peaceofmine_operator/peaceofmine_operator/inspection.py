@@ -4,7 +4,7 @@ from itertools import combinations
 from statistics import median
 import math
 import time
-from . import probe_alignment
+from . import probe_alignment, probe_scan
 from .sweep_arc import sweep_arc
 
 
@@ -57,6 +57,7 @@ class InspectionWorkflow:
         self.probe_depth = None
         self.probe_arm_center = None
         self.scan_offset = None
+        self.scan_pattern = None
         self.arc_overlap = None
         self.queue = deque()
         self.pending = None
@@ -76,6 +77,8 @@ class InspectionWorkflow:
                     confirmed_angle_deg=self.confirmed_angle, arc_overlap_ratio=self.arc_overlap,
                     probe_angles_deg=list(self.probe_angles), probe_target_depth_mm=self.probe_depth,
                     probe_offset_deg=self.probe_offset, scan_offset_deg=self.scan_offset,
+                    scan_point_count=self.scan_pattern['point_count'] if self.scan_pattern else None,
+                    scan_spacing_deg=self.scan_pattern['spacing_deg'] if self.scan_pattern else None,
                     probe_arm_center_deg=self.probe_arm_center,
                     probe_target_bearing_deg=(self.probe_arm_center + self.scan_offset
                                               if self.probe_arm_center is not None else None),
@@ -98,12 +101,13 @@ class InspectionWorkflow:
         self.probe_depth = None
         self.probe_arm_center = None
         self.scan_offset = None
+        self.scan_pattern = None
         self.total = passes
         self.queue.append(('start', lower))
         self.queue.extend(('pass', upper if index % 2 == 0 else lower) for index in range(passes))
         self.message = f'Moving to sweep start at {speed:g}°/s.'
 
-    def probe(self, lower, upper, depth):
+    def probe(self, lower, upper, depth, pattern=None):
         if self.confirmed_angle is None:
             raise ValueError('Confirm a detection before starting the probe scan')
         if not all(math.isfinite(v) for v in (lower, upper, depth)) or lower >= upper or depth <= 0:
@@ -111,11 +115,15 @@ class InspectionWorkflow:
         center = self.confirmed_angle - self.probe_offset
         if not lower <= center <= upper:
             raise ValueError('Confirmed target is outside probe reach. Reposition the rover and confirm again.')
-        angles = sorted({round(max(lower, min(upper, center+offset)), 4)
-                         for offset in range(-15, 16, 5)})
+        pattern = probe_scan.validate(probe_scan.DEFAULTS if pattern is None else pattern)
+        count, spacing = pattern['point_count'], pattern['spacing_deg']
+        midpoint = (count - 1) / 2
+        angles = sorted({round(max(lower, min(upper, center + (index - midpoint) * spacing)), 4)
+                         for index in range(count)})
         self._begin('PROBING')
         self.lower, self.upper = lower, upper
         self.points = []
+        self.scan_pattern = pattern
         self.scan_offset = self.probe_offset
         self.probe_angles = [angle + self.scan_offset for angle in angles]
         self.probe_depth = depth

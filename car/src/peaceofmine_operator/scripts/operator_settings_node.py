@@ -14,10 +14,11 @@ from peaceofmine_operator.node_runner import run_node
 from peaceofmine_operator.detector import calibration_values
 
 
-from peaceofmine_operator import display_settings, driving_settings, field_gnss, inspection, marking_settings, probe_alignment
+from peaceofmine_operator import display_settings, driving_settings, field_gnss, inspection, marking_settings, probe_alignment, probe_scan
 
 SHARED = dict(cameras=camera_settings, display=display_settings, driving=driving_settings,
-              gnss=field_gnss, inspection=inspection, marking=marking_settings, probe_alignment=probe_alignment)
+              gnss=field_gnss, inspection=inspection, marking=marking_settings, probe_alignment=probe_alignment,
+              probe_scan=probe_scan)
 
 
 class OperatorSettings(Node):
