@@ -17,6 +17,8 @@ Bring your car dashboard (`src/peaceofmine_operator/dashboard/`) into this proje
 - Lovable can't sync with PeaceOfMine directly. Connecting to GitHub always creates a brand-new repository.
 - I'll keep a read-only copy of the whole repo in this project. That way I can read the ROS nodes, topics, `web_bridge.py` and message formats, and the dashboard and pretend-car data will match what the car actually sends.
 - Getting changes back: connect this project to a new GitHub repository, then copy `public/dashboard/` into `src/peaceofmine_operator/dashboard/` in PeaceOfMine. One `cp`, or a small script I can add.
+- Testing on the real car: copy the folder over, then run `util/build`, `util/run` and the launch command. Open the usual Tailscale URL on port 8080. The car's own server hosts the new dashboard with live data. The Lovable preview can't reach the car.
+- I'll add `tools/sync-dashboard.sh <path-to-PeaceOfMine>` to do the copy in one command.
 
 ## Out of scope
 The car-side Python/ROS code, message formats and safety logic. No behavior changes, only layout, styling and presentation markup.
