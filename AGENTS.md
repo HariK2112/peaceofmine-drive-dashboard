@@ -28,3 +28,12 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+## Project structure
+
+- `car/` is the full PeaceOfMine ROS 2 repository, vendored here; the car runs from it (`cd car && util/build && util/run`). The web app in `src/` is only a preview shell. Why: Lovable can only edit files inside this project.
+- The operator dashboard lives once, at `car/src/peaceofmine_operator/dashboard/`, and the car's `operator_web_node.py` serves it from there. A dev-only Vite middleware serves the same folder at `/dashboard/`. Never copy it into `public/`. Why: one source of truth for both the car and the preview.
+- Dashboard edits must keep every `id` / `data-*` hook that `app.js`, `adc.js`, `actuator-settings.js` and the Python browser tests use. New dashboard asset files must be added to the allow-list in `operator_web_node.py`. Why: the car refuses to serve files that aren't on the list.
+- Dashboard colors, spacing and type come only from the tokens at the top of `dashboard/style.css`. Why: one consistent design language.
+- `dashboard/mock-car.js` (loaded only with `?mock=1`, and not on the car allow-list) fakes `/ws` and `/api/adc` for the preview. Keep its message shapes in line with `operator_control_node.py`, `web_bridge.py` and `adc_telemetry.py`.
+- `car/` is excluded from the web app's lint, prettier and typecheck.
