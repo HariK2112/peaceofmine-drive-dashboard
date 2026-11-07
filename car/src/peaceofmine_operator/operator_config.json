@@ -16,10 +16,10 @@
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 3,
+  "revision": 4,
   "section_revisions": {
     "arm": 2,
-    "adc": 3
+    "adc": 4
   },
   "adc": {
     "config": {
@@ -97,7 +97,7 @@
       "none"
     ],
     "probe_trigger": {
-      "enabled": false,
+      "enabled": true,
       "mux": 4,
       "level": 1,
       "direction": "above",
